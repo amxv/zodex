@@ -96,7 +96,6 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 Read access stays on. Write access is temporary and repo-scoped.
 This is temporary repo-scoped direct push access, not a long-lived write credential.
 By default, `grant-push` runs GitHub App device flow on the operator machine, requests a user access token for the target repo, and places only the temporary token on the Sprite.
-If the device-flow path is unavailable and the publisher app key is configured, `grant-push` falls back to the installation-token app-key path.
 
 ## Day-To-Day Commands
 

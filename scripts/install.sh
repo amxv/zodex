@@ -487,7 +487,7 @@ Next steps:
   2. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
   3. enable Device Flow on the push-grant GitHub App
   4. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  5. if you want installation-token fallback or the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
+  5. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
   6. zodex start
   7. zodex show-url --host "${public_host}"
 
@@ -519,7 +519,7 @@ Next steps:
   1. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
   2. enable Device Flow on the push-grant GitHub App
   3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  4. if you want installation-token fallback or the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
+  4. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
   5. zodex start
   6. zodex show-url --host "${public_host}"
 

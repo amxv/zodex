@@ -63,7 +63,7 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
 That temporary repo-scoped grant flow is the supported write path.
-`grant-push` prefers the GitHub App device-flow path and falls back to the installation-token app-key path only when needed.
+`grant-push` uses the GitHub App device-flow path.
 
 ## Setup
 
@@ -83,7 +83,7 @@ zodex sprite setup \
 ```
 
 For day-to-day push grants, also set `publisher_client_id` in `/etc/zodex/config.toml` or export `ZODEX_PUBLISHER_CLIENT_ID` on the operator machine.
-The publisher app key remains available as the fallback grant path and for the internal `zodex-prd` publish flow.
+The publisher app key remains available for the internal `zodex-prd` publish flow.
 
 ## Proxy Front Door
 

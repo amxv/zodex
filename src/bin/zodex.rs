@@ -282,10 +282,6 @@ enum GithubCommand {
         org: Option<String>,
         #[arg(long)]
         publisher_client_id: Option<String>,
-        #[arg(long)]
-        publisher_app_id: Option<u64>,
-        #[arg(long)]
-        publisher_pem: Option<PathBuf>,
     },
     RevokePush {
         #[arg(long)]
@@ -630,8 +626,6 @@ async fn main() -> Result<()> {
                     repo,
                     org,
                     publisher_client_id,
-                    publisher_app_id,
-                    publisher_pem,
                 } => {
                     grant_push_access(
                         &config,
@@ -639,8 +633,6 @@ async fn main() -> Result<()> {
                         org.as_deref(),
                         &repo,
                         publisher_client_id.as_deref(),
-                        publisher_app_id,
-                        publisher_pem.as_deref(),
                     )
                     .await?;
                 }
@@ -1848,26 +1840,6 @@ rm -f {upgrade_script} {cli_upload} {daemon_upload} {publisher_upload}
     )
 }
 
-fn resolve_publisher_access(
-    config: &Config,
-    publisher_app_id: Option<u64>,
-    publisher_pem: Option<&Path>,
-) -> Result<(u64, PathBuf)> {
-    let app_id = publisher_app_id
-        .or(config.publisher_app_id)
-        .ok_or_else(|| anyhow!("publisher app id is required"))?;
-    let pem_path = publisher_pem
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(&config.publisher_private_key_path));
-    if !pem_path.exists() {
-        bail!(
-            "publisher private key file not found: {}",
-            pem_path.display()
-        );
-    }
-    Ok((app_id, pem_path))
-}
-
 fn resolve_publisher_client_id(
     config: &Config,
     publisher_client_id: Option<&str>,
@@ -1979,12 +1951,7 @@ async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option
     Ok(Some(payload.id))
 }
 
-async fn try_resolve_repo_id_for_device_flow(
-    config: &Config,
-    repo: &str,
-    publisher_app_id: Option<u64>,
-    publisher_pem: Option<&Path>,
-) -> Result<Option<u64>> {
+async fn try_resolve_repo_id_for_device_flow(config: &Config, repo: &str) -> Result<Option<u64>> {
     if let Some(repo_id) = github_repo_id(repo, None).await? {
         return Ok(Some(repo_id));
     }
@@ -1999,19 +1966,6 @@ async fn try_resolve_repo_id_for_device_flow(
             installation_id,
         )
         .await?;
-        if let Some(repo_id) = github_repo_id(repo, Some(&token)).await? {
-            return Ok(Some(repo_id));
-        }
-    }
-
-    if let Ok((app_id, pem_path)) =
-        resolve_publisher_access(config, publisher_app_id, publisher_pem)
-    {
-        let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
-        let token =
-            mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id)
-                .await?
-                .token;
         if let Some(repo_id) = github_repo_id(repo, Some(&token)).await? {
             return Ok(Some(repo_id));
         }
@@ -2185,8 +2139,6 @@ async fn mint_device_flow_push_grant(
     config: &Config,
     repo: &str,
     client_id: &str,
-    publisher_app_id: Option<u64>,
-    publisher_pem: Option<&Path>,
 ) -> Result<PushGrantRecord> {
     if let Some(cached) = load_cached_device_flow_grant(repo, client_id)? {
         let refreshed = refresh_user_access_token(client_id, &cached.refresh_token).await;
@@ -2242,8 +2194,7 @@ async fn mint_device_flow_push_grant(
         }
     }
 
-    let repository_id =
-        try_resolve_repo_id_for_device_flow(config, repo, publisher_app_id, publisher_pem).await?;
+    let repository_id = try_resolve_repo_id_for_device_flow(config, repo).await?;
     let grant = mint_user_access_token_via_device_flow(client_id, repo, repository_id).await?;
     if let Some(refresh_token) = grant.refresh_token.clone() {
         save_cached_device_flow_grant(
@@ -2264,68 +2215,21 @@ async fn mint_device_flow_push_grant(
     })
 }
 
-async fn mint_installation_token_push_grant(
-    config: &Config,
-    repo: &str,
-    publisher_app_id: Option<u64>,
-    publisher_pem: Option<&Path>,
-) -> Result<PushGrantRecord> {
-    let (app_id, pem_path) = resolve_publisher_access(config, publisher_app_id, publisher_pem)?;
-    let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
-    let minted =
-        mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id).await?;
-    Ok(PushGrantRecord {
-        repo: repo.to_string(),
-        token: minted.token,
-        expires_at: minted.expires_at,
-        token_source: Some("installation-token-fallback".to_string()),
-    })
-}
-
 async fn grant_push_access(
     config: &Config,
     sprite: &str,
     org: Option<&str>,
     repo: &str,
     publisher_client_id: Option<&str>,
-    publisher_app_id: Option<u64>,
-    publisher_pem: Option<&Path>,
 ) -> Result<()> {
     let repo =
         normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
-    let grant = if let Some(client_id) = resolve_publisher_client_id(config, publisher_client_id) {
-        match mint_device_flow_push_grant(
-            config,
-            &repo,
-            &client_id,
-            publisher_app_id,
-            publisher_pem,
+    let client_id = resolve_publisher_client_id(config, publisher_client_id).ok_or_else(|| {
+        anyhow!(
+            "publisher client id is required for device-flow push grants; set `publisher_client_id`, pass `--publisher-client-id`, or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
         )
-        .await
-        {
-            Ok(grant) => grant,
-            Err(err) => {
-                let fallback = resolve_publisher_access(config, publisher_app_id, publisher_pem);
-                match fallback {
-                    Ok(_) => {
-                        eprintln!(
-                            "device-flow grant failed, falling back to installation-token path: {err}"
-                        );
-                        mint_installation_token_push_grant(
-                            config,
-                            &repo,
-                            publisher_app_id,
-                            publisher_pem,
-                        )
-                        .await?
-                    }
-                    Err(_) => return Err(err),
-                }
-            }
-        }
-    } else {
-        mint_installation_token_push_grant(config, &repo, publisher_app_id, publisher_pem).await?
-    };
+    })?;
+    let grant = mint_device_flow_push_grant(config, &repo, &client_id).await?;
     let raw = serde_json::to_string(&grant).context("failed to serialize push grant")?;
     let mut grant_file = NamedTempFile::new().context("failed to create grant temp file")?;
     use std::io::Write as _;
