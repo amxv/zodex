@@ -10,14 +10,18 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-release:
-    runs-on: ubuntu-22.04
+  build-release:
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             archive_name: zodex-x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-apple-darwin
+            archive_name: zodex-aarch64-apple-darwin
+            os: macos-latest
 
     steps:
       - name: Checkout
