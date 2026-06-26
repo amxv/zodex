@@ -1701,7 +1701,7 @@ sudo chmod 0640 "$CFG"
 helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
-sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Computer MCP Agent"
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Zodex Agent"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 
 sudo -u zodex-agent env HOME=/home/zodex-agent bash -lc '
@@ -1789,7 +1789,7 @@ sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.ht
 current_name="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.name || true)"
 current_email="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.email || true)"
 if [[ -z "$current_name" ]]; then
-  sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Computer MCP Agent"
+  sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Zodex Agent"
 fi
 if [[ -z "$current_email" ]]; then
   sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
