@@ -933,6 +933,7 @@ fn run_sprite_exec(
         args.push("--file".to_string());
         args.push(format!("{}:{remote}", local.display()));
     }
+    args.push("--".to_string());
     args.extend(exec_args.iter().cloned());
     run_command_capture("sprite", &args)
 }
