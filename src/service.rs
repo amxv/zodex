@@ -1,11 +1,53 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::apply_patch;
 use crate::config::Config;
-use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
+use crate::protocol::{
+    ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
+};
 use crate::session::{SessionManager, SessionOrigin};
+
+#[derive(Debug, Clone)]
+pub enum ServiceRequest {
+    ExecCommand {
+        input: ExecCommandInput,
+        origin: SessionOrigin,
+    },
+    WriteStdin {
+        input: WriteStdinInput,
+    },
+    ApplyPatch {
+        input: ApplyPatchInput,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ServiceResponse {
+    ToolOutput(ToolOutput),
+    ApplyPatchOutput(ApplyPatchOutput),
+}
+
+impl ServiceResponse {
+    pub fn into_tool_output(self) -> Result<ToolOutput> {
+        match self {
+            Self::ToolOutput(output) => Ok(output),
+            Self::ApplyPatchOutput(_) => Err(anyhow!(
+                "internal service mismatch: expected tool output response"
+            )),
+        }
+    }
+
+    pub fn into_apply_patch_output(self) -> Result<ApplyPatchOutput> {
+        match self {
+            Self::ApplyPatchOutput(output) => Ok(output),
+            Self::ToolOutput(_) => Err(anyhow!(
+                "internal service mismatch: expected apply_patch response"
+            )),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ComputerService {
@@ -22,13 +64,33 @@ impl ComputerService {
         Self { config, sessions }
     }
 
+    pub async fn execute(&self, request: ServiceRequest) -> Result<ServiceResponse> {
+        match request {
+            ServiceRequest::ExecCommand { input, origin } => self
+                .sessions
+                .exec_command(input, &self.config, origin)
+                .await
+                .map(ServiceResponse::ToolOutput),
+            ServiceRequest::WriteStdin { input } => self
+                .sessions
+                .write_stdin(input, &self.config)
+                .await
+                .map(ServiceResponse::ToolOutput),
+            ServiceRequest::ApplyPatch { input } => self
+                .apply_patch(input)
+                .map(|output| ServiceResponse::ApplyPatchOutput(ApplyPatchOutput { output })),
+        }
+    }
+
     pub async fn exec_command(&self, input: ExecCommandInput) -> Result<ToolOutput> {
         self.exec_command_with_origin(input, SessionOrigin::direct())
             .await
     }
 
     pub async fn write_stdin(&self, input: WriteStdinInput) -> Result<ToolOutput> {
-        self.sessions.write_stdin(input, &self.config).await
+        self.execute(ServiceRequest::WriteStdin { input })
+            .await?
+            .into_tool_output()
     }
 
     pub async fn exec_command_with_origin(
@@ -36,9 +98,9 @@ impl ComputerService {
         input: ExecCommandInput,
         origin: SessionOrigin,
     ) -> Result<ToolOutput> {
-        self.sessions
-            .exec_command(input, &self.config, origin)
-            .await
+        self.execute(ServiceRequest::ExecCommand { input, origin })
+            .await?
+            .into_tool_output()
     }
 
     pub fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
@@ -56,7 +118,7 @@ mod tests {
     use crate::config::Config;
     use crate::protocol::{ApplyPatchInput, CommandStatus, ExecCommandInput, WriteStdinInput};
 
-    use super::ComputerService;
+    use super::{ComputerService, ServiceRequest};
 
     fn test_service() -> ComputerService {
         ComputerService::new(Arc::new(Config::default()))
@@ -144,6 +206,41 @@ mod tests {
         assert_eq!(
             fs::read_to_string(created).expect("created file should be readable"),
             "hello-service\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_dispatches_apply_patch_through_shared_service_layer() {
+        let service = test_service();
+        let dir = tempdir().expect("tempdir");
+        let patch =
+            "*** Begin Patch\n*** Add File: dispatched.txt\n+hello-dispatch\n*** End Patch\n";
+
+        let output = service
+            .execute(ServiceRequest::ApplyPatch {
+                input: ApplyPatchInput {
+                    patch: patch.to_string(),
+                    workdir: dir.path().to_string_lossy().to_string(),
+                },
+            })
+            .await
+            .expect("service dispatch should succeed")
+            .into_apply_patch_output()
+            .expect("apply_patch output expected");
+
+        assert!(
+            output
+                .output
+                .contains("Success. Updated the following files:")
+        );
+        assert!(output.output.contains(&format!(
+            "A {}",
+            dir.path().join("dispatched.txt").display()
+        )));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("dispatched.txt"))
+                .expect("dispatched file should be readable"),
+            "hello-dispatch\n"
         );
     }
 }

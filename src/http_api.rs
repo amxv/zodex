@@ -9,14 +9,11 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
-use crate::service::ComputerService;
+use crate::protocol::{
+    ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
+};
+use crate::service::{ComputerService, ServiceRequest};
 use crate::session::SessionOrigin;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ApplyPatchOutput {
-    pub output: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct ErrorOutput {
@@ -39,8 +36,12 @@ async fn exec_command(
 ) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
     let caller_label = caller_label_from_headers(&headers);
     computer_service
-        .exec_command_with_origin(input, SessionOrigin::http(caller_label))
+        .execute(ServiceRequest::ExecCommand {
+            input,
+            origin: SessionOrigin::http(caller_label),
+        })
         .await
+        .and_then(|response| response.into_tool_output())
         .map(Json)
         .map_err(bad_request)
 }
@@ -50,8 +51,9 @@ async fn write_stdin(
     Json(input): Json<WriteStdinInput>,
 ) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
     computer_service
-        .write_stdin(input)
+        .execute(ServiceRequest::WriteStdin { input })
         .await
+        .and_then(|response| response.into_tool_output())
         .map(Json)
         .map_err(bad_request)
 }
@@ -61,8 +63,10 @@ async fn apply_patch(
     Json(input): Json<ApplyPatchInput>,
 ) -> Result<Json<ApplyPatchOutput>, (StatusCode, Json<ErrorOutput>)> {
     computer_service
-        .apply_patch(input)
-        .map(|output| Json(ApplyPatchOutput { output }))
+        .execute(ServiceRequest::ApplyPatch { input })
+        .await
+        .and_then(|response| response.into_apply_patch_output())
+        .map(Json)
         .map_err(bad_request)
 }
 

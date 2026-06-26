@@ -26,7 +26,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::http_api;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
-use crate::service::ComputerService;
+use crate::service::{ComputerService, ServiceRequest};
 use crate::session::SessionOrigin;
 
 type McpHttpService = StreamableHttpService<ComputerMcpService, LocalSessionManager>;
@@ -43,6 +43,27 @@ impl ComputerMcpService {
             computer_service,
             tool_router: Self::tool_router(),
         }
+    }
+
+    async fn execute_tool_output(
+        &self,
+        request: ServiceRequest,
+    ) -> Result<McpJson<ToolOutput>, String> {
+        self.computer_service
+            .execute(request)
+            .await
+            .and_then(|response| response.into_tool_output())
+            .map(McpJson)
+            .map_err(|e| e.to_string())
+    }
+
+    async fn execute_apply_patch(&self, input: ApplyPatchInput) -> Result<String, String> {
+        self.computer_service
+            .execute(ServiceRequest::ApplyPatch { input })
+            .await
+            .and_then(|response| response.into_apply_patch_output())
+            .map(|output| output.output)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -61,11 +82,11 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<ExecCommandInput>,
     ) -> Result<McpJson<ToolOutput>, String> {
-        self.computer_service
-            .exec_command_with_origin(input, SessionOrigin::mcp(None))
-            .await
-            .map(McpJson)
-            .map_err(|e| e.to_string())
+        self.execute_tool_output(ServiceRequest::ExecCommand {
+            input,
+            origin: SessionOrigin::mcp(None),
+        })
+        .await
     }
 
     #[tool(
@@ -81,11 +102,8 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<WriteStdinInput>,
     ) -> Result<McpJson<ToolOutput>, String> {
-        self.computer_service
-            .write_stdin(input)
+        self.execute_tool_output(ServiceRequest::WriteStdin { input })
             .await
-            .map(McpJson)
-            .map_err(|e| e.to_string())
     }
 
     #[tool(
@@ -101,9 +119,7 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<ApplyPatchInput>,
     ) -> Result<String, String> {
-        self.computer_service
-            .apply_patch(input)
-            .map_err(|e| e.to_string())
+        self.execute_apply_patch(input).await
     }
 }
 
@@ -301,7 +317,8 @@ mod tests {
     use super::{ComputerMcpService, key_from_query, rewrite_mcp_transport_root_uri};
     use crate::config::Config;
     use crate::protocol::{
-        ApplyPatchInput, CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput,
+        ApplyPatchInput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
+        WriteStdinInput,
     };
     use crate::service::ComputerService;
     use axum::body::{Body, to_bytes};
@@ -554,6 +571,147 @@ mod tests {
             }))
             .await
             .expect("mcp shell should exit");
+    }
+
+    #[tokio::test]
+    async fn kill_process_mcp_parity_with_service() {
+        let config = test_config();
+        let direct = ComputerService::new(config.clone());
+        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let input = ExecCommandInput {
+            cmd: "sleep 30".to_string(),
+            yield_time_ms: Some(50),
+            workdir: None,
+            timeout_ms: Some(60_000),
+        };
+
+        let direct_started = direct
+            .exec_command(input.clone())
+            .await
+            .expect("direct sleep should start");
+        let mcp_started = mcp
+            .exec_command(Parameters(input))
+            .await
+            .expect("mcp sleep should start")
+            .0;
+
+        let direct_killed = direct
+            .write_stdin(WriteStdinInput {
+                session_handle: direct_started
+                    .session_handle
+                    .expect("direct running handle"),
+                chars: Some("echo ignored-direct\n".to_string()),
+                yield_time_ms: Some(6_000),
+                kill_process: Some(true),
+            })
+            .await
+            .expect("direct kill should succeed");
+        let mcp_killed = mcp
+            .write_stdin(Parameters(WriteStdinInput {
+                session_handle: mcp_started.session_handle.expect("mcp running handle"),
+                chars: Some("echo ignored-mcp\n".to_string()),
+                yield_time_ms: Some(6_000),
+                kill_process: Some(true),
+            }))
+            .await
+            .expect("mcp kill should succeed")
+            .0;
+
+        assert_eq!(mcp_killed.status, direct_killed.status);
+        assert_eq!(
+            mcp_killed.termination_reason,
+            direct_killed.termination_reason
+        );
+        assert!(mcp_killed.session_handle.is_none());
+        assert!(direct_killed.session_handle.is_none());
+        assert!(mcp_killed.output.contains("terminated by kill_process"));
+        assert!(direct_killed.output.contains("terminated by kill_process"));
+        assert!(!mcp_killed.output.contains("ignored-mcp"));
+        assert!(!direct_killed.output.contains("ignored-direct"));
+    }
+
+    #[tokio::test]
+    async fn timeout_and_cwd_mcp_parity_with_service() {
+        let config = Arc::new(Config {
+            default_exec_timeout_ms: 1_000,
+            max_exec_timeout_ms: 1_000,
+            ..Config::default()
+        });
+        let direct = ComputerService::new(config.clone());
+        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let dir = tempdir().expect("tempdir");
+
+        let direct_cwd = direct
+            .exec_command(ExecCommandInput {
+                cmd: "pwd".to_string(),
+                yield_time_ms: Some(2_000),
+                workdir: Some(dir.path().to_string_lossy().to_string()),
+                timeout_ms: None,
+            })
+            .await
+            .expect("direct cwd should succeed");
+        let mcp_cwd = mcp
+            .exec_command(Parameters(ExecCommandInput {
+                cmd: "pwd".to_string(),
+                yield_time_ms: Some(2_000),
+                workdir: Some(dir.path().to_string_lossy().to_string()),
+                timeout_ms: None,
+            }))
+            .await
+            .expect("mcp cwd should succeed")
+            .0;
+
+        assert_eq!(mcp_cwd.cwd, direct_cwd.cwd);
+        assert!(
+            mcp_cwd
+                .output
+                .contains(dir.path().to_string_lossy().as_ref())
+        );
+        assert!(
+            direct_cwd
+                .output
+                .contains(dir.path().to_string_lossy().as_ref())
+        );
+
+        let direct_timeout = direct
+            .exec_command(ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(2_500),
+                workdir: None,
+                timeout_ms: Some(1_000),
+            })
+            .await
+            .expect("direct timeout should complete");
+        let mcp_timeout = mcp
+            .exec_command(Parameters(ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(2_500),
+                workdir: None,
+                timeout_ms: Some(1_000),
+            }))
+            .await
+            .expect("mcp timeout should complete")
+            .0;
+
+        assert_eq!(mcp_timeout.status, direct_timeout.status);
+        assert_eq!(
+            mcp_timeout.termination_reason,
+            direct_timeout.termination_reason
+        );
+        assert_eq!(
+            mcp_timeout.termination_reason,
+            Some(TerminationReason::Timeout)
+        );
+        assert!(
+            mcp_timeout
+                .output
+                .contains("process timed out and was terminated")
+        );
+        assert!(
+            direct_timeout
+                .output
+                .contains("process timed out and was terminated")
+        );
     }
 
     #[tokio::test]

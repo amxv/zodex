@@ -23,6 +23,11 @@ pub struct ApplyPatchInput {
     pub workdir: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ApplyPatchOutput {
+    pub output: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CommandStatus {

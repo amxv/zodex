@@ -6,8 +6,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::http_api::ApplyPatchOutput;
-use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
+use crate::protocol::{
+    ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
+};
 
 pub const COMPUTER_URL_ENV: &str = "COMPUTER_URL";
 pub const COMPUTER_KEY_ENV: &str = "COMPUTER_KEY";

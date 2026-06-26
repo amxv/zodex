@@ -6,8 +6,11 @@ use axum::serve;
 use axum_server::Handle;
 use axum_server::tls_rustls::RustlsConfig;
 use computer_mcp::config::Config;
-use computer_mcp::http_api::{ApplyPatchOutput, build_http_api_router};
-use computer_mcp::protocol::{CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput};
+use computer_mcp::http_api::build_http_api_router;
+use computer_mcp::protocol::{
+    ApplyPatchOutput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
+    WriteStdinInput,
+};
 use computer_mcp::service::ComputerService;
 use rcgen::generate_simple_self_signed;
 use serde::de::DeserializeOwned;
@@ -21,6 +24,19 @@ fn test_config(api_key: &str) -> Arc<Config> {
         api_key: api_key.to_string(),
         ..Config::default()
     })
+}
+
+fn assert_running_session_shape(output: &ToolOutput) {
+    assert_eq!(output.status, CommandStatus::Running);
+    assert!(output.session_id.is_some());
+    let handle = output
+        .session_handle
+        .as_deref()
+        .expect("running output should have a session handle");
+    assert_eq!(handle.len(), 8);
+    assert!(handle.chars().all(|ch| ch.is_ascii_alphanumeric()));
+    assert!(output.exit_code.is_none());
+    assert!(output.termination_reason.is_none());
 }
 
 async fn start_http_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
@@ -228,6 +244,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         })
         .await
         .expect("direct shell should start");
+    assert_running_session_shape(&direct_started);
     let direct_handle = direct_started
         .session_handle
         .expect("direct session handle");
@@ -261,6 +278,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         }),
     )
     .await;
+    assert_running_session_shape(&http_started);
     let http_handle = http_started.session_handle.expect("http session handle");
     let http_written: ToolOutput = post_http_json(
         &base_url,
@@ -300,6 +318,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         "60000".to_string(),
     ])
     .await;
+    assert_running_session_shape(&cli_started);
     let cli_handle = cli_started.session_handle.expect("cli session handle");
     let cli_written: ToolOutput = run_computer_cli_json(vec![
         "--url".to_string(),
@@ -344,6 +363,271 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
     assert_eq!(cli_done.exit_code, direct_done.exit_code);
     assert!(http_done.session_handle.is_none());
     assert!(cli_done.session_handle.is_none());
+
+    stop_http_api(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn phase2_kill_process_parity_service_http_and_cli() {
+    let api_key = "phase2-kill-key";
+    let config = test_config(api_key);
+    let direct_service = ComputerService::new(config.clone());
+    let (addr, shutdown_tx, server) = start_http_api(config).await;
+    let base_url = format!("http://{addr}");
+    let start_cmd = "sleep 30";
+
+    let direct_started = direct_service
+        .exec_command(ExecCommandInput {
+            cmd: start_cmd.to_string(),
+            yield_time_ms: Some(50),
+            workdir: None,
+            timeout_ms: Some(60_000),
+        })
+        .await
+        .expect("direct sleep should start");
+    assert_running_session_shape(&direct_started);
+    let direct_handle = direct_started
+        .session_handle
+        .expect("direct session handle");
+
+    let http_started: ToolOutput = post_http_json(
+        &base_url,
+        api_key,
+        "/v1/exec-command",
+        json!({
+            "cmd": start_cmd,
+            "yield_time_ms": 50,
+            "timeout_ms": 60_000
+        }),
+    )
+    .await;
+    assert_running_session_shape(&http_started);
+    let http_handle = http_started.session_handle.expect("http session handle");
+
+    let cli_started: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url.clone(),
+        "--key".to_string(),
+        api_key.to_string(),
+        "exec-command".to_string(),
+        start_cmd.to_string(),
+        "--yield-time-ms".to_string(),
+        "50".to_string(),
+        "--timeout-ms".to_string(),
+        "60000".to_string(),
+    ])
+    .await;
+    assert_running_session_shape(&cli_started);
+    let cli_handle = cli_started.session_handle.expect("cli session handle");
+
+    let direct_killed = direct_service
+        .write_stdin(WriteStdinInput {
+            session_handle: direct_handle,
+            chars: Some("echo ignored-direct\n".to_string()),
+            yield_time_ms: Some(6_000),
+            kill_process: Some(true),
+        })
+        .await
+        .expect("direct kill should succeed");
+    let http_killed: ToolOutput = post_http_json(
+        &base_url,
+        api_key,
+        "/v1/write-stdin",
+        json!({
+            "session_handle": http_handle,
+            "chars": "echo ignored-http\n",
+            "yield_time_ms": 6_000,
+            "kill_process": true
+        }),
+    )
+    .await;
+    let cli_killed: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url.clone(),
+        "--key".to_string(),
+        api_key.to_string(),
+        "write-stdin".to_string(),
+        "--session-handle".to_string(),
+        cli_handle,
+        "--chars".to_string(),
+        "echo ignored-cli\n".to_string(),
+        "--yield-time-ms".to_string(),
+        "6000".to_string(),
+        "--kill-process".to_string(),
+    ])
+    .await;
+
+    for output in [&direct_killed, &http_killed, &cli_killed] {
+        assert_eq!(output.status, CommandStatus::Exited);
+        assert!(output.session_handle.is_none());
+        assert!(output.exit_code.is_some());
+        assert_eq!(output.termination_reason, Some(TerminationReason::Killed));
+        assert!(output.output.contains("terminated by kill_process"));
+    }
+    assert!(!direct_killed.output.contains("ignored-direct"));
+    assert!(!http_killed.output.contains("ignored-http"));
+    assert!(!cli_killed.output.contains("ignored-cli"));
+
+    stop_http_api(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn phase2_timeout_parity_service_http_and_cli() {
+    let api_key = "phase2-timeout-key";
+    let config = Arc::new(Config {
+        api_key: api_key.to_string(),
+        default_exec_timeout_ms: 1_000,
+        max_exec_timeout_ms: 1_000,
+        ..Config::default()
+    });
+    let direct_service = ComputerService::new(config.clone());
+    let (addr, shutdown_tx, server) = start_http_api(config).await;
+    let base_url = format!("http://{addr}");
+
+    let direct_timed_out = direct_service
+        .exec_command(ExecCommandInput {
+            cmd: "sleep 30".to_string(),
+            yield_time_ms: Some(2_500),
+            workdir: None,
+            timeout_ms: Some(1_000),
+        })
+        .await
+        .expect("direct timeout should complete");
+    let http_timed_out: ToolOutput = post_http_json(
+        &base_url,
+        api_key,
+        "/v1/exec-command",
+        json!({
+            "cmd": "sleep 30",
+            "yield_time_ms": 2_500,
+            "timeout_ms": 1_000
+        }),
+    )
+    .await;
+    let cli_timed_out: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url.clone(),
+        "--key".to_string(),
+        api_key.to_string(),
+        "exec-command".to_string(),
+        "sleep 30".to_string(),
+        "--yield-time-ms".to_string(),
+        "2500".to_string(),
+        "--timeout-ms".to_string(),
+        "1000".to_string(),
+    ])
+    .await;
+
+    for output in [&direct_timed_out, &http_timed_out, &cli_timed_out] {
+        assert_eq!(output.status, CommandStatus::Exited);
+        assert!(output.session_handle.is_none());
+        assert!(output.exit_code.is_some());
+        assert_eq!(output.termination_reason, Some(TerminationReason::Timeout));
+        assert!(
+            output
+                .output
+                .contains("process timed out and was terminated")
+        );
+    }
+
+    stop_http_api(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn phase2_cwd_and_truncation_parity_service_http_and_cli() {
+    let api_key = "phase2-cwd-key";
+    let config = Arc::new(Config {
+        api_key: api_key.to_string(),
+        max_output_chars: 80,
+        ..Config::default()
+    });
+    let direct_service = ComputerService::new(config.clone());
+    let (addr, shutdown_tx, server) = start_http_api(config).await;
+    let base_url = format!("http://{addr}");
+    let workdir = tempdir().expect("workdir tempdir");
+    let workdir_str = workdir.path().to_string_lossy().to_string();
+
+    let direct_cwd = direct_service
+        .exec_command(ExecCommandInput {
+            cmd: "pwd".to_string(),
+            yield_time_ms: Some(2_000),
+            workdir: Some(workdir_str.clone()),
+            timeout_ms: None,
+        })
+        .await
+        .expect("direct cwd should succeed");
+    let http_cwd: ToolOutput = post_http_json(
+        &base_url,
+        api_key,
+        "/v1/exec-command",
+        json!({
+            "cmd": "pwd",
+            "yield_time_ms": 2_000,
+            "workdir": workdir_str.clone()
+        }),
+    )
+    .await;
+    let cli_cwd: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url.clone(),
+        "--key".to_string(),
+        api_key.to_string(),
+        "exec-command".to_string(),
+        "pwd".to_string(),
+        "--yield-time-ms".to_string(),
+        "2000".to_string(),
+        "--workdir".to_string(),
+        workdir.path().to_string_lossy().to_string(),
+    ])
+    .await;
+
+    for output in [&direct_cwd, &http_cwd, &cli_cwd] {
+        assert_eq!(output.status, CommandStatus::Exited);
+        assert_eq!(output.cwd, workdir.path().to_string_lossy().as_ref());
+        assert!(
+            output
+                .output
+                .contains(workdir.path().to_string_lossy().as_ref())
+        );
+    }
+
+    let truncation_cmd = "python3 -c 'print(\"x\" * 200)'";
+    let direct_truncated = direct_service
+        .exec_command(ExecCommandInput {
+            cmd: truncation_cmd.to_string(),
+            yield_time_ms: Some(5_000),
+            workdir: None,
+            timeout_ms: None,
+        })
+        .await
+        .expect("direct truncation should succeed");
+    let http_truncated: ToolOutput = post_http_json(
+        &base_url,
+        api_key,
+        "/v1/exec-command",
+        json!({
+            "cmd": truncation_cmd,
+            "yield_time_ms": 5_000
+        }),
+    )
+    .await;
+    let cli_truncated: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url,
+        "--key".to_string(),
+        api_key.to_string(),
+        "exec-command".to_string(),
+        truncation_cmd.to_string(),
+        "--yield-time-ms".to_string(),
+        "5000".to_string(),
+    ])
+    .await;
+
+    for output in [&direct_truncated, &http_truncated, &cli_truncated] {
+        assert_eq!(output.status, CommandStatus::Exited);
+        assert!(output.output.contains("bytes truncated"));
+        assert!(output.output.contains(&"x".repeat(20)));
+    }
 
     stop_http_api(shutdown_tx, server).await;
 }
