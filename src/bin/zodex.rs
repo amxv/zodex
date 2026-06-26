@@ -27,6 +27,8 @@ use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
 use zodex::publisher::{
@@ -65,6 +67,7 @@ const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
 const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
 const GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR: &str = ".config/zodex/github-device-flow";
 const GITHUB_PUSH_GRANT_CLIENT_ID_ENV: &str = "ZODEX_PUBLISHER_CLIENT_ID";
+const DEFAULT_PUSH_GRANT_TTL_SECONDS: u64 = 30 * 60;
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
@@ -273,6 +276,18 @@ enum ProxyCommand {
 
 #[derive(Debug, Subcommand)]
 enum GithubCommand {
+    RequestPush {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        publisher_client_id: Option<String>,
+        #[arg(long, default_value = "30m")]
+        ttl: String,
+        #[arg(long, default_value_t = false)]
+        no_ttl: bool,
+        #[arg(long, default_value_t = false)]
+        cache_refresh_token: bool,
+    },
     GrantPush {
         #[arg(long)]
         sprite: String,
@@ -285,7 +300,7 @@ enum GithubCommand {
     },
     RevokePush {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         repo: String,
         #[arg(long)]
@@ -295,7 +310,7 @@ enum GithubCommand {
     },
     ListGrants {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
     },
@@ -333,6 +348,8 @@ struct PushGrantRecord {
     token: String,
     #[serde(default)]
     expires_at: Option<String>,
+    #[serde(default)]
+    expires_at_epoch_seconds: Option<u64>,
     #[serde(default)]
     token_source: Option<String>,
 }
@@ -623,6 +640,29 @@ async fn main() -> Result<()> {
         Commands::Github { command } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
             match command {
+                GithubCommand::RequestPush {
+                    repo,
+                    publisher_client_id,
+                    ttl,
+                    no_ttl,
+                    cache_refresh_token,
+                } => {
+                    let ttl = if no_ttl {
+                        None
+                    } else if ttl == "30m" {
+                        Some(Duration::from_secs(DEFAULT_PUSH_GRANT_TTL_SECONDS))
+                    } else {
+                        Some(parse_push_grant_ttl(&ttl)?)
+                    };
+                    request_push_access(
+                        &config,
+                        &repo,
+                        publisher_client_id.as_deref(),
+                        ttl,
+                        cache_refresh_token,
+                    )
+                    .await?;
+                }
                 GithubCommand::GrantPush {
                     sprite,
                     repo,
@@ -644,10 +684,15 @@ async fn main() -> Result<()> {
                     org,
                     forget_local_auth,
                 } => {
-                    revoke_push_access(&sprite, org.as_deref(), &repo, forget_local_auth)?;
+                    revoke_push_access(
+                        sprite.as_deref(),
+                        org.as_deref(),
+                        &repo,
+                        forget_local_auth,
+                    )?;
                 }
                 GithubCommand::ListGrants { sprite, org } => {
-                    list_push_grants(&sprite, org.as_deref())?;
+                    list_push_grants(sprite.as_deref(), org.as_deref())?;
                 }
             }
         }
@@ -790,6 +835,87 @@ fn push_grant_path(repo: &str) -> PathBuf {
     Path::new(PUSH_GRANTS_DIR).join(push_grant_file_name(repo))
 }
 
+fn push_grant_expired(grant: &PushGrantRecord, now_epoch_seconds: u64) -> bool {
+    matches!(
+        grant.expires_at_epoch_seconds,
+        Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+    )
+}
+
+fn current_epoch_seconds() -> Result<u64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs())
+}
+
+fn format_epoch_seconds_rfc3339(epoch_seconds: u64) -> Result<String> {
+    OffsetDateTime::from_unix_timestamp(epoch_seconds as i64)
+        .context("failed to build RFC3339 timestamp from epoch seconds")?
+        .format(&Rfc3339)
+        .context("failed to format RFC3339 timestamp")
+}
+
+fn expires_at_from_now(expires_in_seconds: u64) -> Result<(String, u64)> {
+    let expires_at_epoch_seconds = current_epoch_seconds()?
+        .checked_add(expires_in_seconds)
+        .ok_or_else(|| anyhow!("push grant expiration overflowed"))?;
+    Ok((
+        format_epoch_seconds_rfc3339(expires_at_epoch_seconds)?,
+        expires_at_epoch_seconds,
+    ))
+}
+
+fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("push grant TTL must not be empty");
+    }
+    let unit = trimmed
+        .chars()
+        .last()
+        .ok_or_else(|| anyhow!("push grant TTL must not be empty"))?;
+    let (value_part, multiplier_seconds) = if unit.is_ascii_alphabetic() {
+        let value = &trimmed[..trimmed.len() - unit.len_utf8()];
+        let multiplier = match unit {
+            's' | 'S' => 1,
+            'm' | 'M' => 60,
+            'h' | 'H' => 60 * 60,
+            'd' | 'D' => 60 * 60 * 24,
+            _ => bail!("unsupported push grant TTL unit `{unit}`; use s, m, h, or d"),
+        };
+        (value, multiplier)
+    } else {
+        (trimmed, 1)
+    };
+    let amount = value_part
+        .parse::<u64>()
+        .with_context(|| format!("failed to parse push grant TTL `{raw}`"))?;
+    if amount == 0 {
+        bail!("push grant TTL must be greater than zero");
+    }
+    let seconds = amount
+        .checked_mul(multiplier_seconds)
+        .ok_or_else(|| anyhow!("push grant TTL is too large"))?;
+    Ok(Duration::from_secs(seconds))
+}
+
+fn write_local_push_grant(repo: &str, grant: &PushGrantRecord) -> Result<()> {
+    let path = push_grant_path(repo);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let raw = serde_json::to_vec_pretty(grant).context("failed to encode push grant")?;
+    fs::write(&path, raw).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+            .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn load_push_grant_from_dir(repo: &str, grants_dir: &Path) -> Result<Option<PushGrantRecord>> {
     let path = grants_dir.join(push_grant_file_name(repo));
     if !path.exists() {
@@ -800,6 +926,10 @@ fn load_push_grant_from_dir(repo: &str, grants_dir: &Path) -> Result<Option<Push
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let grant: PushGrantRecord = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+    if push_grant_expired(&grant, current_epoch_seconds()?) {
+        let _ = fs::remove_file(&path);
+        return Ok(None);
+    }
     Ok(Some(grant))
 }
 
@@ -2004,8 +2134,8 @@ struct GitHubRepoResponse {
 #[derive(Debug)]
 struct GitHubUserAccessGrant {
     access_token: String,
+    expires_in_seconds: Option<u64>,
     refresh_token: Option<String>,
-    expires_at: Option<String>,
 }
 
 async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option<u64>> {
@@ -2158,8 +2288,16 @@ fn oauth_token_response_error(response: &GitHubOAuthTokenResponse) -> Option<&st
     response.error.as_deref()
 }
 
-fn expires_at_from_expires_in(expires_in: Option<u64>) -> Option<String> {
-    expires_in.map(|seconds| format!("approximately {} seconds after grant", seconds))
+fn grant_expiration_from_expires_in(
+    expires_in: Option<u64>,
+) -> Result<(Option<String>, Option<u64>)> {
+    match expires_in {
+        Some(expires_in) => {
+            let (formatted, epoch_seconds) = expires_at_from_now(expires_in)?;
+            Ok((Some(formatted), Some(epoch_seconds)))
+        }
+        None => Ok((None, None)),
+    }
 }
 
 async fn mint_user_access_token_via_device_flow(
@@ -2210,8 +2348,8 @@ async fn mint_user_access_token_via_device_flow(
                 })?;
                 return Ok(GitHubUserAccessGrant {
                     access_token,
+                    expires_in_seconds: response.expires_in,
                     refresh_token: response.refresh_token,
-                    expires_at: expires_at_from_expires_in(response.expires_in),
                 });
             }
             Some("authorization_pending") => continue,
@@ -2243,6 +2381,8 @@ async fn mint_device_flow_push_grant(
     config: &Config,
     repo: &str,
     client_id: &str,
+    persist_refresh_token: bool,
+    active_ttl: Option<Duration>,
 ) -> Result<PushGrantRecord> {
     if let Some(cached) = load_cached_device_flow_grant(repo, client_id)? {
         let refreshed = refresh_user_access_token(client_id, &cached.refresh_token).await;
@@ -2251,7 +2391,8 @@ async fn mint_device_flow_push_grant(
                 let access_token = response
                     .access_token
                     .ok_or_else(|| anyhow!("GitHub refresh completed without an access token"))?;
-                if let Some(refresh_token) = response.refresh_token.clone() {
+                if persist_refresh_token && let Some(refresh_token) = response.refresh_token.clone()
+                {
                     save_cached_device_flow_grant(
                         repo,
                         &CachedDeviceFlowGrant {
@@ -2261,10 +2402,18 @@ async fn mint_device_flow_push_grant(
                         },
                     )?;
                 }
+                let (expires_at, expires_at_epoch_seconds) = match active_ttl {
+                    Some(active_ttl) => {
+                        let (formatted, epoch_seconds) = expires_at_from_now(active_ttl.as_secs())?;
+                        (Some(formatted), Some(epoch_seconds))
+                    }
+                    None => grant_expiration_from_expires_in(response.expires_in)?,
+                };
                 return Ok(PushGrantRecord {
                     repo: repo.to_string(),
                     token: access_token,
-                    expires_at: expires_at_from_expires_in(response.expires_in),
+                    expires_at,
+                    expires_at_epoch_seconds,
                     token_source: Some("github-app-user-token".to_string()),
                 });
             }
@@ -2300,7 +2449,7 @@ async fn mint_device_flow_push_grant(
 
     let repository_id = try_resolve_repo_id_for_device_flow(config, repo).await?;
     let grant = mint_user_access_token_via_device_flow(client_id, repo, repository_id).await?;
-    if let Some(refresh_token) = grant.refresh_token.clone() {
+    if persist_refresh_token && let Some(refresh_token) = grant.refresh_token.clone() {
         save_cached_device_flow_grant(
             repo,
             &CachedDeviceFlowGrant {
@@ -2310,13 +2459,72 @@ async fn mint_device_flow_push_grant(
             },
         )?;
     }
+    let (expires_at, expires_at_epoch_seconds) = match active_ttl {
+        Some(active_ttl) => {
+            let (formatted, epoch_seconds) = expires_at_from_now(active_ttl.as_secs())?;
+            (Some(formatted), Some(epoch_seconds))
+        }
+        None => grant_expiration_from_expires_in(grant.expires_in_seconds)?,
+    };
 
     Ok(PushGrantRecord {
         repo: repo.to_string(),
         token: grant.access_token,
-        expires_at: grant.expires_at,
+        expires_at,
+        expires_at_epoch_seconds,
         token_source: Some("github-app-user-token".to_string()),
     })
+}
+
+async fn request_push_access(
+    config: &Config,
+    repo: &str,
+    publisher_client_id: Option<&str>,
+    active_ttl: Option<Duration>,
+    cache_refresh_token: bool,
+) -> Result<()> {
+    let repo =
+        normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
+    let client_id = resolve_publisher_client_id(config, publisher_client_id).ok_or_else(|| {
+        anyhow!(
+            "publisher client id is required for device-flow push grants; set `publisher_client_id`, pass `--publisher-client-id`, or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
+        )
+    })?;
+    let grant =
+        mint_device_flow_push_grant(config, &repo, &client_id, cache_refresh_token, active_ttl)
+            .await?;
+    write_local_push_grant(&repo, &grant)?;
+
+    println!("push-grant: active");
+    println!("repo: {repo}");
+    println!("grant-location: local");
+    println!(
+        "ttl: {}",
+        if active_ttl.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "refresh-token-cache: {}",
+        if cache_refresh_token {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "token-source: {}",
+        grant
+            .token_source
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    if let Some(expires_at) = grant.expires_at.as_deref() {
+        println!("expires-at: {expires_at}");
+    }
+    Ok(())
 }
 
 async fn grant_push_access(
@@ -2333,7 +2541,7 @@ async fn grant_push_access(
             "publisher client id is required for device-flow push grants; set `publisher_client_id`, pass `--publisher-client-id`, or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
         )
     })?;
-    let grant = mint_device_flow_push_grant(config, &repo, &client_id).await?;
+    let grant = mint_device_flow_push_grant(config, &repo, &client_id, true, None).await?;
     let raw = serde_json::to_string(&grant).context("failed to serialize push grant")?;
     let mut grant_file = NamedTempFile::new().context("failed to create grant temp file")?;
     use std::io::Write as _;
@@ -2374,19 +2582,44 @@ async fn grant_push_access(
 }
 
 fn revoke_push_access(
-    sprite: &str,
+    sprite: Option<&str>,
     org: Option<&str>,
     repo: &str,
     forget_local_auth: bool,
 ) -> Result<()> {
     let repo =
         normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
-    let exec_args = vec![
-        "bash".to_string(),
-        "-lc".to_string(),
-        format!("sudo rm -f {}", push_grant_path(&repo).display()),
-    ];
-    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    match sprite {
+        Some(sprite) => {
+            let exec_args = vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                format!("sudo rm -f {}", push_grant_path(&repo).display()),
+            ];
+            run_sprite_exec(sprite, org, &exec_args, &[])?;
+            println!("grant-location: sprite");
+        }
+        None if sprite_runtime_detected() => {
+            let path = push_grant_path(&repo);
+            let removed = if path.exists() {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+                true
+            } else {
+                false
+            };
+            println!("grant-location: local");
+            println!(
+                "push-grant-file: {}",
+                if removed { "removed" } else { "not-found" }
+            );
+        }
+        None => {
+            bail!(
+                "pass `--sprite <name>` to revoke a remote Sprite grant, or run this command on the Sprite to revoke the local grant"
+            );
+        }
+    }
     println!("push-grant: revoked");
     println!("repo: {repo}");
     if forget_local_auth {
@@ -2406,22 +2639,58 @@ fn revoke_push_access(
     Ok(())
 }
 
-fn list_push_grants(sprite: &str, org: Option<&str>) -> Result<()> {
-    let exec_args = vec![
-        "bash".to_string(),
-        "-lc".to_string(),
-        format!(
-            "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
-            dir = PUSH_GRANTS_DIR
-        ),
-    ];
-    let raw = run_sprite_exec(sprite, org, &exec_args, &[])?;
+fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
+    let raw = match sprite {
+        Some(sprite) => {
+            let exec_args = vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                format!(
+                    "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
+                    dir = PUSH_GRANTS_DIR
+                ),
+            ];
+            println!("grant-location: sprite");
+            run_sprite_exec(sprite, org, &exec_args, &[])?
+        }
+        None if sprite_runtime_detected() => {
+            println!("grant-location: local");
+            let grants_dir = Path::new(PUSH_GRANTS_DIR);
+            if !grants_dir.is_dir() {
+                String::new()
+            } else {
+                let mut blobs = Vec::new();
+                for entry in fs::read_dir(grants_dir)
+                    .with_context(|| format!("failed to read {}", grants_dir.display()))?
+                {
+                    let entry = entry
+                        .with_context(|| format!("failed to read {}", grants_dir.display()))?;
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                        continue;
+                    }
+                    blobs.push(
+                        fs::read_to_string(&path)
+                            .with_context(|| format!("failed to read {}", path.display()))?,
+                    );
+                }
+                blobs.join("\n")
+            }
+        }
+        None => {
+            bail!(
+                "pass `--sprite <name>` to inspect a remote Sprite grant set, or run this command on the Sprite to inspect local grants"
+            );
+        }
+    };
     let mut grants = Vec::new();
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        grants.push(
-            serde_json::from_str::<PushGrantRecord>(line)
-                .context("failed to parse remote push grant")?,
-        );
+        let grant =
+            serde_json::from_str::<PushGrantRecord>(line).context("failed to parse push grant")?;
+        if push_grant_expired(&grant, current_epoch_seconds()?) {
+            continue;
+        }
+        grants.push(grant);
     }
 
     if grants.is_empty() {
@@ -2606,6 +2875,7 @@ fn install(config_path: &Path) -> Result<()> {
     create_required_dirs(config_path)?;
     ensure_config_exists(config_path)?;
     let config = Config::load(Some(config_path))?;
+    ensure_push_grants_dir_permissions(&config)?;
 
     match detect_service_manager() {
         ServiceManager::Systemd => {
@@ -2923,6 +3193,32 @@ fn create_required_dirs(config_path: &Path) -> Result<()> {
     }
     fs::create_dir_all(STATE_DIR).with_context(|| format!("failed to create {STATE_DIR}"))?;
     fs::create_dir_all(TLS_DIR).with_context(|| format!("failed to create {TLS_DIR}"))?;
+    fs::create_dir_all(PUSH_GRANTS_DIR)
+        .with_context(|| format!("failed to create {PUSH_GRANTS_DIR}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_push_grants_dir_permissions(config: &Config) -> Result<()> {
+    let grants_dir = Path::new(PUSH_GRANTS_DIR);
+    fs::create_dir_all(grants_dir)
+        .with_context(|| format!("failed to create {PUSH_GRANTS_DIR}"))?;
+    if !current_euid_is_root() {
+        return Ok(());
+    }
+
+    let agent_user = lookup_user(&config.agent_user)?;
+    let service_group = lookup_group(&config.service_group)?;
+    chown(grants_dir, Some(agent_user.uid), Some(service_group.gid))
+        .with_context(|| format!("failed to chown {}", grants_dir.display()))?;
+    set_file_mode(grants_dir, 0o750)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_push_grants_dir_permissions(_config: &Config) -> Result<()> {
+    fs::create_dir_all(PUSH_GRANTS_DIR)
+        .with_context(|| format!("failed to create {PUSH_GRANTS_DIR}"))?;
     Ok(())
 }
 
@@ -4612,20 +4908,22 @@ mod tests {
         credential_url_host, credential_url_path, credential_url_protocol,
         ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
         generate_self_signed_certificate, git_credential_request_repo,
-        git_credential_request_targets_github, load_matching_push_grant, normalize_github_repo,
-        normalize_proxy_origin, parse_git_credential_request, parse_systemctl_show,
-        process_log_path, process_pid_path, proxy_mcp_status_looks_healthy, read_tail_lines,
-        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
-        select_tls_san_ip, service_manager_from_pid1, shell_escape_single_quotes,
-        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
-        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
-        write_if_changed,
+        git_credential_request_targets_github, load_matching_push_grant,
+        load_push_grant_from_dir, normalize_github_repo, normalize_proxy_origin,
+        parse_git_credential_request, parse_push_grant_ttl, parse_systemctl_show,
+        process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
+        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
+        resolve_publisher_client_id, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path,
+        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
+        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed, PushGrantRecord,
     };
     use crate::Cli;
     use clap::CommandFactory;
     use std::fs;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
     use tempfile::tempdir;
     use zodex::config::Config;
 
@@ -5319,6 +5617,68 @@ mod tests {
         assert_eq!(granted.repo, granted_repo);
         assert_eq!(granted.token, "push-token");
         assert!(ungranted.is_none());
+    }
+
+    #[test]
+    fn parse_push_grant_ttl_accepts_common_units() {
+        assert_eq!(
+            parse_push_grant_ttl("30m").expect("30m should parse"),
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            parse_push_grant_ttl("2h").expect("2h should parse"),
+            Duration::from_secs(2 * 60 * 60)
+        );
+        assert_eq!(
+            parse_push_grant_ttl("45").expect("bare seconds should parse"),
+            Duration::from_secs(45)
+        );
+    }
+
+    #[test]
+    fn parse_push_grant_ttl_rejects_empty_zero_and_unknown_units() {
+        assert!(parse_push_grant_ttl("").is_err());
+        assert!(parse_push_grant_ttl("0m").is_err());
+        assert!(parse_push_grant_ttl("30w").is_err());
+    }
+
+    #[test]
+    fn push_grant_expired_only_when_epoch_cutoff_has_passed() {
+        let active = PushGrantRecord {
+            repo: "amxv/zodex".to_string(),
+            token: "push-token".to_string(),
+            expires_at: Some("2026-06-27T10:31:00Z".to_string()),
+            expires_at_epoch_seconds: Some(1_000),
+            token_source: Some("github-app-user-token".to_string()),
+        };
+        let no_ttl = PushGrantRecord {
+            repo: "amxv/zodex".to_string(),
+            token: "push-token".to_string(),
+            expires_at: None,
+            expires_at_epoch_seconds: None,
+            token_source: Some("github-app-user-token".to_string()),
+        };
+
+        assert!(!push_grant_expired(&active, 999));
+        assert!(push_grant_expired(&active, 1_000));
+        assert!(!push_grant_expired(&no_ttl, 9_999));
+    }
+
+    #[test]
+    fn load_push_grant_from_dir_ignores_expired_grants() {
+        let grants_dir = tempdir().expect("tempdir");
+        let path = grants_dir.path().join("amxv__zodex.json");
+        fs::write(
+            &path,
+            r#"{"repo":"amxv/zodex","token":"push-token","expires_at":"1970-01-01T00:00:01Z","expires_at_epoch_seconds":1}"#,
+        )
+        .expect("write grant");
+
+        let grant =
+            load_push_grant_from_dir("amxv/zodex", grants_dir.path()).expect("lookup should work");
+
+        assert!(grant.is_none());
+        assert!(!path.exists());
     }
 
     #[test]
