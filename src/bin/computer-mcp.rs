@@ -17,7 +17,8 @@ use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
 use computer_mcp::install_rustls_crypto_provider;
 use computer_mcp::publisher::{
-    build_publish_request, detect_repo_root, mint_reader_installation_token, submit_publish_request,
+    build_publish_request, detect_repo_root, mint_publisher_installation_token_with_metadata,
+    mint_reader_installation_token, resolve_repo_installation_id, submit_publish_request,
 };
 use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
@@ -28,7 +29,8 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 
 const SERVICE_NAME: &str = "computer-mcpd.service";
 const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/computer-mcpd.service";
@@ -56,6 +58,13 @@ const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
 const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 const PRIMARY_OPERATOR_BINARY: &str = "zodex";
 const PRIMARY_DAEMON_BINARY: &str = "zodexd";
+const PUSH_GRANTS_DIR: &str = "/var/lib/computer-mcp/push-grants";
+const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
+const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
+const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
+const SPRITE_REMOTE_UPLOAD_CLI_PATH: &str = "/tmp/zodex";
+const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
+const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/computer-mcp-prd";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceManager {
@@ -124,6 +133,10 @@ enum Commands {
         #[command(subcommand)]
         command: SpriteCommand,
     },
+    Github {
+        #[command(subcommand)]
+        command: GithubCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -141,13 +154,65 @@ enum PublisherCommand {
 
 #[derive(Debug, Subcommand)]
 enum SpriteCommand {
-    ServicesStatus {
+    Setup {
         #[arg(long)]
         sprite: String,
         #[arg(long)]
         org: Option<String>,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        reader_app_id: u64,
+        #[arg(long)]
+        reader_pem: PathBuf,
+        #[arg(long)]
+        publisher_app_id: u64,
+        #[arg(long)]
+        publisher_pem: PathBuf,
+        #[arg(long, default_value = "main")]
+        default_base: String,
+        #[arg(long, default_value = "sprite")]
+        url_auth: String,
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        remote_config: String,
     },
-    ServiceLogs {
+    Upgrade {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value = "latest")]
+        version: String,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        url_auth: Option<String>,
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        remote_config: String,
+    },
+    Sync {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        remote_config: String,
+        #[arg(long, default_value_t = false)]
+        force_recreate: bool,
+        #[arg(long, default_value_t = false)]
+        skip_stop_detached: bool,
+    },
+    #[command(alias = "services-status")]
+    Status {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        remote_config: String,
+    },
+    #[command(alias = "service-logs")]
+    Logs {
         #[arg(long)]
         sprite: String,
         #[arg(long)]
@@ -159,9 +224,47 @@ enum SpriteCommand {
         #[arg(long)]
         duration: Option<String>,
     },
+    Health {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        url_auth: Option<String>,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Subcommand)]
+enum GithubCommand {
+    GrantPush {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        publisher_app_id: Option<u64>,
+        #[arg(long)]
+        publisher_pem: Option<PathBuf>,
+    },
+    RevokePush {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    ListGrants {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct SpriteServiceDefinition {
     cmd: String,
     args: Vec<String>,
@@ -185,6 +288,35 @@ struct SpriteServiceState {
     pid: Option<u32>,
     started_at: Option<String>,
     status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PushGrantRecord {
+    repo: String,
+    token: String,
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SpriteSetupOptions<'a> {
+    sprite: &'a str,
+    org: Option<&'a str>,
+    repo: &'a str,
+    reader_app_id: u64,
+    reader_pem: &'a Path,
+    publisher_app_id: u64,
+    publisher_pem: &'a Path,
+    default_base: &'a str,
+    url_auth: &'a str,
+    remote_config: &'a Path,
+}
+
+#[derive(Debug, Clone)]
+struct LocalOperatorBinaries {
+    cli: PathBuf,
+    daemon: PathBuf,
+    publisher: PathBuf,
 }
 
 #[tokio::main]
@@ -321,15 +453,77 @@ async fn main() -> Result<()> {
         Commands::Sprite { command } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
             match command {
-                SpriteCommand::ServicesStatus { sprite, org } => {
+                SpriteCommand::Setup {
+                    sprite,
+                    org,
+                    repo,
+                    reader_app_id,
+                    reader_pem,
+                    publisher_app_id,
+                    publisher_pem,
+                    default_base,
+                    url_auth,
+                    remote_config,
+                } => {
+                    sprite_setup(SpriteSetupOptions {
+                        sprite: &sprite,
+                        org: org.as_deref(),
+                        repo: &repo,
+                        reader_app_id,
+                        reader_pem: &reader_pem,
+                        publisher_app_id,
+                        publisher_pem: &publisher_pem,
+                        default_base: &default_base,
+                        url_auth: &url_auth,
+                        remote_config: Path::new(&remote_config),
+                    })
+                    .await?;
+                }
+                SpriteCommand::Upgrade {
+                    sprite,
+                    org,
+                    version,
+                    repo,
+                    url_auth,
+                    remote_config,
+                } => {
+                    sprite_upgrade(
+                        &sprite,
+                        org.as_deref(),
+                        &version,
+                        repo.as_deref(),
+                        url_auth.as_deref(),
+                        Path::new(&remote_config),
+                    )?;
+                }
+                SpriteCommand::Sync {
+                    sprite,
+                    org,
+                    remote_config,
+                    force_recreate,
+                    skip_stop_detached,
+                } => {
+                    sync_sprite_services(
+                        &sprite,
+                        org.as_deref(),
+                        Path::new(&remote_config),
+                        force_recreate,
+                        skip_stop_detached,
+                    )?;
+                }
+                SpriteCommand::Status {
+                    sprite,
+                    org,
+                    remote_config,
+                } => {
                     print_sprite_services_status_summary(
                         &config,
-                        Path::new(&config_path),
+                        Path::new(&remote_config),
                         &sprite,
                         org.as_deref(),
                     )?;
                 }
-                SpriteCommand::ServiceLogs {
+                SpriteCommand::Logs {
                     sprite,
                     service,
                     org,
@@ -343,6 +537,41 @@ async fn main() -> Result<()> {
                         lines,
                         duration.as_deref(),
                     )?;
+                }
+                SpriteCommand::Health {
+                    sprite,
+                    org,
+                    url_auth,
+                } => {
+                    verify_sprite_health(&sprite, org.as_deref(), url_auth.as_deref())?;
+                }
+            }
+        }
+        Commands::Github { command } => {
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            match command {
+                GithubCommand::GrantPush {
+                    sprite,
+                    repo,
+                    org,
+                    publisher_app_id,
+                    publisher_pem,
+                } => {
+                    grant_push_access(
+                        &config,
+                        &sprite,
+                        org.as_deref(),
+                        &repo,
+                        publisher_app_id,
+                        publisher_pem.as_deref(),
+                    )
+                    .await?;
+                }
+                GithubCommand::RevokePush { sprite, repo, org } => {
+                    revoke_push_access(&sprite, org.as_deref(), &repo)?;
+                }
+                GithubCommand::ListGrants { sprite, org } => {
+                    list_push_grants(&sprite, org.as_deref())?;
                 }
             }
         }
@@ -375,6 +604,15 @@ async fn handle_git_credential_helper(config: &Config, operation: &str) -> Resul
     let request = read_git_credential_request()?;
 
     if operation != "get" || !git_credential_request_targets_github(&request) {
+        return Ok(());
+    }
+
+    if let Some(repo) = git_credential_request_repo(&request)
+        && let Some(grant) = load_push_grant(&repo)?
+    {
+        println!("username=x-access-token");
+        println!("password={}", grant.token);
+        println!();
         return Ok(());
     }
 
@@ -445,6 +683,12 @@ fn credential_url_host(url: &str) -> Option<&str> {
     Some(host.split('@').next_back().unwrap_or(host))
 }
 
+fn credential_url_path(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let (_, path) = rest.split_once('/')?;
+    Some(path)
+}
+
 fn credential_host_is_github(host: &str) -> bool {
     let normalized = host
         .split(':')
@@ -455,13 +699,889 @@ fn credential_host_is_github(host: &str) -> bool {
     normalized == "github.com" || normalized == "www.github.com"
 }
 
+fn git_credential_request_repo(request: &GitCredentialRequest) -> Option<String> {
+    let path = request
+        .path
+        .as_deref()
+        .or_else(|| request.url.as_deref().and_then(credential_url_path))?;
+    normalize_github_repo(path)
+}
+
+fn normalize_github_repo(path: &str) -> Option<String> {
+    let trimmed = path.trim_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn push_grant_file_name(repo: &str) -> String {
+    format!("{}.json", repo.replace('/', "__"))
+}
+
+fn push_grant_path(repo: &str) -> PathBuf {
+    Path::new(PUSH_GRANTS_DIR).join(push_grant_file_name(repo))
+}
+
+fn load_push_grant(repo: &str) -> Result<Option<PushGrantRecord>> {
+    let path = push_grant_path(repo);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let grant: PushGrantRecord = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(Some(grant))
+}
+
+fn manifest_dir() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
+    let cli_candidates = [
+        manifest_dir().join("target/debug/zodex"),
+        manifest_dir().join("target/release/zodex"),
+        manifest_dir().join("target/debug/computer-mcp"),
+        manifest_dir().join("target/release/computer-mcp"),
+        PathBuf::from("/usr/local/bin/zodex"),
+        PathBuf::from("/usr/local/bin/computer-mcp"),
+    ];
+    let daemon_candidates = [
+        manifest_dir().join("target/debug/zodexd"),
+        manifest_dir().join("target/release/zodexd"),
+        manifest_dir().join("target/debug/computer-mcpd"),
+        manifest_dir().join("target/release/computer-mcpd"),
+        PathBuf::from("/usr/local/bin/zodexd"),
+        PathBuf::from("/usr/local/bin/computer-mcpd"),
+    ];
+    let publisher_candidates = [
+        manifest_dir().join("target/debug/computer-mcp-prd"),
+        manifest_dir().join("target/release/computer-mcp-prd"),
+        PathBuf::from("/usr/local/bin/computer-mcp-prd"),
+    ];
+
+    let mut cli = first_existing_executable(&cli_candidates);
+    let mut daemon = first_existing_executable(&daemon_candidates);
+    let mut publisher = first_existing_executable(&publisher_candidates);
+
+    if cli.is_none() || daemon.is_none() || publisher.is_none() {
+        build_local_operator_binaries()?;
+        cli = first_existing_executable(&cli_candidates);
+        daemon = first_existing_executable(&daemon_candidates);
+        publisher = first_existing_executable(&publisher_candidates);
+    }
+
+    match (cli, daemon, publisher) {
+        (Some(cli), Some(daemon), Some(publisher)) => Ok(LocalOperatorBinaries {
+            cli,
+            daemon,
+            publisher,
+        }),
+        _ => bail!(
+            "failed to locate local zodex operator binaries; expected zodex, zodexd, and computer-mcp-prd"
+        ),
+    }
+}
+
+fn first_existing_executable(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.is_file()).cloned()
+}
+
+fn build_local_operator_binaries() -> Result<()> {
+    let args = vec![
+        "build".to_string(),
+        "--bin".to_string(),
+        "zodex".to_string(),
+        "--bin".to_string(),
+        "zodexd".to_string(),
+        "--bin".to_string(),
+        "computer-mcp-prd".to_string(),
+    ];
+    run_command_capture("cargo", &args)
+        .context("failed to build local zodex binaries")
+        .map(|_| ())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpriteUrlInfo {
+    url: Option<String>,
+    auth: Option<String>,
+}
+
+fn validate_sprite_url_auth(url_auth: &str) -> Result<()> {
+    if matches!(url_auth, "sprite" | "public") {
+        Ok(())
+    } else {
+        bail!("url auth must be `sprite` or `public`");
+    }
+}
+
+fn build_sprite_scope_args(sprite: &str, org: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(org) = org {
+        args.push("-o".to_string());
+        args.push(org.to_string());
+    }
+    args.push("-s".to_string());
+    args.push(sprite.to_string());
+    args
+}
+
+fn run_sprite_exec(
+    sprite: &str,
+    org: Option<&str>,
+    exec_args: &[String],
+    uploads: &[(&Path, &str)],
+) -> Result<String> {
+    let mut args = build_sprite_scope_args(sprite, org);
+    args.push("exec".to_string());
+    for (local, remote) in uploads {
+        args.push("--file".to_string());
+        args.push(format!("{}:{remote}", local.display()));
+    }
+    args.extend(exec_args.iter().cloned());
+    run_command_capture("sprite", &args)
+}
+
+fn sprite_url_info(sprite: &str, org: Option<&str>) -> Result<SpriteUrlInfo> {
+    let mut args = build_sprite_scope_args(sprite, org);
+    args.push("url".to_string());
+    let raw = run_command_capture("sprite", &args)?;
+    let mut info = SpriteUrlInfo {
+        url: None,
+        auth: None,
+    };
+    for line in raw.lines() {
+        if let Some(value) = line.strip_prefix("URL:") {
+            info.url = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("Auth:") {
+            info.auth = Some(value.trim().to_string());
+        }
+    }
+    Ok(info)
+}
+
+fn set_sprite_url_auth(sprite: &str, org: Option<&str>, url_auth: &str) -> Result<()> {
+    validate_sprite_url_auth(url_auth)?;
+    let mut args = build_sprite_scope_args(sprite, org);
+    args.extend([
+        "url".to_string(),
+        "update".to_string(),
+        "--auth".to_string(),
+        url_auth.to_string(),
+    ]);
+    run_command_capture("sprite", &args)?;
+    Ok(())
+}
+
+fn derive_remote_target_repo(
+    sprite: &str,
+    org: Option<&str>,
+    remote_config: &Path,
+) -> Result<Option<String>> {
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "awk".to_string(),
+        "-F\"".to_string(),
+        r#"/^\[\[publisher_targets\]\]/ { in_targets=1; next } in_targets && /^repo = "/ { print $2; exit }"#.to_string(),
+        remote_config.display().to_string(),
+    ];
+    let raw = run_sprite_exec(sprite, org, &exec_args, &[])?;
+    let repo = raw.trim();
+    if repo.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(repo.to_string()))
+    }
+}
+
+fn sync_sprite_services(
+    sprite: &str,
+    org: Option<&str>,
+    config_path: &Path,
+    force_recreate: bool,
+    skip_stop_detached: bool,
+) -> Result<()> {
+    if !skip_stop_detached {
+        let stop_args = vec![
+            "--".to_string(),
+            "sudo".to_string(),
+            "computer-mcp".to_string(),
+            "stop".to_string(),
+        ];
+        if let Err(err) = run_sprite_exec(sprite, org, &stop_args, &[]) {
+            eprintln!("warning: failed to stop detached daemons before Sprite sync: {err}");
+        }
+    }
+
+    if force_recreate {
+        for service_name in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
+            let status = run_sprite_api(
+                sprite,
+                org,
+                &format!("/services/{service_name}"),
+                &[
+                    "-sS".to_string(),
+                    "-o".to_string(),
+                    "/dev/null".to_string(),
+                    "-w".to_string(),
+                    "%{http_code}\n".to_string(),
+                    "-X".to_string(),
+                    "DELETE".to_string(),
+                ],
+            )?;
+            let trimmed = status.trim();
+            if trimmed != "204" && trimmed != "404" {
+                bail!("failed to delete Sprite service {service_name} (HTTP {trimmed})");
+            }
+        }
+    }
+
+    for (service_name, definition) in expected_sprite_service_definitions(config_path) {
+        let payload = serde_json::to_string(&definition).context("failed to encode service")?;
+        run_sprite_api(
+            sprite,
+            org,
+            &format!("/services/{service_name}"),
+            &[
+                "-sS".to_string(),
+                "-X".to_string(),
+                "PUT".to_string(),
+                "-H".to_string(),
+                "Content-Type: application/json".to_string(),
+                "-d".to_string(),
+                payload,
+            ],
+        )?;
+    }
+
+    println!("sprite services synced for {sprite}");
+    Ok(())
+}
+
+fn verify_sprite_service_logs(sprite: &str, org: Option<&str>) -> Result<()> {
+    for service in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
+        let path = sprite_service_logs_api_path(service, Some(20), None);
+        run_sprite_api(sprite, org, &path, &["-sS".to_string()])?;
+    }
+    Ok(())
+}
+
+fn verify_local_sprite_health(sprite: &str, org: Option<&str>) -> Result<()> {
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "bash".to_string(),
+        "-lc".to_string(),
+        "curl -fsS http://127.0.0.1:8080/health | grep -F '\"status\":\"ok\"' >/dev/null"
+            .to_string(),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    Ok(())
+}
+
+fn verify_agent_git_identity(sprite: &str, org: Option<&str>) -> Result<()> {
+    let script = r#"set -euo pipefail
+smoke_dir=/workspace/.git-identity-zodex-smoke
+rm -rf "$smoke_dir"
+git init -q "$smoke_dir"
+cd "$smoke_dir"
+printf "sprite git identity smoke\n" > smoke.txt
+git add smoke.txt
+git commit -q -m "Smoke: verify default agent git identity"
+git log -1 --format="%an <%ae>"
+cd /workspace
+rm -rf "$smoke_dir"
+"#;
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "-u".to_string(),
+        "computer-mcp-agent".to_string(),
+        "env".to_string(),
+        "HOME=/home/computer-mcp-agent".to_string(),
+        "bash".to_string(),
+        "-lc".to_string(),
+        script.to_string(),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    Ok(())
+}
+
+fn verify_reader_git_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()> {
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "-u".to_string(),
+        "computer-mcp-agent".to_string(),
+        "env".to_string(),
+        "HOME=/home/computer-mcp-agent".to_string(),
+        "git".to_string(),
+        "ls-remote".to_string(),
+        format!("https://github.com/{repo}.git"),
+        "HEAD".to_string(),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    Ok(())
+}
+
+fn verify_publisher_socket_permissions(sprite: &str, org: Option<&str>) -> Result<()> {
+    let script = r#"set -euo pipefail
+dir_path=/var/lib/computer-mcp/publisher/run
+sock_path=/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock
+[[ "$(stat -c %a "$dir_path")" == "750" ]]
+[[ "$(stat -c %U "$dir_path")" == "computer-mcp-publisher" ]]
+[[ "$(stat -c %G "$dir_path")" == "computer-mcp" ]]
+[[ "$(stat -c %a "$sock_path")" == "660" ]]
+[[ "$(stat -c %U "$sock_path")" == "computer-mcp-publisher" ]]
+[[ "$(stat -c %G "$sock_path")" == "computer-mcp" ]]
+"#;
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "bash".to_string(),
+        "-lc".to_string(),
+        script.to_string(),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    Ok(())
+}
+
+fn verify_publisher_key_isolation(sprite: &str, org: Option<&str>) -> Result<()> {
+    let script = r#"cat /etc/computer-mcp/publisher/private-key.pem >/dev/null 2>&1"#;
+    let exec_args = vec![
+        "--".to_string(),
+        "sudo".to_string(),
+        "-u".to_string(),
+        "computer-mcp-agent".to_string(),
+        "env".to_string(),
+        "HOME=/home/computer-mcp-agent".to_string(),
+        "bash".to_string(),
+        "-lc".to_string(),
+        script.to_string(),
+    ];
+    match run_sprite_exec(sprite, org, &exec_args, &[]) {
+        Ok(_) => bail!(
+            "computer-mcp-agent unexpectedly gained read access to /etc/computer-mcp/publisher/private-key.pem"
+        ),
+        Err(_) => Ok(()),
+    }
+}
+
+fn verify_sprite_health(sprite: &str, org: Option<&str>, url_auth: Option<&str>) -> Result<()> {
+    verify_local_sprite_health(sprite, org)?;
+    if let Some(url_auth) = url_auth {
+        set_sprite_url_auth(sprite, org, url_auth)?;
+    }
+    let info = sprite_url_info(sprite, org)?;
+    if let Some(url) = info.url.as_deref() {
+        if info.auth.as_deref() == Some("public") {
+            run_command_capture(
+                "curl",
+                &[
+                    "-fsS".to_string(),
+                    "--retry".to_string(),
+                    "3".to_string(),
+                    "--retry-all-errors".to_string(),
+                    "--retry-delay".to_string(),
+                    "2".to_string(),
+                    format!("{}/health", url.trim_end_matches('/')),
+                ],
+            )?;
+        }
+        println!("sprite-url: {url}");
+        if let Some(host) = url
+            .trim_end_matches('/')
+            .strip_prefix("https://")
+            .or_else(|| url.trim_end_matches('/').strip_prefix("http://"))
+        {
+            let exec_args = vec![
+                "--".to_string(),
+                "sudo".to_string(),
+                "computer-mcp".to_string(),
+                "show-url".to_string(),
+                "--host".to_string(),
+                host.to_string(),
+            ];
+            let output = run_sprite_exec(sprite, org, &exec_args, &[])?;
+            print!("{output}");
+        }
+    }
+    println!("sprite-health: ok");
+    Ok(())
+}
+
+async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
+    let local_binaries = resolve_local_operator_binaries()?;
+    validate_sprite_url_auth(options.url_auth)?;
+    let reader_installation_id =
+        resolve_repo_installation_id(options.reader_app_id, options.reader_pem, options.repo)
+            .await?;
+    let publisher_installation_id = resolve_repo_installation_id(
+        options.publisher_app_id,
+        options.publisher_pem,
+        options.repo,
+    )
+    .await?;
+    mint_reader_installation_token(
+        options.reader_app_id,
+        options.reader_pem,
+        reader_installation_id,
+    )
+    .await?;
+    mint_publisher_installation_token_with_metadata(
+        options.publisher_app_id,
+        options.publisher_pem,
+        publisher_installation_id,
+    )
+    .await?;
+
+    let script = build_sprite_setup_script(
+        options.repo,
+        options.reader_app_id,
+        reader_installation_id,
+        options.publisher_app_id,
+        publisher_installation_id,
+        options.default_base,
+        options.remote_config,
+    );
+    let mut script_file = NamedTempFile::new().context("failed to create setup temp file")?;
+    use std::io::Write as _;
+    script_file
+        .write_all(script.as_bytes())
+        .context("failed to write setup script")?;
+
+    let exec_args = vec![
+        "bash".to_string(),
+        SPRITE_SETUP_REMOTE_SCRIPT_PATH.to_string(),
+    ];
+    run_sprite_exec(
+        options.sprite,
+        options.org,
+        &exec_args,
+        &[
+            (script_file.path(), SPRITE_SETUP_REMOTE_SCRIPT_PATH),
+            (&local_binaries.cli, SPRITE_REMOTE_UPLOAD_CLI_PATH),
+            (&local_binaries.daemon, SPRITE_REMOTE_UPLOAD_DAEMON_PATH),
+            (
+                &local_binaries.publisher,
+                SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
+            ),
+            (options.reader_pem, "/tmp/zodex-reader.pem"),
+            (options.publisher_pem, "/tmp/zodex-publisher.pem"),
+        ],
+    )?;
+
+    sync_sprite_services(
+        options.sprite,
+        options.org,
+        options.remote_config,
+        true,
+        false,
+    )?;
+    verify_publisher_socket_permissions(options.sprite, options.org)?;
+    verify_sprite_service_logs(options.sprite, options.org)?;
+    verify_sprite_health(options.sprite, options.org, Some(options.url_auth))?;
+    println!("sprite-setup: complete");
+    Ok(())
+}
+
+fn sprite_upgrade(
+    sprite: &str,
+    org: Option<&str>,
+    version: &str,
+    repo: Option<&str>,
+    url_auth: Option<&str>,
+    remote_config: &Path,
+) -> Result<()> {
+    let local_binaries = resolve_local_operator_binaries()?;
+    if let Some(url_auth) = url_auth {
+        validate_sprite_url_auth(url_auth)?;
+    }
+
+    let repo_arg = repo.unwrap_or("");
+    let script = build_sprite_upgrade_script(version, repo_arg, remote_config);
+    let mut script_file = NamedTempFile::new().context("failed to create upgrade temp file")?;
+    use std::io::Write as _;
+    script_file
+        .write_all(script.as_bytes())
+        .context("failed to write upgrade script")?;
+
+    let exec_args = vec![
+        "bash".to_string(),
+        SPRITE_UPGRADE_REMOTE_SCRIPT_PATH.to_string(),
+    ];
+    run_sprite_exec(
+        sprite,
+        org,
+        &exec_args,
+        &[
+            (script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH),
+            (&local_binaries.cli, SPRITE_REMOTE_UPLOAD_CLI_PATH),
+            (&local_binaries.daemon, SPRITE_REMOTE_UPLOAD_DAEMON_PATH),
+            (
+                &local_binaries.publisher,
+                SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
+            ),
+        ],
+    )?;
+
+    sync_sprite_services(sprite, org, remote_config, true, false)?;
+    verify_sprite_service_logs(sprite, org)?;
+    verify_local_sprite_health(sprite, org)?;
+    verify_agent_git_identity(sprite, org)?;
+    if let Some(repo) =
+        repo.map(str::to_string)
+            .or(derive_remote_target_repo(sprite, org, remote_config)?)
+    {
+        verify_reader_git_access(sprite, org, &repo)?;
+    }
+    verify_publisher_socket_permissions(sprite, org)?;
+    verify_publisher_key_isolation(sprite, org)?;
+    verify_sprite_health(sprite, org, url_auth)?;
+    println!("sprite-upgrade: complete");
+    Ok(())
+}
+
+fn build_sprite_setup_script(
+    repo: &str,
+    reader_app_id: u64,
+    reader_installation_id: u64,
+    publisher_app_id: u64,
+    publisher_installation_id: u64,
+    default_base: &str,
+    remote_config: &Path,
+) -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+REPO={repo}
+CFG={cfg}
+
+if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -y
+  sudo apt-get install -y --no-install-recommends git curl ca-certificates
+fi
+
+sudo install -d -m 0755 /usr/local/bin
+sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
+sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
+sudo install -m 0755 {publisher_upload} /usr/local/bin/computer-mcp-prd
+sudo ln -sf /usr/local/bin/zodex /usr/local/bin/computer-mcp
+sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/computer-mcpd
+
+sudo env \
+  COMPUTER_MCP_HTTP_BIND_PORT=8080 \
+  COMPUTER_MCP_AGENT_HOME=/home/computer-mcp-agent \
+  COMPUTER_MCP_DEFAULT_WORKDIR=/workspace \
+  /usr/local/bin/zodex --config "$CFG" install
+
+sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader /etc/computer-mcp/publisher
+sudo install -m 0640 -o root -g computer-mcp /tmp/zodex-reader.pem /etc/computer-mcp/reader/private-key.pem
+sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp /tmp/zodex-publisher.pem /etc/computer-mcp/publisher/private-key.pem
+
+sudo awk '
+  BEGIN {{seen_bind=0; inserted_http=0}}
+  /^bind_port = / {{
+    print "bind_port = 8443"
+    if (!inserted_http) {{
+      print "http_bind_port = 8080"
+      inserted_http=1
+    }}
+    seen_bind=1
+    next
+  }}
+  /^http_bind_port = / {{next}}
+  {{print}}
+  END {{
+    if (!seen_bind) {{
+      print "bind_port = 8443"
+      if (!inserted_http) {{
+        print "http_bind_port = 8080"
+      }}
+    }}
+  }}
+' "$CFG" | sudo tee "$CFG" >/dev/null
+
+sudo awk '
+  BEGIN {{ seen_agent_home=0; seen_default_workdir=0 }}
+  /^agent_home = / {{ print "agent_home = \"/home/computer-mcp-agent\""; seen_agent_home=1; next }}
+  /^default_workdir = / {{ print "default_workdir = \"/workspace\""; seen_default_workdir=1; next }}
+  {{ print }}
+  END {{
+    if (!seen_agent_home) print "agent_home = \"/home/computer-mcp-agent\""
+    if (!seen_default_workdir) print "default_workdir = \"/workspace\""
+  }}
+' "$CFG" | sudo tee "$CFG" >/dev/null
+
+tmp_cfg="$(mktemp)"
+tmp_block="$(mktemp)"
+sudo awk '
+  BEGIN {{ skip=0 }}
+  /^# BEGIN ZODEX_GH_APPS_MANAGED$/ {{ skip=1; next }}
+  /^# END ZODEX_GH_APPS_MANAGED$/ {{ skip=0; next }}
+  skip==0 {{ print }}
+' "$CFG" > "$tmp_cfg"
+
+cat > "$tmp_block" <<'EOF'
+# BEGIN ZODEX_GH_APPS_MANAGED
+reader_app_id = {reader_app_id}
+reader_installation_id = {reader_installation_id}
+publisher_app_id = {publisher_app_id}
+
+[[publisher_targets]]
+id = "{repo_plain}"
+repo = "{repo_plain}"
+default_base = "{default_base}"
+installation_id = {publisher_installation_id}
+# END ZODEX_GH_APPS_MANAGED
+EOF
+
+sudo bash -lc 'cat "$1" "$2" > "$3"' -- "$tmp_cfg" "$tmp_block" "$CFG"
+rm -f "$tmp_cfg" "$tmp_block"
+sudo chgrp computer-mcp "$CFG"
+sudo chmod 0640 "$CFG"
+
+helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath false
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.name "Computer MCP Agent"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.email "computer-mcp-agent@local.invalid"
+
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+  cd /workspace
+  test -w /workspace
+  touch .zodex-write-check
+  rm -f .zodex-write-check
+'
+
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+  smoke_dir=/workspace/.git-identity-smoke
+  rm -rf "$smoke_dir"
+  git init -q "$smoke_dir"
+  cd "$smoke_dir"
+  printf "sprite git identity smoke\n" > smoke.txt
+  git add smoke.txt
+  git commit -q -m "Smoke: verify default agent git identity"
+  cd /workspace
+  rm -rf "$smoke_dir"
+'
+
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
+  git -C /workspace ls-remote "https://github.com/$REPO.git" HEAD >/dev/null
+
+if sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
+  bash -lc 'cat /etc/computer-mcp/publisher/private-key.pem >/dev/null 2>&1'; then
+  echo "agent unexpectedly gained publisher key access" >&2
+  exit 1
+fi
+
+sudo computer-mcp stop || true
+rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {cli_upload} {daemon_upload} {publisher_upload}
+"#,
+        repo = shell_escape_single_quotes(repo),
+        repo_plain = repo,
+        cfg = shell_escape_single_quotes(&remote_config.display().to_string()),
+        reader_app_id = reader_app_id,
+        reader_installation_id = reader_installation_id,
+        publisher_app_id = publisher_app_id,
+        publisher_installation_id = publisher_installation_id,
+        default_base = default_base,
+        setup_script = SPRITE_SETUP_REMOTE_SCRIPT_PATH,
+        cli_upload = SPRITE_REMOTE_UPLOAD_CLI_PATH,
+        daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
+        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH
+    )
+}
+
+fn build_sprite_upgrade_script(version: &str, repo: &str, remote_config: &Path) -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+CFG={cfg}
+VERSION={version}
+TARGET_REPO={repo}
+
+if [[ ! -f "$CFG" ]]; then
+  echo "missing $CFG" >&2
+  exit 1
+fi
+
+if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -y
+  sudo apt-get install -y --no-install-recommends git curl ca-certificates
+fi
+
+sudo install -d -m 0755 /usr/local/bin
+sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
+sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
+sudo install -m 0755 {publisher_upload} /usr/local/bin/computer-mcp-prd
+sudo ln -sf /usr/local/bin/zodex /usr/local/bin/computer-mcp
+sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/computer-mcpd
+
+sudo /usr/local/bin/zodex --config "$CFG" install
+
+if [[ -z "$TARGET_REPO" ]]; then
+  TARGET_REPO="$(sudo awk -F'"' '/^\[\[publisher_targets\]\]/ {{ in_targets=1; next }} in_targets && /^repo = "/ {{ print $2; exit }}' "$CFG" 2>/dev/null || true)"
+fi
+
+helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath false
+
+current_name="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.name || true)"
+current_email="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.email || true)"
+if [[ -z "$current_name" ]]; then
+  sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.name "Computer MCP Agent"
+fi
+if [[ -z "$current_email" ]]; then
+  sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.email "computer-mcp-agent@local.invalid"
+fi
+
+rm -f {upgrade_script} {cli_upload} {daemon_upload} {publisher_upload}
+"#,
+        cfg = shell_escape_single_quotes(&remote_config.display().to_string()),
+        version = shell_escape_single_quotes(version),
+        repo = shell_escape_single_quotes(repo),
+        upgrade_script = SPRITE_UPGRADE_REMOTE_SCRIPT_PATH,
+        cli_upload = SPRITE_REMOTE_UPLOAD_CLI_PATH,
+        daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
+        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH
+    )
+}
+
+fn resolve_publisher_access(
+    config: &Config,
+    publisher_app_id: Option<u64>,
+    publisher_pem: Option<&Path>,
+) -> Result<(u64, PathBuf)> {
+    let app_id = publisher_app_id
+        .or(config.publisher_app_id)
+        .ok_or_else(|| anyhow!("publisher app id is required"))?;
+    let pem_path = publisher_pem
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(&config.publisher_private_key_path));
+    if !pem_path.exists() {
+        bail!(
+            "publisher private key file not found: {}",
+            pem_path.display()
+        );
+    }
+    Ok((app_id, pem_path))
+}
+
+async fn grant_push_access(
+    config: &Config,
+    sprite: &str,
+    org: Option<&str>,
+    repo: &str,
+    publisher_app_id: Option<u64>,
+    publisher_pem: Option<&Path>,
+) -> Result<()> {
+    let (app_id, pem_path) = resolve_publisher_access(config, publisher_app_id, publisher_pem)?;
+    let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
+    let minted =
+        mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id).await?;
+    let grant = PushGrantRecord {
+        repo: repo.to_string(),
+        token: minted.token,
+        expires_at: minted.expires_at,
+    };
+    let raw = serde_json::to_string(&grant).context("failed to serialize push grant")?;
+    let mut grant_file = NamedTempFile::new().context("failed to create grant temp file")?;
+    use std::io::Write as _;
+    grant_file
+        .write_all(raw.as_bytes())
+        .context("failed to write grant temp file")?;
+
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "sudo install -d -m 0750 -o computer-mcp-agent -g computer-mcp {dir} && sudo install -m 0640 -o computer-mcp-agent -g computer-mcp {tmp} {dest} && rm -f {tmp}",
+            dir = PUSH_GRANTS_DIR,
+            tmp = PUSH_GRANT_REMOTE_TMP_PATH,
+            dest = push_grant_path(repo).display()
+        ),
+    ];
+    run_sprite_exec(
+        sprite,
+        org,
+        &exec_args,
+        &[(grant_file.path(), PUSH_GRANT_REMOTE_TMP_PATH)],
+    )?;
+
+    println!("push-grant: active");
+    println!("repo: {repo}");
+    if let Some(expires_at) = grant.expires_at.as_deref() {
+        println!("expires-at: {expires_at}");
+    }
+    Ok(())
+}
+
+fn revoke_push_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!("sudo rm -f {}", push_grant_path(repo).display()),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    println!("push-grant: revoked");
+    println!("repo: {repo}");
+    Ok(())
+}
+
+fn list_push_grants(sprite: &str, org: Option<&str>) -> Result<()> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
+            dir = PUSH_GRANTS_DIR
+        ),
+    ];
+    let raw = run_sprite_exec(sprite, org, &exec_args, &[])?;
+    let mut grants = Vec::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        grants.push(
+            serde_json::from_str::<PushGrantRecord>(line)
+                .context("failed to parse remote push grant")?,
+        );
+    }
+
+    if grants.is_empty() {
+        println!("push-grants: none");
+        return Ok(());
+    }
+
+    for grant in grants {
+        println!("repo: {}", grant.repo);
+        println!(
+            "expires-at: {}",
+            grant.expires_at.unwrap_or_else(|| "unknown".to_string())
+        );
+        println!();
+    }
+    Ok(())
+}
+
 fn sprite_runtime_detected() -> bool {
     Path::new("/.sprite").exists()
 }
 
 fn sprite_services_management_hint(config_path: &Path) -> String {
     format!(
-        "Sprite runtime detected; manage lifecycle from a machine with Sprite CLI access. Prefer `scripts/upgrade-sprite.sh --sprite <sprite> --config {}` for upgrades, or `scripts/sprite-services.sh sync --sprite <sprite> --config {} --force-recreate` for control-plane recovery.",
+        "Sprite runtime detected; manage lifecycle from a machine with Sprite CLI access. Prefer `zodex sprite upgrade --sprite <sprite> --remote-config {}` for upgrades, or `zodex sprite sync --sprite <sprite> --remote-config {} --force-recreate` for control-plane recovery.",
         config_path.display(),
         config_path.display()
     )
@@ -1814,7 +2934,7 @@ fn build_single_sprite_service_status_lines(
     let Some(service) = actual else {
         lines.push("active: missing".to_string());
         lines.push(format!(
-            "hint: register Sprite Services with `scripts/sprite-services.sh sync --sprite {sprite}`"
+            "hint: register Sprite Services with `zodex sprite sync --sprite {sprite}`"
         ));
         return lines;
     };
@@ -1865,14 +2985,14 @@ fn build_single_sprite_service_status_lines(
         ));
         if !matches {
             lines.push(format!(
-                "hint: re-sync with `scripts/sprite-services.sh sync --sprite {sprite}`"
+                "hint: re-sync with `zodex sprite sync --sprite {sprite}`"
             ));
         }
     }
 
     if status != "running" {
         lines.push(format!(
-                    "hint: inspect logs with `{PRIMARY_OPERATOR_BINARY} sprite service-logs --sprite {sprite} --service {service_name}`"
+                    "hint: inspect logs with `{PRIMARY_OPERATOR_BINARY} sprite logs --sprite {sprite} --service {service_name}`"
         ));
     }
 
@@ -2612,14 +3732,15 @@ mod tests {
         build_publisher_status_lines, build_reader_status_lines, build_sprite_api_args,
         build_sprite_services_status_lines, build_status_summary_lines, build_systemctl_args,
         build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
-        credential_url_host, credential_url_protocol, ensure_http_listener_ready_for_start,
-        expected_sprite_service_definitions, generate_self_signed_certificate,
-        git_credential_request_targets_github, parse_git_credential_request, parse_systemctl_show,
-        process_log_path, process_pid_path, read_tail_lines, render_systemd_unit,
-        select_tls_san_ip, service_manager_from_pid1, shell_escape_single_quotes,
-        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
-        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
-        write_if_changed,
+        credential_url_host, credential_url_path, credential_url_protocol,
+        ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
+        generate_self_signed_certificate, git_credential_request_repo,
+        git_credential_request_targets_github, normalize_github_repo, parse_git_credential_request,
+        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
+        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path,
+        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
+        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
     };
     use crate::Cli;
     use clap::CommandFactory;
@@ -3029,9 +4150,11 @@ mod tests {
         assert!(joined.contains("service: computer-mcp-prd"));
         assert!(joined.contains("active: missing"));
         assert!(joined.contains("service: computer-mcpd"));
-        assert!(joined.contains(
-            "hint: register Sprite Services with `scripts/sprite-services.sh sync --sprite computer`"
-        ));
+        assert!(
+            joined.contains(
+                "hint: register Sprite Services with `zodex sprite sync --sprite computer`"
+            )
+        );
     }
 
     #[test]
@@ -3091,12 +4214,9 @@ mod tests {
         assert!(joined.contains("service: computer-mcpd"));
         assert!(joined.contains("active: starting"));
         assert!(joined.contains("definition-match: no"));
-        assert!(
-            joined
-                .contains("hint: re-sync with `scripts/sprite-services.sh sync --sprite computer`")
-        );
+        assert!(joined.contains("hint: re-sync with `zodex sprite sync --sprite computer`"));
         assert!(joined.contains(
-            "hint: inspect logs with `zodex sprite service-logs --sprite computer --service computer-mcpd`"
+            "hint: inspect logs with `zodex sprite logs --sprite computer --service computer-mcpd`"
         ));
     }
 
@@ -3244,5 +4364,23 @@ mod tests {
         assert!(credential_host_is_github("github.com:443"));
         assert!(credential_host_is_github("www.github.com"));
         assert!(!credential_host_is_github("gitlab.com"));
+    }
+
+    #[test]
+    fn github_repo_normalization_handles_git_suffix_and_url_path() {
+        assert_eq!(
+            normalize_github_repo("/amxv/computer-mcp.git"),
+            Some("amxv/computer-mcp".to_string())
+        );
+        assert_eq!(
+            credential_url_path("https://github.com/amxv/computer-mcp.git"),
+            Some("amxv/computer-mcp.git")
+        );
+        assert_eq!(
+            git_credential_request_repo(&parse_git_credential_request(
+                "url=https://github.com/amxv/computer-mcp.git\n\n"
+            )),
+            Some("amxv/computer-mcp".to_string())
+        );
     }
 }

@@ -2,10 +2,6 @@
 
 `zodex` uses two GitHub Apps.
 
-Compatibility note:
-- use `zodex` for operator-facing commands in this document
-- legacy `computer-mcp` and daemon names still work in the current migration release
-
 - a **reader app** for read-only private repo access
 - a **publisher app** for branch push + PR creation
 
@@ -24,7 +20,8 @@ By default the coding daemon runs as `computer-mcp-agent`, with:
 The goal is simple:
 
 - the agent gets read-only GitHub access through the reader app
-- the agent can ask for a PR without ever holding the publisher write credential itself
+- write access stays off by default until the operator grants it for one repo
+- the operator can grant and revoke direct push access with `zodex github ...`
 - plain `git clone https://github.com/<owner>/<repo>.git` works for the agent through a short-lived reader credential helper
 
 For full operator runbooks:
@@ -120,7 +117,36 @@ The installer also ensures the agent can make commits without per-repo setup. By
 
 If you want a different commit identity, override `COMPUTER_MCP_GIT_USER_NAME` and `COMPUTER_MCP_GIT_USER_EMAIL` when running `scripts/install.sh`. Existing custom values are preserved on reinstall unless you explicitly override them.
 
-## How `publish-pr` Works
+## Direct Push Grants
+
+`zodex` keeps read access always-on through the reader app helper and layers temporary repo-scoped write access on top only when the operator requests it.
+
+Grant push access for one Sprite and one repo:
+
+```bash
+zodex github grant-push --sprite computer --repo amxv/computer-mcp
+```
+
+Revoke it when the task is done:
+
+```bash
+zodex github revoke-push --sprite computer --repo amxv/computer-mcp
+```
+
+Inspect active grants:
+
+```bash
+zodex github list-grants --sprite computer
+```
+
+The grant model in this phase uses a locally minted GitHub App installation token:
+
+- write is off by default
+- the token is scoped to one repo
+- the token is stored on the Sprite only while the grant is active
+- clone/fetch for every other repo still goes through the read-only helper path
+
+## Legacy `publish-pr` Path
 
 Run `publish-pr` from inside the repo checkout after the change has already been committed:
 
@@ -138,7 +164,7 @@ Current requirements:
 - the commit you want in the PR must already be on `HEAD`
 - the `--repo` value must match one of the configured `publisher_targets`
 
-`publish-pr` does not expose or print the GitHub installation token.
+`publish-pr` does not expose or print the GitHub installation token. It remains available for PR-only workflows, but the standard operator-facing write path is `zodex github grant-push` plus normal `git push`.
 
 ## What This Does And Does Not Protect
 

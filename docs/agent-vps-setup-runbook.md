@@ -3,7 +3,7 @@
 This runbook is for an agent that is helping a human set up `computer-mcp` on a fresh Linux VPS.
 
 If the target host is Sprites, use [agent-sprites-setup-runbook.md](agent-sprites-setup-runbook.md) instead.
-For routine upgrades on an already-configured Sprite, use [`scripts/upgrade-sprite.sh`](../scripts/upgrade-sprite.sh) from a machine with Sprite CLI access rather than relying on an in-guest `computer-mcp upgrade`.
+For routine upgrades on an already-configured Sprite, use `zodex sprite upgrade --sprite <sprite>` from a machine with Sprite CLI access rather than relying on an in-guest `computer-mcp upgrade`.
 
 Use this document exactly as written. It is optimized for:
 

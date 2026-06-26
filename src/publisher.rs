@@ -78,6 +78,14 @@ struct GithubAppClaims {
 #[derive(Debug, Deserialize)]
 struct InstallationTokenResponse {
     token: String,
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintedInstallationToken {
+    pub token: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -570,13 +578,14 @@ pub async fn mint_reader_installation_token(
     private_key_path: &Path,
     installation_id: u64,
 ) -> Result<String> {
-    mint_installation_token(
+    Ok(mint_installation_token(
         app_id,
         private_key_path,
         installation_id,
         TokenPermissionProfile::Reader,
     )
-    .await
+    .await?
+    .token)
 }
 
 pub async fn mint_publisher_installation_token(
@@ -584,6 +593,21 @@ pub async fn mint_publisher_installation_token(
     private_key_path: &Path,
     installation_id: u64,
 ) -> Result<String> {
+    Ok(mint_installation_token(
+        app_id,
+        private_key_path,
+        installation_id,
+        TokenPermissionProfile::Publisher,
+    )
+    .await?
+    .token)
+}
+
+pub async fn mint_publisher_installation_token_with_metadata(
+    app_id: u64,
+    private_key_path: &Path,
+    installation_id: u64,
+) -> Result<MintedInstallationToken> {
     mint_installation_token(
         app_id,
         private_key_path,
@@ -604,7 +628,7 @@ async fn mint_installation_token(
     private_key_path: &Path,
     installation_id: u64,
     permissions: TokenPermissionProfile,
-) -> Result<String> {
+) -> Result<MintedInstallationToken> {
     let key_pem = fs::read(private_key_path)
         .with_context(|| format!("failed to read {}", private_key_path.display()))?;
     let encoding_key = EncodingKey::from_rsa_pem(&key_pem).with_context(|| {
@@ -650,7 +674,61 @@ async fn mint_installation_token(
         .json()
         .await
         .context("failed to decode GitHub installation token response")?;
-    Ok(payload.token)
+    Ok(MintedInstallationToken {
+        token: payload.token,
+        expires_at: payload.expires_at,
+    })
+}
+
+pub async fn resolve_repo_installation_id(
+    app_id: u64,
+    private_key_path: &Path,
+    repo: &str,
+) -> Result<u64> {
+    #[derive(Debug, Deserialize)]
+    struct RepoInstallationResponse {
+        id: u64,
+    }
+
+    let key_pem = fs::read(private_key_path)
+        .with_context(|| format!("failed to read {}", private_key_path.display()))?;
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&key_pem).context("failed to parse publisher RSA private key")?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs();
+    let claims = GithubAppClaims {
+        iat: now.saturating_sub(60),
+        exp: now + 540,
+        iss: app_id.to_string(),
+    };
+    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .context("failed to encode GitHub App JWT")?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{GITHUB_API_BASE}/repos/{repo}/installation"))
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(AUTHORIZATION, format!("Bearer {jwt}"))
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .send()
+        .await
+        .context("failed to resolve GitHub App installation for repo")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub repo installation lookup failed ({status}): {body}");
+    }
+
+    let payload: RepoInstallationResponse = response
+        .json()
+        .await
+        .context("failed to decode GitHub repo installation response")?;
+    Ok(payload.id)
 }
 
 impl TokenPermissionProfile {

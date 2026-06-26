@@ -28,7 +28,7 @@ fn sprite_scripts_have_valid_bash_syntax() {
 }
 
 #[test]
-fn sprite_docs_and_scripts_include_upgrade_and_recovery_flow() {
+fn sprite_docs_prefer_zodex_control_plane_commands() {
     let upgrade_script =
         std::fs::read_to_string(script_path("upgrade-sprite.sh")).expect("read upgrade script");
     let setup_script =
@@ -59,7 +59,14 @@ fn sprite_docs_and_scripts_include_upgrade_and_recovery_flow() {
             .contains("verifying publisher socket permissions after Sprite service handoff")
     );
     assert!(service_script.contains("--force-recreate"));
-    assert!(runbook.contains("scripts/upgrade-sprite.sh"));
-    assert!(runbook.contains("Routine Upgrades"));
-    assert!(deployment_notes.contains("scripts/upgrade-sprite.sh"));
+    assert!(runbook.contains("zodex sprite setup"));
+    assert!(runbook.contains("zodex sprite upgrade"));
+    assert!(runbook.contains("zodex sprite sync"));
+    assert!(runbook.contains("zodex github grant-push"));
+    assert!(
+        runbook.contains("uploads the local `zodex`, `zodexd`, and `computer-mcp-prd` binaries")
+    );
+    assert!(deployment_notes.contains("zodex sprite upgrade"));
+    assert!(deployment_notes.contains("zodex sprite sync"));
+    assert!(deployment_notes.contains("run the remote Rust install path"));
 }

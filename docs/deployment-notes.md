@@ -56,9 +56,10 @@ On container-style hosts:
 On Sprite-like hosts:
 - keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user
 - keep the publisher daemon on `computer-mcp-publisher`
-- prefer [`scripts/upgrade-sprite.sh`](../scripts/upgrade-sprite.sh) as the normal operator upgrade path
-- register Sprite Services with [`scripts/sprite-services.sh`](../scripts/sprite-services.sh) instead of relying on detached process mode
-- if Sprite Services drift into stale "running" state, use `scripts/sprite-services.sh sync --force-recreate --sprite <sprite> [--org <org>]` from the control-plane side
+- prefer `zodex sprite upgrade` as the normal operator upgrade path
+- `zodex sprite setup` and `zodex sprite upgrade` upload the local `zodex` runtime binaries and run the remote Rust install path instead of relying on the legacy shell installer
+- register Sprite Services with `zodex sprite sync` instead of relying on detached process mode
+- if Sprite Services drift into stale "running" state, use `zodex sprite sync --force-recreate --sprite <sprite> [--org <org>]` from the control-plane side
 - treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
 - `computer-mcp upgrade` and `computer-mcp restart` in guest only cover already-healthy Sprite-managed processes; they are not the primary control-plane upgrade interface
 

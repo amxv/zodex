@@ -61,14 +61,12 @@ Do not ask the human for installation IDs manually. Derive them.
 
 ## Fast Path (Recommended)
 
-Use the repo script:
-
-[`scripts/setup-sprite.sh`](../scripts/setup-sprite.sh)
+Use the Rust operator CLI directly:
 
 Example:
 
 ```bash
-scripts/setup-sprite.sh \
+zodex sprite setup \
   --sprite computer \
   --repo amxv/computer-mcp \
   --reader-app-id <reader-app-id> \
@@ -85,35 +83,34 @@ If the Sprite is in a non-default org, add:
 --org <org-name>
 ```
 
-What the script does:
+What `zodex sprite setup` does:
 
 1. derives reader and publisher installation IDs from app ID + PEM + repo
-2. validates both apps with `scripts/mint-gh-app-installation-token.sh`
-3. installs latest `computer-mcp` in the Sprite
-4. installs key files at default paths
-5. writes a managed GitHub app config block
-6. enforces Sprite-safe ports (`8443` TLS + `8080` HTTP)
-7. enforces agent workspace defaults (`agent_home = "/home/computer-mcp-agent"`, `default_workdir = "/workspace"`)
-8. stops any detached process-mode daemons left from older installs
-9. creates or updates Sprite Services for `computer-mcp-prd` and `computer-mcpd`
-10. verifies Service inventory, Service logs, and public Sprite health
-11. verifies the agent can commit with the default Git identity
-12. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
-13. prints MCP URL hint based on Sprite URL host
+2. validates both apps from the local Rust CLI path
+3. uploads the local `zodex`, `zodexd`, and `computer-mcp-prd` binaries to the Sprite
+4. runs the remote Rust install path to create users, directories, and config state
+5. installs key files at default paths
+6. writes a managed GitHub app config block
+7. enforces Sprite-safe ports (`8443` TLS + `8080` HTTP)
+8. configures the agent Git identity and reader credential helper
+9. stops any detached process-mode daemons left from older installs
+10. creates or updates Sprite Services for `computer-mcp-prd` and `computer-mcpd`
+11. verifies Service inventory, Service logs, and public Sprite health
+12. verifies the agent can commit with the default Git identity
+13. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
+14. prints MCP URL hint based on Sprite URL host
 
 ## Routine Upgrades
 
-For an already-configured Sprite, prefer the control-plane upgrade helper:
-
-[`scripts/upgrade-sprite.sh`](../scripts/upgrade-sprite.sh)
+For an already-configured Sprite, prefer the Rust control-plane upgrade flow:
 
 Example:
 
 ```bash
-scripts/upgrade-sprite.sh --sprite computer --org amxv
+zodex sprite upgrade --sprite computer --org amxv
 ```
 
-That command installs the requested build inside the Sprite, force-recreates the Sprite Services from the control plane, verifies local health, verifies the agent can still commit, verifies reader-backed GitHub HTTPS access, verifies publisher socket permissions, and confirms the agent still cannot read the publisher PEM.
+That command uploads the current local operator/runtime binaries, installs them inside the Sprite through the remote Rust CLI, force-recreates the Sprite Services from the control plane, verifies local health, verifies the agent can still commit, verifies reader-backed GitHub HTTPS access, verifies publisher socket permissions, and confirms the agent still cannot read the publisher PEM.
 
 ## Manual Path (If You Need It)
 
@@ -136,12 +133,12 @@ If you cannot use the script, follow the same sequence manually:
 6. Stop any old detached daemons:
    - `sprite exec -s <sprite> -- sudo computer-mcp stop || true`
 7. Register Sprite Services:
-   - `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>]`
-   - if Sprite reports stale running state, use `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>] --force-recreate`
+   - `zodex sprite sync --sprite <sprite> [--org <org-name>]`
+   - if Sprite reports stale running state, use `zodex sprite sync --sprite <sprite> [--org <org-name>] --force-recreate`
 8. Verify:
-   - `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
-   - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 20`
-   - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 20`
+   - `zodex sprite status --sprite <sprite> [--org <org-name>]`
+   - `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 20`
+   - `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 20`
    - `curl -fsS https://<sprite-host>/health`
    - `sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc 'cd /workspace && touch .ok && rm -f .ok'`
    - `sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git -C /workspace ls-remote https://github.com/<owner>/<private-repo>.git HEAD`
@@ -152,20 +149,20 @@ For Sprite deployments, the authoritative runtime view is the Sprite Services AP
 
 Useful commands:
 
-- `scripts/upgrade-sprite.sh --sprite <sprite> [--org <org-name>] [--version <tag|latest>]`
-- `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
-- `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>] --force-recreate`
-- `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
-- `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
-- `computer-mcp sprite services-status --sprite <sprite> [--org <org-name>]`
-- `computer-mcp sprite service-logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
-- inside the Sprite guest, `sudo computer-mcp restart` and `sudo computer-mcp upgrade --version <tag>` only manage already-healthy Sprite Service processes; for routine operator upgrades, prefer `scripts/upgrade-sprite.sh`
+- `zodex sprite setup --sprite <sprite> --repo <owner/repo> ...`
+- `zodex sprite upgrade --sprite <sprite> [--org <org-name>] [--version <tag|latest>]`
+- `zodex sprite status --sprite <sprite> [--org <org-name>]`
+- `zodex sprite sync --sprite <sprite> [--org <org-name>] --force-recreate`
+- `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
+- `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
+- `zodex github grant-push --sprite <sprite> --repo <owner/repo>`
+- `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 
-If `scripts/sprite-services.sh status` shows a service as running but guest-side `ps` or `/health` disagrees, prefer `--force-recreate` from a machine with Sprite CLI access. That clears stale control-plane state without widening agent-user access or exposing the publisher key.
+If `zodex sprite status` shows a service as running but guest-side `ps` or `/health` disagrees, prefer `zodex sprite sync --force-recreate` from a machine with Sprite CLI access. That clears stale control-plane state without widening agent-user access or exposing the publisher key.
 
 ## Verification Checklist
 
-- `scripts/sprite-services.sh status` shows both:
+- `zodex sprite status` shows both:
   - `computer-mcp-prd`
   - `computer-mcpd`
 - `computer-mcpd` depends on `computer-mcp-prd`
