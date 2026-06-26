@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::protocol::{
     ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
 };
-use crate::service::{ComputerService, ServiceRequest};
+use crate::service::{ServiceRequest, ZodexService};
 use crate::session::SessionOrigin;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -20,22 +20,22 @@ struct ErrorOutput {
     error: String,
 }
 
-pub fn build_http_api_router(config: Arc<Config>, computer_service: ComputerService) -> Router {
+pub fn build_http_api_router(config: Arc<Config>, zodex_service: ZodexService) -> Router {
     Router::new()
         .route("/v1/exec-command", post(exec_command))
         .route("/v1/write-stdin", post(write_stdin))
         .route("/v1/apply-patch", post(apply_patch))
-        .with_state(computer_service)
+        .with_state(zodex_service)
         .layer(middleware::from_fn_with_state(config, bearer_auth))
 }
 
 async fn exec_command(
-    State(computer_service): State<ComputerService>,
+    State(zodex_service): State<ZodexService>,
     headers: HeaderMap,
     Json(input): Json<ExecCommandInput>,
 ) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
     let caller_label = caller_label_from_headers(&headers);
-    computer_service
+    zodex_service
         .execute(ServiceRequest::ExecCommand {
             input,
             origin: SessionOrigin::http(caller_label),
@@ -47,10 +47,10 @@ async fn exec_command(
 }
 
 async fn write_stdin(
-    State(computer_service): State<ComputerService>,
+    State(zodex_service): State<ZodexService>,
     Json(input): Json<WriteStdinInput>,
 ) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
-    computer_service
+    zodex_service
         .execute(ServiceRequest::WriteStdin { input })
         .await
         .and_then(|response| response.into_tool_output())
@@ -59,10 +59,10 @@ async fn write_stdin(
 }
 
 async fn apply_patch(
-    State(computer_service): State<ComputerService>,
+    State(zodex_service): State<ZodexService>,
     Json(input): Json<ApplyPatchInput>,
 ) -> Result<Json<ApplyPatchOutput>, (StatusCode, Json<ErrorOutput>)> {
-    computer_service
+    zodex_service
         .execute(ServiceRequest::ApplyPatch { input })
         .await
         .and_then(|response| response.into_apply_patch_output())
@@ -128,11 +128,11 @@ mod tests {
 
     use crate::config::Config;
     use crate::protocol::{CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput};
-    use crate::service::ComputerService;
+    use crate::service::ZodexService;
 
     use super::{ApplyPatchOutput, bearer_token, build_http_api_router};
 
-    const TEST_API_KEY: &str = "phase3-test-key";
+    const TEST_API_KEY: &str = "http-test-key";
 
     fn test_config() -> Arc<Config> {
         Arc::new(Config {
@@ -141,7 +141,7 @@ mod tests {
         })
     }
 
-    fn test_router_with_service(service: ComputerService) -> Router {
+    fn test_router_with_service(service: ZodexService) -> Router {
         build_http_api_router(test_config(), service)
     }
 
@@ -200,7 +200,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unauthorized_v1_request() {
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let app = test_router_with_service(ZodexService::new(test_config()));
 
         let response = post_json(
             &app,
@@ -218,14 +218,14 @@ mod tests {
 
     #[tokio::test]
     async fn publish_pr_route_is_not_exposed_on_http_api() {
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
 
         let response = post_json(
             &app,
             "/v1/publish-pr",
             json!({
-                "repo": "amxv/computer-mcp",
+                "repo": "amxv/zodex",
                 "title": "should-not-exist",
                 "body": "nope",
             }),
@@ -238,14 +238,14 @@ mod tests {
 
     #[tokio::test]
     async fn exec_command_http_reports_exited_and_running_states() {
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
 
         let exited = post_json(
             &app,
             "/v1/exec-command",
             json!({
-                "cmd": "echo phase3-exit",
+                "cmd": "echo http-exit",
                 "yield_time_ms": 2_000
             }),
             Some(&auth),
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(exited.status(), StatusCode::OK);
         let exited_output: ToolOutput = response_json(exited).await;
         assert_eq!(exited_output.status, CommandStatus::Exited);
-        assert!(exited_output.output.contains("phase3-exit"));
+        assert!(exited_output.output.contains("http-exit"));
         assert!(exited_output.session_handle.is_none());
 
         let running = post_json(
@@ -290,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_stdin_http_continues_real_session() {
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
 
         let started = post_json(
@@ -315,7 +315,7 @@ mod tests {
             "/v1/write-stdin",
             json!({
                 "session_handle": session_handle,
-                "chars": "echo phase3-write\n",
+                "chars": "echo http-write\n",
                 "yield_time_ms": 500,
                 "kill_process": false
             }),
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(echoed.status(), StatusCode::OK);
         let echoed_output: ToolOutput = response_json(echoed).await;
         assert_eq!(echoed_output.status, CommandStatus::Running);
-        assert!(echoed_output.output.contains("phase3-write"));
+        assert!(echoed_output.output.contains("http-write"));
 
         let done = post_json(
             &app,
@@ -347,11 +347,11 @@ mod tests {
 
     #[tokio::test]
     async fn apply_patch_http_preserves_relative_path_semantics() {
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
         let dir = tempdir().expect("tempdir");
         let patch =
-            "*** Begin Patch\n*** Add File: nested/phase3.txt\n+hello-http\n*** End Patch\n";
+            "*** Begin Patch\n*** Add File: nested/http-test.txt\n+hello-http\n*** End Patch\n";
 
         let response = post_json(
             &app,
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body: ApplyPatchOutput = response_json(response).await;
 
-        let expected = dir.path().join("nested/phase3.txt");
+        let expected = dir.path().join("nested/http-test.txt");
         assert!(
             body.output
                 .contains("Success. Updated the following files:")
@@ -380,11 +380,11 @@ mod tests {
 
     #[tokio::test]
     async fn exec_command_http_parity_with_service() {
-        let direct = ComputerService::new(test_config());
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let direct = ZodexService::new(test_config());
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
         let input = ExecCommandInput {
-            cmd: "printf 'phase3-parity-exec\\n'".to_string(),
+            cmd: "printf 'http-parity-exec\\n'".to_string(),
             yield_time_ms: Some(2_000),
             workdir: None,
             timeout_ms: None,
@@ -410,14 +410,14 @@ mod tests {
             http_output.termination_reason,
             direct_output.termination_reason
         );
-        assert!(http_output.output.contains("phase3-parity-exec"));
-        assert!(direct_output.output.contains("phase3-parity-exec"));
+        assert!(http_output.output.contains("http-parity-exec"));
+        assert!(direct_output.output.contains("http-parity-exec"));
     }
 
     #[tokio::test]
     async fn write_stdin_http_parity_with_service() {
-        let direct = ComputerService::new(test_config());
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let direct = ZodexService::new(test_config());
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
         let shell = ExecCommandInput {
             cmd: "bash --noprofile --norc".to_string(),
@@ -450,7 +450,7 @@ mod tests {
         let direct_write = direct
             .write_stdin(WriteStdinInput {
                 session_handle: direct_handle.clone(),
-                chars: Some("echo phase3-parity-write\n".to_string()),
+                chars: Some("echo http-parity-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
             })
@@ -461,7 +461,7 @@ mod tests {
             "/v1/write-stdin",
             json!({
                 "session_handle": http_handle.clone(),
-                "chars": "echo phase3-parity-write\n",
+                "chars": "echo http-parity-write\n",
                 "yield_time_ms": 500,
                 "kill_process": false
             }),
@@ -476,8 +476,8 @@ mod tests {
             http_write_output.termination_reason,
             direct_write.termination_reason
         );
-        assert!(http_write_output.output.contains("phase3-parity-write"));
-        assert!(direct_write.output.contains("phase3-parity-write"));
+        assert!(http_write_output.output.contains("http-parity-write"));
+        assert!(direct_write.output.contains("http-parity-write"));
 
         let _ = direct
             .write_stdin(WriteStdinInput {
@@ -505,13 +505,12 @@ mod tests {
 
     #[tokio::test]
     async fn apply_patch_http_parity_with_service() {
-        let direct = ComputerService::new(test_config());
-        let app = test_router_with_service(ComputerService::new(test_config()));
+        let direct = ZodexService::new(test_config());
+        let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
         let direct_dir = tempdir().expect("direct tempdir");
         let http_dir = tempdir().expect("http tempdir");
-        let patch =
-            "*** Begin Patch\n*** Add File: parity-http.txt\n+phase3-patch\n*** End Patch\n";
+        let patch = "*** Begin Patch\n*** Add File: parity-http.txt\n+http-patch\n*** End Patch\n";
 
         let direct_output = direct
             .apply_patch(crate::protocol::ApplyPatchInput {
@@ -541,11 +540,11 @@ mod tests {
         assert_eq!(
             fs::read_to_string(direct_dir.path().join("parity-http.txt"))
                 .expect("read direct file"),
-            "phase3-patch\n"
+            "http-patch\n"
         );
         assert_eq!(
             fs::read_to_string(http_dir.path().join("parity-http.txt")).expect("read http file"),
-            "phase3-patch\n"
+            "http-patch\n"
         );
     }
 }

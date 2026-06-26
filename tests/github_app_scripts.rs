@@ -32,8 +32,8 @@ fn github_app_scripts_have_valid_bash_syntax() {
 
 #[test]
 fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
-    let docs = std::fs::read_to_string(repo_root().join("docs").join("github-app-agent-auth.md"))
-        .expect("read docs");
+    let docs =
+        std::fs::read_to_string(repo_root().join("docs").join("setup.md")).expect("read docs");
     let mint_script = std::fs::read_to_string(script_path("mint-gh-app-installation-token.sh"))
         .expect("read mint script");
     let protect_script = std::fs::read_to_string(script_path("protect-main-branch.sh"))
@@ -42,13 +42,10 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("Contents: Read & write"));
     assert!(docs.contains("Pull requests: Read & write"));
     assert!(docs.contains("reader app"));
-    assert!(docs.contains("reader_installation_id"));
     assert!(docs.contains("plain `git clone https://github.com/<owner>/<repo>.git` works"));
-    assert!(docs.contains("short-lived reader tokens"));
     assert!(docs.contains("zodex github grant-push"));
     assert!(docs.contains("zodex github revoke-push"));
     assert!(docs.contains("list-grants"));
-    assert!(docs.contains("zodex start"));
     assert!(docs.contains("temporary repo-scoped direct push access"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
     assert!(

@@ -26,21 +26,21 @@ use tracing::info;
 use crate::config::Config;
 use crate::http_api;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
-use crate::service::{ComputerService, ServiceRequest};
+use crate::service::{ServiceRequest, ZodexService};
 use crate::session::SessionOrigin;
 
-type McpHttpService = StreamableHttpService<ComputerMcpService, LocalSessionManager>;
+type McpHttpService = StreamableHttpService<ZodexMcpService, LocalSessionManager>;
 
 #[derive(Clone)]
-struct ComputerMcpService {
-    computer_service: ComputerService,
+struct ZodexMcpService {
+    zodex_service: ZodexService,
     tool_router: ToolRouter<Self>,
 }
 
-impl ComputerMcpService {
-    fn new(computer_service: ComputerService) -> Self {
+impl ZodexMcpService {
+    fn new(zodex_service: ZodexService) -> Self {
         Self {
-            computer_service,
+            zodex_service,
             tool_router: Self::tool_router(),
         }
     }
@@ -49,7 +49,7 @@ impl ComputerMcpService {
         &self,
         request: ServiceRequest,
     ) -> Result<McpJson<ToolOutput>, String> {
-        self.computer_service
+        self.zodex_service
             .execute(request)
             .await
             .and_then(|response| response.into_tool_output())
@@ -58,7 +58,7 @@ impl ComputerMcpService {
     }
 
     async fn execute_apply_patch(&self, input: ApplyPatchInput) -> Result<String, String> {
-        self.computer_service
+        self.zodex_service
             .execute(ServiceRequest::ApplyPatch { input })
             .await
             .and_then(|response| response.into_apply_patch_output())
@@ -68,7 +68,7 @@ impl ComputerMcpService {
 }
 
 #[tool_router]
-impl ComputerMcpService {
+impl ZodexMcpService {
     #[tool(
         name = "exec_command",
         description = "Run a shell command",
@@ -124,20 +124,19 @@ impl ComputerMcpService {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for ComputerMcpService {
+impl ServerHandler for ZodexMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "zodex remote execution tools with stable computer-mcp compatibility",
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("zodex remote execution tools")
     }
 }
 
 fn build_mcp_service(
-    service: ComputerService,
+    service: ZodexService,
     cancellation_token: CancellationToken,
 ) -> McpHttpService {
     StreamableHttpService::new(
-        move || Ok(ComputerMcpService::new(service.clone())),
+        move || Ok(ZodexMcpService::new(service.clone())),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {
             cancellation_token,
@@ -149,7 +148,7 @@ fn build_mcp_service(
 fn build_app(
     config: Arc<Config>,
     mcp_service: McpHttpService,
-    computer_service: ComputerService,
+    zodex_service: ZodexService,
 ) -> Router {
     let mcp_auth_config = config.clone();
     let http_auth_config = config;
@@ -176,7 +175,7 @@ fn build_app(
             mcp_auth_config,
             query_key_auth,
         ));
-    let http_api_router = http_api::build_http_api_router(http_auth_config, computer_service);
+    let http_api_router = http_api::build_http_api_router(http_auth_config, zodex_service);
 
     Router::new()
         .route("/health", get(health))
@@ -220,11 +219,11 @@ pub async fn run_server(config: Config) -> Result<()> {
         .transpose()?;
 
     let config = Arc::new(config);
-    let computer_service = ComputerService::new(config.clone());
+    let zodex_service = ZodexService::new(config.clone());
 
     let cancellation = CancellationToken::new();
-    let mcp_service = build_mcp_service(computer_service.clone(), cancellation.child_token());
-    let app = build_app(config, mcp_service, computer_service);
+    let mcp_service = build_mcp_service(zodex_service.clone(), cancellation.child_token());
+    let app = build_app(config, mcp_service, zodex_service);
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -314,13 +313,13 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerMcpService, key_from_query, rewrite_mcp_transport_root_uri};
+    use super::{ZodexMcpService, key_from_query, rewrite_mcp_transport_root_uri};
     use crate::config::Config;
     use crate::protocol::{
         ApplyPatchInput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
         WriteStdinInput,
     };
-    use crate::service::ComputerService;
+    use crate::service::ZodexService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, Uri};
     use rmcp::ServerHandler;
@@ -337,10 +336,7 @@ mod tests {
         Arc::new(Config::default())
     }
 
-    async fn wait_for_service_exit(
-        service: &ComputerService,
-        mut output: ToolOutput,
-    ) -> ToolOutput {
+    async fn wait_for_service_exit(service: &ZodexService, mut output: ToolOutput) -> ToolOutput {
         for _ in 0..10 {
             if output.status == CommandStatus::Exited {
                 return output;
@@ -362,7 +358,7 @@ mod tests {
         panic!("service output did not reach exited state in time");
     }
 
-    async fn wait_for_mcp_exit(mcp: &ComputerMcpService, mut output: ToolOutput) -> ToolOutput {
+    async fn wait_for_mcp_exit(mcp: &ZodexMcpService, mut output: ToolOutput) -> ToolOutput {
         for _ in 0..10 {
             if output.status == CommandStatus::Exited {
                 return output;
@@ -387,7 +383,7 @@ mod tests {
 
     #[test]
     fn registers_apply_patch_tool() {
-        let service = ComputerMcpService::new(ComputerService::new(test_config()));
+        let service = ZodexMcpService::new(ZodexService::new(test_config()));
         let names: Vec<String> = service
             .tool_router
             .list_all()
@@ -409,26 +405,18 @@ mod tests {
     }
 
     #[test]
-    fn server_info_mentions_zodex_compatibility_layer() {
-        let service = ComputerMcpService::new(ComputerService::new(test_config()));
+    fn server_info_mentions_zodex_remote_execution_tools() {
+        let service = ZodexMcpService::new(ZodexService::new(test_config()));
         let info = service.get_info();
-        assert!(
-            info.instructions
-                .as_deref()
-                .unwrap_or_default()
-                .contains("zodex remote execution tools")
-        );
-        assert!(
-            info.instructions
-                .as_deref()
-                .unwrap_or_default()
-                .contains("computer-mcp compatibility")
+        assert_eq!(
+            info.instructions.as_deref().unwrap_or_default(),
+            "zodex remote execution tools"
         );
     }
 
     #[test]
     fn tools_have_expected_annotations() {
-        let service = ComputerMcpService::new(ComputerService::new(test_config()));
+        let service = ZodexMcpService::new(ZodexService::new(test_config()));
 
         let by_name = |name: &str| {
             service
@@ -459,10 +447,10 @@ mod tests {
     #[tokio::test]
     async fn exec_command_mcp_parity_with_service() {
         let config = test_config();
-        let direct = ComputerService::new(config.clone());
-        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct = ZodexService::new(config.clone());
+        let mcp = ZodexMcpService::new(ZodexService::new(config));
         let input = ExecCommandInput {
-            cmd: "printf 'phase2-exec\\n'".to_string(),
+            cmd: "printf 'mcp-exec\\n'".to_string(),
             yield_time_ms: Some(2_000),
             workdir: None,
             timeout_ms: None,
@@ -491,15 +479,15 @@ mod tests {
             mcp_output.termination_reason,
             direct_output.termination_reason
         );
-        assert!(mcp_output.output.contains("phase2-exec"));
-        assert!(direct_output.output.contains("phase2-exec"));
+        assert!(mcp_output.output.contains("mcp-exec"));
+        assert!(direct_output.output.contains("mcp-exec"));
     }
 
     #[tokio::test]
     async fn write_stdin_mcp_parity_with_service() {
         let config = test_config();
-        let direct = ComputerService::new(config.clone());
-        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct = ZodexService::new(config.clone());
+        let mcp = ZodexMcpService::new(ZodexService::new(config));
         let shell_input = ExecCommandInput {
             cmd: "bash --noprofile --norc".to_string(),
             yield_time_ms: Some(50),
@@ -527,7 +515,7 @@ mod tests {
         let direct_write = direct
             .write_stdin(WriteStdinInput {
                 session_handle: direct_session_handle.clone(),
-                chars: Some("echo phase2-write\n".to_string()),
+                chars: Some("echo mcp-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
             })
@@ -536,7 +524,7 @@ mod tests {
         let mcp_write = mcp
             .write_stdin(Parameters(WriteStdinInput {
                 session_handle: mcp_session_handle.clone(),
-                chars: Some("echo phase2-write\n".to_string()),
+                chars: Some("echo mcp-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
             }))
@@ -550,8 +538,8 @@ mod tests {
             direct_write.termination_reason
         );
         assert_eq!(mcp_write.status, CommandStatus::Running);
-        assert!(mcp_write.output.contains("phase2-write"));
-        assert!(direct_write.output.contains("phase2-write"));
+        assert!(mcp_write.output.contains("mcp-write"));
+        assert!(direct_write.output.contains("mcp-write"));
 
         let _ = direct
             .write_stdin(WriteStdinInput {
@@ -576,8 +564,8 @@ mod tests {
     #[tokio::test]
     async fn kill_process_mcp_parity_with_service() {
         let config = test_config();
-        let direct = ComputerService::new(config.clone());
-        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct = ZodexService::new(config.clone());
+        let mcp = ZodexMcpService::new(ZodexService::new(config));
         let input = ExecCommandInput {
             cmd: "sleep 30".to_string(),
             yield_time_ms: Some(50),
@@ -637,8 +625,8 @@ mod tests {
             max_exec_timeout_ms: 1_000,
             ..Config::default()
         });
-        let direct = ComputerService::new(config.clone());
-        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct = ZodexService::new(config.clone());
+        let mcp = ZodexMcpService::new(ZodexService::new(config));
         let dir = tempdir().expect("tempdir");
 
         let direct_cwd = direct
@@ -717,11 +705,11 @@ mod tests {
     #[tokio::test]
     async fn apply_patch_mcp_parity_with_service() {
         let config = test_config();
-        let direct = ComputerService::new(config.clone());
-        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct = ZodexService::new(config.clone());
+        let mcp = ZodexMcpService::new(ZodexService::new(config));
         let direct_dir = tempdir().expect("direct tempdir");
         let mcp_dir = tempdir().expect("mcp tempdir");
-        let patch = "*** Begin Patch\n*** Add File: parity.txt\n+phase2-patch\n*** End Patch\n";
+        let patch = "*** Begin Patch\n*** Add File: parity.txt\n+mcp-patch\n*** End Patch\n";
 
         let direct_output = direct
             .apply_patch(ApplyPatchInput {
@@ -741,11 +729,11 @@ mod tests {
         assert!(mcp_output.contains("Success. Updated the following files:"));
         assert_eq!(
             fs::read_to_string(direct_dir.path().join("parity.txt")).expect("read direct patch"),
-            "phase2-patch\n"
+            "mcp-patch\n"
         );
         assert_eq!(
             fs::read_to_string(mcp_dir.path().join("parity.txt")).expect("read mcp patch"),
-            "phase2-patch\n"
+            "mcp-patch\n"
         );
     }
 
@@ -787,7 +775,7 @@ mod tests {
     #[tokio::test]
     async fn health_route_stays_public_and_stable() {
         let config = test_config();
-        let service = ComputerService::new(config.clone());
+        let service = ZodexService::new(config.clone());
         let app = super::build_app(
             config,
             super::build_mcp_service(service.clone(), CancellationToken::new()),
@@ -817,7 +805,7 @@ mod tests {
     async fn mcp_routes_accept_both_with_and_without_trailing_slash() {
         let config = test_config();
         let api_key = config.api_key.clone();
-        let service = ComputerService::new(config.clone());
+        let service = ZodexService::new(config.clone());
         let app = super::build_app(
             config,
             super::build_mcp_service(service.clone(), CancellationToken::new()),

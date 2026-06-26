@@ -5,19 +5,19 @@ use std::time::Duration;
 use axum::serve;
 use axum_server::Handle;
 use axum_server::tls_rustls::RustlsConfig;
-use computer_mcp::config::Config;
-use computer_mcp::http_api::build_http_api_router;
-use computer_mcp::protocol::{
-    ApplyPatchOutput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
-    WriteStdinInput,
-};
-use computer_mcp::service::ComputerService;
 use rcgen::generate_simple_self_signed;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use zodex::config::Config;
+use zodex::http_api::build_http_api_router;
+use zodex::protocol::{
+    ApplyPatchOutput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
+    WriteStdinInput,
+};
+use zodex::service::ZodexService;
 
 fn test_config(api_key: &str) -> Arc<Config> {
     Arc::new(Config {
@@ -40,9 +40,9 @@ fn assert_running_session_shape(output: &ToolOutput) {
 }
 
 async fn start_http_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
-    computer_mcp::install_rustls_crypto_provider();
+    zodex::install_rustls_crypto_provider();
 
-    let app = build_http_api_router(config.clone(), ComputerService::new(config));
+    let app = build_http_api_router(config.clone(), ZodexService::new(config));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind listener");
@@ -61,9 +61,9 @@ async fn start_http_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>
 }
 
 async fn start_https_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
-    computer_mcp::install_rustls_crypto_provider();
+    zodex::install_rustls_crypto_provider();
 
-    let app = build_http_api_router(config.clone(), ComputerService::new(config));
+    let app = build_http_api_router(config.clone(), ZodexService::new(config));
     let cert = generate_simple_self_signed(vec!["127.0.0.1".to_string()])
         .expect("self-signed cert should generate");
     let rustls = RustlsConfig::from_pem(
@@ -96,23 +96,23 @@ async fn start_https_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()
     (addr, shutdown_tx, server)
 }
 
-async fn run_computer_cli_json<T: DeserializeOwned>(args: Vec<String>) -> T {
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_computer"))
+async fn run_zodex_client_json<T: DeserializeOwned>(args: Vec<String>) -> T {
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_zodex-client"))
         .args(&args)
         .output()
         .await
-        .expect("computer CLI should execute");
+        .expect("zodex-client should execute");
 
     assert!(
         output.status.success(),
-        "computer CLI failed\nargs: {:?}\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        "zodex-client failed\nargs: {:?}\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
         args,
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
 
-    serde_json::from_slice(&output.stdout).expect("computer CLI stdout should be valid json")
+    serde_json::from_slice(&output.stdout).expect("zodex-client stdout should be valid json")
 }
 
 async fn post_http_json<T: DeserializeOwned>(
@@ -148,19 +148,19 @@ async fn stop_http_api(shutdown_tx: oneshot::Sender<()>, server: JoinHandle<()>)
 }
 
 #[tokio::test]
-async fn phase6_exec_command_cli_handles_self_signed_https_daemon() {
-    let api_key = "phase6-https-key";
+async fn exec_command_cli_handles_self_signed_https_daemon() {
+    let api_key = "https-cli-key";
     let config = test_config(api_key);
     let (addr, shutdown_tx, server) = start_https_api(config).await;
     let base_url = format!("https://{addr}");
 
-    let cli_output: ToolOutput = run_computer_cli_json(vec![
+    let cli_output: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url,
         "--key".to_string(),
         api_key.to_string(),
         "exec-command".to_string(),
-        "printf 'phase6-https\\n'".to_string(),
+        "printf 'https-cli\\n'".to_string(),
         "--yield-time-ms".to_string(),
         "2000".to_string(),
     ])
@@ -168,19 +168,19 @@ async fn phase6_exec_command_cli_handles_self_signed_https_daemon() {
 
     assert_eq!(cli_output.status, CommandStatus::Exited);
     assert_eq!(cli_output.exit_code, Some(0));
-    assert!(cli_output.output.contains("phase6-https"));
+    assert!(cli_output.output.contains("https-cli"));
 
     stop_http_api(shutdown_tx, server).await;
 }
 
 #[tokio::test]
-async fn phase6_exec_command_parity_service_http_and_cli() {
-    let api_key = "phase6-exec-key";
+async fn exec_command_parity_service_http_and_cli() {
+    let api_key = "exec-cli-key";
     let config = test_config(api_key);
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
-    let cmd = "printf 'phase6-exec\\n'";
+    let cmd = "printf 'exec-cli\\n'";
 
     let direct_output = direct_service
         .exec_command(ExecCommandInput {
@@ -201,7 +201,7 @@ async fn phase6_exec_command_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let cli_output: ToolOutput = run_computer_cli_json(vec![
+    let cli_output: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -218,22 +218,22 @@ async fn phase6_exec_command_parity_service_http_and_cli() {
     assert_eq!(cli_output.status, direct_output.status);
     assert_eq!(http_output.exit_code, direct_output.exit_code);
     assert_eq!(cli_output.exit_code, direct_output.exit_code);
-    assert!(direct_output.output.contains("phase6-exec"));
-    assert!(http_output.output.contains("phase6-exec"));
-    assert!(cli_output.output.contains("phase6-exec"));
+    assert!(direct_output.output.contains("exec-cli"));
+    assert!(http_output.output.contains("exec-cli"));
+    assert!(cli_output.output.contains("exec-cli"));
 
     stop_http_api(shutdown_tx, server).await;
 }
 
 #[tokio::test]
-async fn phase6_write_stdin_parity_service_http_and_cli() {
-    let api_key = "phase6-write-key";
+async fn write_stdin_parity_service_http_and_cli() {
+    let api_key = "write-cli-key";
     let config = test_config(api_key);
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
     let start_shell = "bash --noprofile --norc";
-    let marker = "phase6-write";
+    let marker = "write-cli";
 
     let direct_started = direct_service
         .exec_command(ExecCommandInput {
@@ -305,7 +305,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
     )
     .await;
 
-    let cli_started: ToolOutput = run_computer_cli_json(vec![
+    let cli_started: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -320,7 +320,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
     .await;
     assert_running_session_shape(&cli_started);
     let cli_handle = cli_started.session_handle.expect("cli session handle");
-    let cli_written: ToolOutput = run_computer_cli_json(vec![
+    let cli_written: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -334,7 +334,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         "500".to_string(),
     ])
     .await;
-    let cli_done: ToolOutput = run_computer_cli_json(vec![
+    let cli_done: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -368,10 +368,10 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
 }
 
 #[tokio::test]
-async fn phase2_kill_process_parity_service_http_and_cli() {
-    let api_key = "phase2-kill-key";
+async fn kill_process_parity_service_http_and_cli() {
+    let api_key = "kill-cli-key";
     let config = test_config(api_key);
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
     let start_cmd = "sleep 30";
@@ -404,7 +404,7 @@ async fn phase2_kill_process_parity_service_http_and_cli() {
     assert_running_session_shape(&http_started);
     let http_handle = http_started.session_handle.expect("http session handle");
 
-    let cli_started: ToolOutput = run_computer_cli_json(vec![
+    let cli_started: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -441,7 +441,7 @@ async fn phase2_kill_process_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let cli_killed: ToolOutput = run_computer_cli_json(vec![
+    let cli_killed: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -472,15 +472,15 @@ async fn phase2_kill_process_parity_service_http_and_cli() {
 }
 
 #[tokio::test]
-async fn phase2_timeout_parity_service_http_and_cli() {
-    let api_key = "phase2-timeout-key";
+async fn timeout_parity_service_http_and_cli() {
+    let api_key = "timeout-cli-key";
     let config = Arc::new(Config {
         api_key: api_key.to_string(),
         default_exec_timeout_ms: 1_000,
         max_exec_timeout_ms: 1_000,
         ..Config::default()
     });
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
 
@@ -504,7 +504,7 @@ async fn phase2_timeout_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let cli_timed_out: ToolOutput = run_computer_cli_json(vec![
+    let cli_timed_out: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -534,14 +534,14 @@ async fn phase2_timeout_parity_service_http_and_cli() {
 }
 
 #[tokio::test]
-async fn phase2_cwd_and_truncation_parity_service_http_and_cli() {
-    let api_key = "phase2-cwd-key";
+async fn cwd_and_truncation_parity_service_http_and_cli() {
+    let api_key = "cwd-cli-key";
     let config = Arc::new(Config {
         api_key: api_key.to_string(),
         max_output_chars: 80,
         ..Config::default()
     });
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
     let workdir = tempdir().expect("workdir tempdir");
@@ -567,7 +567,7 @@ async fn phase2_cwd_and_truncation_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let cli_cwd: ToolOutput = run_computer_cli_json(vec![
+    let cli_cwd: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -611,7 +611,7 @@ async fn phase2_cwd_and_truncation_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let cli_truncated: ToolOutput = run_computer_cli_json(vec![
+    let cli_truncated: ToolOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url,
         "--key".to_string(),
@@ -633,20 +633,21 @@ async fn phase2_cwd_and_truncation_parity_service_http_and_cli() {
 }
 
 #[tokio::test]
-async fn phase6_apply_patch_parity_service_http_and_cli_relative_paths() {
-    let api_key = "phase6-patch-key";
+async fn apply_patch_parity_service_http_and_cli_relative_paths() {
+    let api_key = "patch-cli-key";
     let config = test_config(api_key);
-    let direct_service = ComputerService::new(config.clone());
+    let direct_service = ZodexService::new(config.clone());
     let (addr, shutdown_tx, server) = start_http_api(config).await;
     let base_url = format!("http://{addr}");
     let direct_dir = tempdir().expect("direct tempdir");
     let http_dir = tempdir().expect("http tempdir");
     let cli_dir = tempdir().expect("cli tempdir");
-    let relative_file = "nested/phase6.txt";
-    let patch = "*** Begin Patch\n*** Add File: nested/phase6.txt\n+phase6-patch\n*** End Patch\n";
+    let relative_file = "nested/cli-parity.txt";
+    let patch =
+        "*** Begin Patch\n*** Add File: nested/cli-parity.txt\n+cli-parity-patch\n*** End Patch\n";
 
     let direct_output = direct_service
-        .apply_patch(computer_mcp::protocol::ApplyPatchInput {
+        .apply_patch(zodex::protocol::ApplyPatchInput {
             patch: patch.to_string(),
             workdir: direct_dir.path().to_string_lossy().to_string(),
         })
@@ -661,7 +662,7 @@ async fn phase6_apply_patch_parity_service_http_and_cli_relative_paths() {
         }),
     )
     .await;
-    let cli_output: ApplyPatchOutput = run_computer_cli_json(vec![
+    let cli_output: ApplyPatchOutput = run_zodex_client_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
@@ -689,17 +690,17 @@ async fn phase6_apply_patch_parity_service_http_and_cli_relative_paths() {
     assert_eq!(
         std::fs::read_to_string(direct_dir.path().join(relative_file))
             .expect("direct patched file should be readable"),
-        "phase6-patch\n"
+        "cli-parity-patch\n"
     );
     assert_eq!(
         std::fs::read_to_string(http_dir.path().join(relative_file))
             .expect("http patched file should be readable"),
-        "phase6-patch\n"
+        "cli-parity-patch\n"
     );
     assert_eq!(
         std::fs::read_to_string(cli_dir.path().join(relative_file))
             .expect("cli patched file should be readable"),
-        "phase6-patch\n"
+        "cli-parity-patch\n"
     );
 
     stop_http_api(shutdown_tx, server).await;

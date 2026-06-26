@@ -2,18 +2,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use computer_mcp::client::{
-    ComputerClient, ConnectionProfile, delete_profile, resolve_connect_connection,
+use zodex::client::{
+    ConnectionProfile, ZodexClient, delete_profile, resolve_connect_connection,
     resolve_operation_connection, save_profile,
 };
-use computer_mcp::install_rustls_crypto_provider;
-use computer_mcp::protocol::{ApplyPatchInput, ExecCommandInput, WriteStdinInput};
+use zodex::install_rustls_crypto_provider;
+use zodex::protocol::{ApplyPatchInput, ExecCommandInput, WriteStdinInput};
 
 #[derive(Debug, Parser)]
-#[command(name = "computer")]
-#[command(
-    about = "Thin HTTP CLI for remote zodex operations (legacy computer compatibility surface)"
-)]
+#[command(name = "zodex-client")]
+#[command(about = "Thin HTTP CLI for remote zodex operations")]
 #[command(version)]
 struct Cli {
     #[arg(long, global = true)]
@@ -133,7 +131,7 @@ async fn run_connect(
     profile_path: Option<&Path>,
 ) -> Result<PathBuf> {
     let resolved = resolve_connect_connection(url, key)?;
-    let client = ComputerClient::new(resolved.url.clone(), resolved.key.clone());
+    let client = ZodexClient::new(resolved.url.clone(), resolved.key.clone());
     client.verify_connection().await?;
     save_profile(
         &ConnectionProfile {
@@ -152,9 +150,9 @@ fn resolved_client(
     url: Option<String>,
     key: Option<String>,
     profile_path: Option<&Path>,
-) -> Result<ComputerClient> {
+) -> Result<ZodexClient> {
     let resolved = resolve_operation_connection(url, key, profile_path)?;
-    Ok(ComputerClient::new(resolved.url, resolved.key))
+    Ok(ZodexClient::new(resolved.url, resolved.key))
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
@@ -172,21 +170,21 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::{Cli, Commands, run_connect, run_disconnect};
-    use computer_mcp::config::Config;
-    use computer_mcp::http_api::build_http_api_router;
-    use computer_mcp::service::ComputerService;
+    use zodex::config::Config;
+    use zodex::http_api::build_http_api_router;
+    use zodex::service::ZodexService;
 
     #[test]
-    fn clap_help_mentions_zodex_compatibility_surface() {
+    fn clap_help_uses_zodex_client_name() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("remote zodex operations"));
-        assert!(help.contains("legacy computer compatibility surface"));
+        assert!(help.contains("zodex-client"));
     }
 
     #[test]
     fn parses_exec_command_and_global_connection_flags() {
         let cli = Cli::try_parse_from([
-            "computer",
+            "zodex-client",
             "--url",
             "https://example.invalid",
             "--key",
@@ -223,7 +221,7 @@ mod tests {
     #[test]
     fn parses_write_stdin_command_options() {
         let cli = Cli::try_parse_from([
-            "computer",
+            "zodex-client",
             "write-stdin",
             "--session-handle",
             "handle-42",
@@ -258,7 +256,7 @@ mod tests {
             api_key: api_key.to_string(),
             ..Config::default()
         });
-        let service = ComputerService::new(config.clone());
+        let service = ZodexService::new(config.clone());
         let app = build_http_api_router(config, service);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -279,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_and_disconnect_persist_profile_at_overridden_path() {
-        computer_mcp::install_rustls_crypto_provider();
+        zodex::install_rustls_crypto_provider();
 
         let dir = tempdir().expect("tempdir");
         let profile_path = dir.path().join("profile.json");
@@ -306,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_fails_without_saving_profile_when_auth_is_invalid() {
-        computer_mcp::install_rustls_crypto_provider();
+        zodex::install_rustls_crypto_provider();
 
         let dir = tempdir().expect("tempdir");
         let profile_path = dir.path().join("profile.json");

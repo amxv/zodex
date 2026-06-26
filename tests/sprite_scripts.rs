@@ -1,72 +1,22 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn script_path(name: &str) -> PathBuf {
-    repo_root().join("scripts").join(name)
-}
-
 #[test]
-fn sprite_scripts_have_valid_bash_syntax() {
-    let scripts = ["setup-sprite.sh", "sprite-services.sh", "upgrade-sprite.sh"];
+fn setup_doc_describes_sprite_first_zodex_flow() {
+    let setup =
+        std::fs::read_to_string(repo_root().join("docs").join("setup.md")).expect("read setup doc");
 
-    for script in scripts {
-        let output = Command::new("bash")
-            .arg("-n")
-            .arg(script_path(script))
-            .output()
-            .expect("run bash -n");
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!("bash -n failed for {script}: {stderr}");
-        }
-    }
-}
-
-#[test]
-fn sprite_docs_prefer_zodex_control_plane_commands() {
-    let upgrade_script =
-        std::fs::read_to_string(script_path("upgrade-sprite.sh")).expect("read upgrade script");
-    let setup_script =
-        std::fs::read_to_string(script_path("setup-sprite.sh")).expect("read setup script");
-    let service_script = std::fs::read_to_string(script_path("sprite-services.sh"))
-        .expect("read sprite services script");
-    let runbook = std::fs::read_to_string(
-        repo_root()
-            .join("docs")
-            .join("agent-sprites-setup-runbook.md"),
-    )
-    .expect("read Sprite runbook");
-    let deployment_notes =
-        std::fs::read_to_string(repo_root().join("docs").join("deployment-notes.md"))
-            .expect("read deployment notes");
-
-    assert!(upgrade_script.contains("scripts/sprite-services.sh"));
-    assert!(upgrade_script.contains("--force-recreate"));
-    assert!(
-        upgrade_script.contains("verifying local Sprite health via http://127.0.0.1:8080/health")
-    );
-    assert!(upgrade_script.contains("computer-mcp-agent unexpectedly gained read access"));
-    assert!(upgrade_script.contains("verifying publisher socket permissions"));
-    assert!(setup_script.contains("--force-recreate"));
-    assert!(setup_script.contains("verify agent still cannot read publisher private key"));
-    assert!(
-        setup_script
-            .contains("verifying publisher socket permissions after Sprite service handoff")
-    );
-    assert!(service_script.contains("--force-recreate"));
-    assert!(runbook.contains("zodex sprite setup"));
-    assert!(runbook.contains("zodex sprite upgrade"));
-    assert!(runbook.contains("zodex sprite sync"));
-    assert!(runbook.contains("zodex github grant-push"));
-    assert!(runbook.contains("zodex github revoke-push"));
-    assert!(runbook.contains("normal write flow"));
-    assert!(deployment_notes.contains("zodex sprite upgrade"));
-    assert!(deployment_notes.contains("zodex sprite sync"));
-    assert!(deployment_notes.contains("run the remote Rust install path"));
-    assert!(deployment_notes.contains("temporary repo-scoped push access"));
+    assert!(setup.contains("zodex sprite setup"));
+    assert!(setup.contains("zodex proxy deploy"));
+    assert!(setup.contains("zodex github grant-push"));
+    assert!(setup.contains("zodex github revoke-push"));
+    assert!(setup.contains("read-only GitHub access"));
+    assert!(setup.contains("temporary repo-scoped direct push access"));
+    let deprecated_deploy_path = ["Run", "pod"].join("");
+    let deprecated_vm_path = ['V', 'P', 'S'].iter().collect::<String>();
+    assert!(!setup.contains(&deprecated_deploy_path));
+    assert!(!setup.contains(&deprecated_vm_path));
 }

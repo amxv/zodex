@@ -14,13 +14,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
-use computer_mcp::install_rustls_crypto_provider;
-use computer_mcp::publisher::{
-    mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
-    resolve_repo_installation_id,
-};
-use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
@@ -32,12 +25,19 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use zodex::config::{Config, DEFAULT_CONFIG_PATH};
+use zodex::install_rustls_crypto_provider;
+use zodex::publisher::{
+    mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
+    resolve_repo_installation_id,
+};
+use zodex::redaction::redact_api_key_query_params;
 
-const SERVICE_NAME: &str = "computer-mcpd.service";
-const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/computer-mcpd.service";
-const SPRITE_MAIN_SERVICE_LABEL: &str = "computer-mcpd";
-const STATE_DIR: &str = "/var/lib/computer-mcp";
-const TLS_DIR: &str = "/var/lib/computer-mcp/tls";
+const SERVICE_NAME: &str = "zodexd.service";
+const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/zodexd.service";
+const SPRITE_MAIN_SERVICE_LABEL: &str = "zodexd";
+const STATE_DIR: &str = "/var/lib/zodex";
+const TLS_DIR: &str = "/var/lib/zodex/tls";
 const LETSENCRYPT_LIVE_DIR: &str = "/etc/letsencrypt/live";
 const DEFAULT_LOG_LINES: &str = "200";
 const STATUS_HOST_HINT_FALLBACK: &str = "<host>";
@@ -45,12 +45,12 @@ const TLS_MODE_LETSENCRYPT_IP: &str = "letsencrypt_ip";
 const TLS_MODE_SELF_SIGNED: &str = "self_signed";
 const PROCESS_RUNTIME_DIRNAME: &str = "run";
 const PROCESS_LOG_DIRNAME: &str = "logs";
-const PROCESS_PID_FILENAME: &str = "computer-mcpd.pid";
-const PROCESS_LOG_FILENAME: &str = "computer-mcpd.log";
+const PROCESS_PID_FILENAME: &str = "zodexd.pid";
+const PROCESS_LOG_FILENAME: &str = "zodexd.log";
 const PUBLISHER_PROCESS_SUBDIR: &str = "publisher";
-const PUBLISHER_SERVICE_LABEL: &str = "computer-mcp-prd";
-const PUBLISHER_PROCESS_PID_FILENAME: &str = "computer-mcp-prd.pid";
-const PUBLISHER_PROCESS_LOG_FILENAME: &str = "computer-mcp-prd.log";
+const PUBLISHER_SERVICE_LABEL: &str = "zodex-prd";
+const PUBLISHER_PROCESS_PID_FILENAME: &str = "zodex-prd.pid";
+const PUBLISHER_PROCESS_LOG_FILENAME: &str = "zodex-prd.log";
 const PROCESS_START_STABILIZE_MS: u64 = 300;
 const PROCESS_STOP_TIMEOUT_MS: u64 = 5_000;
 const PROCESS_STOP_POLL_MS: u64 = 100;
@@ -59,13 +59,13 @@ const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
 const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 const PRIMARY_OPERATOR_BINARY: &str = "zodex";
 const PRIMARY_DAEMON_BINARY: &str = "zodexd";
-const PUSH_GRANTS_DIR: &str = "/var/lib/computer-mcp/push-grants";
+const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
 const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
 const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
 const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
 const SPRITE_REMOTE_UPLOAD_CLI_PATH: &str = "/tmp/zodex";
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
-const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/computer-mcp-prd";
+const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
 const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
 const PROXY_COMPONENT_README: &str = "proxy/cloudflare-worker/README.md";
 const PROXY_WORKER_ENTRYPOINT: &str = "proxy/cloudflare-worker/src/index.js";
@@ -80,7 +80,7 @@ enum ServiceManager {
 
 #[derive(Debug, Parser)]
 #[command(name = "zodex")]
-#[command(about = "Zodex operator CLI (compatible with legacy computer-mcp commands)")]
+#[command(about = "Zodex operator CLI")]
 #[command(version)]
 struct Cli {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
@@ -781,23 +781,23 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
     let cli_candidates = [
         manifest_dir().join("target/debug/zodex"),
         manifest_dir().join("target/release/zodex"),
-        manifest_dir().join("target/debug/computer-mcp"),
-        manifest_dir().join("target/release/computer-mcp"),
+        manifest_dir().join("target/debug/zodex"),
+        manifest_dir().join("target/release/zodex"),
         PathBuf::from("/usr/local/bin/zodex"),
-        PathBuf::from("/usr/local/bin/computer-mcp"),
+        PathBuf::from("/usr/local/bin/zodex"),
     ];
     let daemon_candidates = [
         manifest_dir().join("target/debug/zodexd"),
         manifest_dir().join("target/release/zodexd"),
-        manifest_dir().join("target/debug/computer-mcpd"),
-        manifest_dir().join("target/release/computer-mcpd"),
+        manifest_dir().join("target/debug/zodexd"),
+        manifest_dir().join("target/release/zodexd"),
         PathBuf::from("/usr/local/bin/zodexd"),
-        PathBuf::from("/usr/local/bin/computer-mcpd"),
+        PathBuf::from("/usr/local/bin/zodexd"),
     ];
     let publisher_candidates = [
-        manifest_dir().join("target/debug/computer-mcp-prd"),
-        manifest_dir().join("target/release/computer-mcp-prd"),
-        PathBuf::from("/usr/local/bin/computer-mcp-prd"),
+        manifest_dir().join("target/debug/zodex-prd"),
+        manifest_dir().join("target/release/zodex-prd"),
+        PathBuf::from("/usr/local/bin/zodex-prd"),
     ];
 
     let mut cli = first_existing_executable(&cli_candidates);
@@ -818,7 +818,7 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
             publisher,
         }),
         _ => bail!(
-            "failed to locate local zodex operator binaries; expected zodex, zodexd, and computer-mcp-prd"
+            "failed to locate local zodex operator binaries; expected zodex, zodexd, and zodex-prd"
         ),
     }
 }
@@ -835,7 +835,7 @@ fn build_local_operator_binaries() -> Result<()> {
         "--bin".to_string(),
         "zodexd".to_string(),
         "--bin".to_string(),
-        "computer-mcp-prd".to_string(),
+        "zodex-prd".to_string(),
     ];
     run_command_capture("cargo", &args)
         .context("failed to build local zodex binaries")
@@ -1261,7 +1261,7 @@ fn sync_sprite_services(
         let stop_args = vec![
             "--".to_string(),
             "sudo".to_string(),
-            "computer-mcp".to_string(),
+            "zodex".to_string(),
             "stop".to_string(),
         ];
         if let Err(err) = run_sprite_exec(sprite, org, &stop_args, &[]) {
@@ -1352,9 +1352,9 @@ rm -rf "$smoke_dir"
         "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
-        "computer-mcp-agent".to_string(),
+        "zodex-agent".to_string(),
         "env".to_string(),
-        "HOME=/home/computer-mcp-agent".to_string(),
+        "HOME=/home/zodex-agent".to_string(),
         "bash".to_string(),
         "-lc".to_string(),
         script.to_string(),
@@ -1368,9 +1368,9 @@ fn verify_reader_git_access(sprite: &str, org: Option<&str>, repo: &str) -> Resu
         "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
-        "computer-mcp-agent".to_string(),
+        "zodex-agent".to_string(),
         "env".to_string(),
-        "HOME=/home/computer-mcp-agent".to_string(),
+        "HOME=/home/zodex-agent".to_string(),
         "git".to_string(),
         "ls-remote".to_string(),
         format!("https://github.com/{repo}.git"),
@@ -1382,14 +1382,14 @@ fn verify_reader_git_access(sprite: &str, org: Option<&str>, repo: &str) -> Resu
 
 fn verify_publisher_socket_permissions(sprite: &str, org: Option<&str>) -> Result<()> {
     let script = r#"set -euo pipefail
-dir_path=/var/lib/computer-mcp/publisher/run
-sock_path=/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock
+dir_path=/var/lib/zodex/publisher/run
+sock_path=/var/lib/zodex/publisher/run/zodex-prd.sock
 [[ "$(stat -c %a "$dir_path")" == "750" ]]
-[[ "$(stat -c %U "$dir_path")" == "computer-mcp-publisher" ]]
-[[ "$(stat -c %G "$dir_path")" == "computer-mcp" ]]
+[[ "$(stat -c %U "$dir_path")" == "zodex-publisher" ]]
+[[ "$(stat -c %G "$dir_path")" == "zodex" ]]
 [[ "$(stat -c %a "$sock_path")" == "660" ]]
-[[ "$(stat -c %U "$sock_path")" == "computer-mcp-publisher" ]]
-[[ "$(stat -c %G "$sock_path")" == "computer-mcp" ]]
+[[ "$(stat -c %U "$sock_path")" == "zodex-publisher" ]]
+[[ "$(stat -c %G "$sock_path")" == "zodex" ]]
 "#;
     let exec_args = vec![
         "--".to_string(),
@@ -1403,21 +1403,21 @@ sock_path=/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock
 }
 
 fn verify_publisher_key_isolation(sprite: &str, org: Option<&str>) -> Result<()> {
-    let script = r#"cat /etc/computer-mcp/publisher/private-key.pem >/dev/null 2>&1"#;
+    let script = r#"cat /etc/zodex/publisher/private-key.pem >/dev/null 2>&1"#;
     let exec_args = vec![
         "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
-        "computer-mcp-agent".to_string(),
+        "zodex-agent".to_string(),
         "env".to_string(),
-        "HOME=/home/computer-mcp-agent".to_string(),
+        "HOME=/home/zodex-agent".to_string(),
         "bash".to_string(),
         "-lc".to_string(),
         script.to_string(),
     ];
     match run_sprite_exec(sprite, org, &exec_args, &[]) {
         Ok(_) => bail!(
-            "computer-mcp-agent unexpectedly gained read access to /etc/computer-mcp/publisher/private-key.pem"
+            "zodex-agent unexpectedly gained read access to /etc/zodex/publisher/private-key.pem"
         ),
         Err(_) => Ok(()),
     }
@@ -1453,7 +1453,7 @@ fn verify_sprite_health(sprite: &str, org: Option<&str>, url_auth: Option<&str>)
             let exec_args = vec![
                 "--".to_string(),
                 "sudo".to_string(),
-                "computer-mcp".to_string(),
+                "zodex".to_string(),
                 "show-url".to_string(),
                 "--host".to_string(),
                 host.to_string(),
@@ -1622,19 +1622,19 @@ fi
 sudo install -d -m 0755 /usr/local/bin
 sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
 sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
-sudo install -m 0755 {publisher_upload} /usr/local/bin/computer-mcp-prd
-sudo ln -sf /usr/local/bin/zodex /usr/local/bin/computer-mcp
-sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/computer-mcpd
+sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
+sudo ln -sf /usr/local/bin/zodex /usr/local/bin/zodex
+sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/zodexd
 
 sudo env \
-  COMPUTER_MCP_HTTP_BIND_PORT=8080 \
-  COMPUTER_MCP_AGENT_HOME=/home/computer-mcp-agent \
-  COMPUTER_MCP_DEFAULT_WORKDIR=/workspace \
+  ZODEX_HTTP_BIND_PORT=8080 \
+  ZODEX_AGENT_HOME=/home/zodex-agent \
+  ZODEX_DEFAULT_WORKDIR=/workspace \
   /usr/local/bin/zodex --config "$CFG" install
 
-sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader /etc/computer-mcp/publisher
-sudo install -m 0640 -o root -g computer-mcp /tmp/zodex-reader.pem /etc/computer-mcp/reader/private-key.pem
-sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp /tmp/zodex-publisher.pem /etc/computer-mcp/publisher/private-key.pem
+sudo install -d -m 0750 -o root -g zodex /etc/zodex/reader /etc/zodex/publisher
+sudo install -m 0640 -o root -g zodex /tmp/zodex-reader.pem /etc/zodex/reader/private-key.pem
+sudo install -m 0600 -o zodex-publisher -g zodex /tmp/zodex-publisher.pem /etc/zodex/publisher/private-key.pem
 
 sudo awk '
   BEGIN {{seen_bind=0; inserted_http=0}}
@@ -1661,11 +1661,11 @@ sudo awk '
 
 sudo awk '
   BEGIN {{ seen_agent_home=0; seen_default_workdir=0 }}
-  /^agent_home = / {{ print "agent_home = \"/home/computer-mcp-agent\""; seen_agent_home=1; next }}
+  /^agent_home = / {{ print "agent_home = \"/home/zodex-agent\""; seen_agent_home=1; next }}
   /^default_workdir = / {{ print "default_workdir = \"/workspace\""; seen_default_workdir=1; next }}
   {{ print }}
   END {{
-    if (!seen_agent_home) print "agent_home = \"/home/computer-mcp-agent\""
+    if (!seen_agent_home) print "agent_home = \"/home/zodex-agent\""
     if (!seen_default_workdir) print "default_workdir = \"/workspace\""
   }}
 ' "$CFG" | sudo tee "$CFG" >/dev/null
@@ -1695,23 +1695,23 @@ EOF
 
 sudo bash -lc 'cat "$1" "$2" > "$3"' -- "$tmp_cfg" "$tmp_block" "$CFG"
 rm -f "$tmp_cfg" "$tmp_block"
-sudo chgrp computer-mcp "$CFG"
+sudo chgrp zodex "$CFG"
 sudo chmod 0640 "$CFG"
 
 helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath true
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.name "Computer MCP Agent"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.email "computer-mcp-agent@local.invalid"
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Computer MCP Agent"
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+sudo -u zodex-agent env HOME=/home/zodex-agent bash -lc '
   cd /workspace
   test -w /workspace
   touch .zodex-write-check
   rm -f .zodex-write-check
 '
 
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+sudo -u zodex-agent env HOME=/home/zodex-agent bash -lc '
   smoke_dir=/workspace/.git-identity-smoke
   rm -rf "$smoke_dir"
   git init -q "$smoke_dir"
@@ -1723,16 +1723,16 @@ sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
   rm -rf "$smoke_dir"
 '
 
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
+sudo -u zodex-agent env HOME=/home/zodex-agent \
   git -C /workspace ls-remote "https://github.com/$REPO.git" HEAD >/dev/null
 
-if sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
-  bash -lc 'cat /etc/computer-mcp/publisher/private-key.pem >/dev/null 2>&1'; then
+if sudo -u zodex-agent env HOME=/home/zodex-agent \
+  bash -lc 'cat /etc/zodex/publisher/private-key.pem >/dev/null 2>&1'; then
   echo "agent unexpectedly gained publisher key access" >&2
   exit 1
 fi
 
-sudo computer-mcp stop || true
+sudo zodex stop || true
 rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {cli_upload} {daemon_upload} {publisher_upload}
 "#,
         repo = shell_escape_single_quotes(repo),
@@ -1772,9 +1772,9 @@ fi
 sudo install -d -m 0755 /usr/local/bin
 sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
 sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
-sudo install -m 0755 {publisher_upload} /usr/local/bin/computer-mcp-prd
-sudo ln -sf /usr/local/bin/zodex /usr/local/bin/computer-mcp
-sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/computer-mcpd
+sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
+sudo ln -sf /usr/local/bin/zodex /usr/local/bin/zodex
+sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/zodexd
 
 sudo /usr/local/bin/zodex --config "$CFG" install
 
@@ -1783,16 +1783,16 @@ if [[ -z "$TARGET_REPO" ]]; then
 fi
 
 helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath true
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
 
-current_name="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.name || true)"
-current_email="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.email || true)"
+current_name="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.name || true)"
+current_email="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.email || true)"
 if [[ -z "$current_name" ]]; then
-  sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.name "Computer MCP Agent"
+  sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Computer MCP Agent"
 fi
 if [[ -z "$current_email" ]]; then
-  sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.email "computer-mcp-agent@local.invalid"
+  sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 fi
 
 rm -f {upgrade_script} {cli_upload} {daemon_upload} {publisher_upload}
@@ -1855,7 +1855,7 @@ async fn grant_push_access(
         "bash".to_string(),
         "-lc".to_string(),
         format!(
-            "sudo install -d -m 0750 -o computer-mcp-agent -g computer-mcp {dir} && sudo install -m 0640 -o computer-mcp-agent -g computer-mcp {tmp} {dest} && rm -f {tmp}",
+            "sudo install -d -m 0750 -o zodex-agent -g zodex {dir} && sudo install -m 0640 -o zodex-agent -g zodex {tmp} {dest} && rm -f {tmp}",
             dir = PUSH_GRANTS_DIR,
             tmp = PUSH_GRANT_REMOTE_TMP_PATH,
             dest = push_grant_path(repo).display()
@@ -2139,25 +2139,24 @@ fn upgrade(config_path: &Path, version: &str) -> Result<()> {
 
 fn build_upgrade_shell_args(version: &str, config: &Config) -> Vec<String> {
     let mut script = format!(
-        "set -euo pipefail\nexport COMPUTER_MCP_VERSION={}\n",
+        "set -euo pipefail\nexport ZODEX_VERSION={}\n",
         shell_escape_single_quotes(version)
     );
 
     if version != "latest" {
         script.push_str(&format!(
-            "export COMPUTER_MCP_SOURCE_REF={}\n",
+            "export ZODEX_SOURCE_REF={}\n",
             shell_escape_single_quotes(version)
         ));
     }
 
     if let Some(port) = config.http_bind_port {
-        script.push_str(&format!("export COMPUTER_MCP_HTTP_BIND_PORT={port}\n"));
+        script.push_str(&format!("export ZODEX_HTTP_BIND_PORT={port}\n"));
     }
 
     let installer_ref = upgrade_installer_ref(version);
-    let installer_url = format!(
-        "https://raw.githubusercontent.com/amxv/computer-mcp/{installer_ref}/scripts/install.sh"
-    );
+    let installer_url =
+        format!("https://raw.githubusercontent.com/amxv/zodex/{installer_ref}/scripts/install.sh");
     script.push_str(&format!(
         "curl -fsSL {} | bash",
         shell_escape_single_quotes(&installer_url)
@@ -2555,10 +2554,10 @@ fn resolve_daemon_binary_path() -> Result<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
     if let Some(parent) = current_exe.parent() {
-        candidates.push(parent.join("computer-mcpd"));
+        candidates.push(parent.join("zodexd"));
     }
-    candidates.push(PathBuf::from("/usr/local/bin/computer-mcpd"));
-    candidates.push(PathBuf::from("/usr/bin/computer-mcpd"));
+    candidates.push(PathBuf::from("/usr/local/bin/zodexd"));
+    candidates.push(PathBuf::from("/usr/bin/zodexd"));
 
     candidates
         .into_iter()
@@ -2567,12 +2566,12 @@ fn resolve_daemon_binary_path() -> Result<PathBuf> {
 }
 
 fn resolve_publisher_daemon_binary_path() -> Result<PathBuf> {
-    if let Ok(override_path) = std::env::var("COMPUTER_MCP_PRD_PATH") {
+    if let Ok(override_path) = std::env::var("ZODEX_PRD_PATH") {
         let path = PathBuf::from(&override_path);
         if path.exists() {
             return Ok(path);
         }
-        bail!("COMPUTER_MCP_PRD_PATH does not exist: {override_path}");
+        bail!("ZODEX_PRD_PATH does not exist: {override_path}");
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -3358,7 +3357,7 @@ fn expected_sprite_service_definitions(
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "computer-mcp-publisher".to_string(),
+                    "zodex-publisher".to_string(),
                     format!("/usr/local/bin/{PUBLISHER_SERVICE_LABEL}"),
                     "--config".to_string(),
                     config_arg.clone(),
@@ -3374,7 +3373,7 @@ fn expected_sprite_service_definitions(
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "computer-mcp-agent".to_string(),
+                    "zodex-agent".to_string(),
                     format!("/usr/local/bin/{SPRITE_MAIN_SERVICE_LABEL}"),
                     "--config".to_string(),
                     config_arg,
@@ -3481,7 +3480,7 @@ fn build_reader_status_lines(config: &Config) -> Vec<String> {
     let ready = ensure_reader_ready_for_start(config).is_ok();
 
     let mut lines = vec![
-        "service: computer-mcp-reader".to_string(),
+        "service: zodex-reader".to_string(),
         "service-mode: config-only".to_string(),
         format!("active: {}", if ready { "ready" } else { "not-ready" }),
         format!("reader-app-id: {app_id}"),
@@ -3639,7 +3638,7 @@ fn render_systemd_unit(daemon_path: &Path, config_path: &Path) -> String {
 
     format!(
         "[Unit]
-Description=zodex daemon (computer-mcp compatible)
+Description=zodex daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -3649,7 +3648,7 @@ ExecStart={daemon_arg} --config {config_arg}
 Restart=always
 RestartSec=2
 NoNewPrivileges=true
-Environment=RUST_LOG=computer_mcp=info,computer_mcpd=info
+Environment=RUST_LOG=zodex=info,zodexd=info
 
 [Install]
 WantedBy=multi-user.target
@@ -3922,7 +3921,7 @@ fn try_setup_letsencrypt_ip(config: &Config, ip: IpAddr) -> Result<()> {
 }
 
 fn certbot_cert_name(ip: IpAddr) -> String {
-    format!("computer-mcp-{}", ip.to_string().replace(['.', ':'], "-"))
+    format!("zodex-{}", ip.to_string().replace(['.', ':'], "-"))
 }
 
 fn build_certbot_args(ip: IpAddr, cert_name: &str) -> Vec<String> {
@@ -3981,7 +3980,7 @@ fn generate_self_signed_certificate(config: &Config, ip: IpAddr) -> Result<()> {
     let mut params = CertificateParams::new(Vec::<String>::new())
         .context("failed to initialize self-signed cert parameters")?;
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, format!("computer-mcp {ip}"));
+    dn.push(DnType::CommonName, format!("zodex {ip}"));
     params.distinguished_name = dn;
     params.subject_alt_names = vec![SanType::IpAddress(ip)];
 
@@ -4086,34 +4085,33 @@ mod tests {
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
         SystemctlAction, build_certbot_args, build_journalctl_args, build_process_status_lines,
         build_publisher_status_lines, build_reader_status_lines, build_sprite_api_args,
-        build_sprite_services_status_lines, build_sprite_setup_script,
-        build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
-        build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
-        credential_url_host, credential_url_path, credential_url_protocol,
-        ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
-        generate_self_signed_certificate, git_credential_request_repo,
-        git_credential_request_targets_github, load_matching_push_grant, normalize_github_repo,
-        normalize_proxy_origin, parse_git_credential_request, parse_systemctl_show,
-        process_log_path, process_pid_path, proxy_mcp_status_looks_healthy, read_tail_lines,
-        render_proxy_wrangler_config, render_systemd_unit, select_tls_san_ip,
-        service_manager_from_pid1, shell_escape_single_quotes,
-        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
-        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
-        write_if_changed,
+        build_sprite_services_status_lines, build_sprite_setup_script, build_sprite_upgrade_script,
+        build_status_summary_lines, build_systemctl_args, build_upgrade_shell_args,
+        certbot_cert_name, credential_host_is_github, credential_url_host, credential_url_path,
+        credential_url_protocol, ensure_http_listener_ready_for_start,
+        expected_sprite_service_definitions, generate_self_signed_certificate,
+        git_credential_request_repo, git_credential_request_targets_github,
+        load_matching_push_grant, normalize_github_repo, normalize_proxy_origin,
+        parse_git_credential_request, parse_systemctl_show, process_log_path, process_pid_path,
+        proxy_mcp_status_looks_healthy, read_tail_lines, render_proxy_wrangler_config,
+        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path,
+        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
+        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
     };
     use crate::Cli;
     use clap::CommandFactory;
-    use computer_mcp::config::Config;
     use std::fs;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
+    use zodex::config::Config;
 
     #[test]
     fn clap_help_uses_zodex_name() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("zodex"));
-        assert!(help.contains("legacy computer-mcp commands"));
+        assert!(help.contains("Zodex operator CLI"));
         assert!(!help.contains("publish-pr"));
         assert!(!help.contains("\npublisher"));
     }
@@ -4121,13 +4119,15 @@ mod tests {
     #[test]
     fn render_systemd_unit_contains_expected_execstart() {
         let unit = render_systemd_unit(
-            Path::new("/usr/local/bin/computer-mcpd"),
-            Path::new("/etc/computer-mcp/config.toml"),
+            Path::new("/usr/local/bin/zodexd"),
+            Path::new("/etc/zodex/config.toml"),
         );
         assert!(unit.contains("[Service]"));
-        assert!(unit.contains(
-            "ExecStart=\"/usr/local/bin/computer-mcpd\" --config \"/etc/computer-mcp/config.toml\""
-        ));
+        assert!(
+            unit.contains(
+                "ExecStart=\"/usr/local/bin/zodexd\" --config \"/etc/zodex/config.toml\""
+            )
+        );
         assert!(unit.contains("Restart=always"));
         assert!(unit.contains("[Install]"));
     }
@@ -4182,12 +4182,12 @@ mod tests {
 
         let args = build_upgrade_shell_args("v0.1.5", &config);
         assert_eq!(args[0], "-lc");
-        assert!(args[1].contains("export COMPUTER_MCP_VERSION='v0.1.5'"));
-        assert!(args[1].contains("export COMPUTER_MCP_SOURCE_REF='v0.1.5'"));
-        assert!(args[1].contains("export COMPUTER_MCP_HTTP_BIND_PORT=8080"));
+        assert!(args[1].contains("export ZODEX_VERSION='v0.1.5'"));
+        assert!(args[1].contains("export ZODEX_SOURCE_REF='v0.1.5'"));
+        assert!(args[1].contains("export ZODEX_HTTP_BIND_PORT=8080"));
         assert!(
             args[1].contains(
-                "curl -fsSL 'https://raw.githubusercontent.com/amxv/computer-mcp/v0.1.5/scripts/install.sh' | bash"
+                "curl -fsSL 'https://raw.githubusercontent.com/amxv/zodex/v0.1.5/scripts/install.sh' | bash"
             )
         );
     }
@@ -4197,11 +4197,11 @@ mod tests {
         let config = Config::default();
 
         let args = build_upgrade_shell_args("latest", &config);
-        assert!(args[1].contains("export COMPUTER_MCP_VERSION='latest'"));
-        assert!(!args[1].contains("COMPUTER_MCP_SOURCE_REF"));
+        assert!(args[1].contains("export ZODEX_VERSION='latest'"));
+        assert!(!args[1].contains("ZODEX_SOURCE_REF"));
         assert!(
             args[1].contains(
-                "curl -fsSL 'https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh' | bash"
+                "curl -fsSL 'https://raw.githubusercontent.com/amxv/zodex/main/scripts/install.sh' | bash"
             )
         );
     }
@@ -4213,15 +4213,14 @@ mod tests {
 
     #[test]
     fn normalize_proxy_origin_strips_trailing_slash() {
-        let origin =
-            normalize_proxy_origin("https://computer.example.sprites.app/").expect("origin");
-        assert_eq!(origin, "https://computer.example.sprites.app");
+        let origin = normalize_proxy_origin("https://zodex.example.sprites.app/").expect("origin");
+        assert_eq!(origin, "https://zodex.example.sprites.app");
     }
 
     #[test]
     fn normalize_proxy_origin_rejects_paths() {
         let err =
-            normalize_proxy_origin("https://computer.example.sprites.app/mcp").expect_err("path");
+            normalize_proxy_origin("https://zodex.example.sprites.app/mcp").expect_err("path");
         assert!(err.to_string().contains("must not include a path"));
     }
 
@@ -4229,10 +4228,10 @@ mod tests {
     fn render_proxy_wrangler_config_replaces_origin_placeholder() {
         let rendered = render_proxy_wrangler_config(
             r#"{"vars":{"SPRITE_ORIGIN":"__SPRITE_ORIGIN__"}}"#,
-            "https://computer.example.sprites.app",
+            "https://zodex.example.sprites.app",
         )
         .expect("render");
-        assert!(rendered.contains("https://computer.example.sprites.app"));
+        assert!(rendered.contains("https://zodex.example.sprites.app"));
         assert!(!rendered.contains("__SPRITE_ORIGIN__"));
     }
 
@@ -4245,7 +4244,7 @@ mod tests {
 
     #[test]
     fn parse_systemctl_show_extracts_values() {
-        let raw = "ActiveState=active\nSubState=running\nUnitFileState=enabled\nFragmentPath=/etc/systemd/system/computer-mcpd.service\nExecMainStatus=0\n";
+        let raw = "ActiveState=active\nSubState=running\nUnitFileState=enabled\nFragmentPath=/etc/systemd/system/zodexd.service\nExecMainStatus=0\n";
         let parsed = parse_systemctl_show(raw);
 
         assert_eq!(
@@ -4259,7 +4258,7 @@ mod tests {
         );
         assert_eq!(
             parsed.get("FragmentPath").map(String::as_str),
-            Some("/etc/systemd/system/computer-mcpd.service")
+            Some("/etc/systemd/system/zodexd.service")
         );
         assert_eq!(parsed.get("ExecMainStatus").map(String::as_str), Some("0"));
     }
@@ -4267,7 +4266,7 @@ mod tests {
     #[test]
     fn write_if_changed_is_idempotent() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("computer-mcpd.service");
+        let path = dir.path().join("zodexd.service");
         let content = "[Unit]\nDescription=test\n";
 
         let first = write_if_changed(&path, content).expect("first write");
@@ -4303,18 +4302,18 @@ mod tests {
         );
         assert_eq!(
             process_pid_path(&config),
-            PathBuf::from("/custom/state/run/computer-mcpd.pid")
+            PathBuf::from("/custom/state/run/zodexd.pid")
         );
         assert_eq!(
             process_log_path(&config),
-            PathBuf::from("/custom/state/logs/computer-mcpd.log")
+            PathBuf::from("/custom/state/logs/zodexd.log")
         );
     }
 
     #[test]
     fn read_tail_lines_returns_only_requested_suffix() {
         let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("computer-mcpd.log");
+        let path = dir.path().join("zodexd.log");
         fs::write(&path, "one\ntwo\nthree\nfour\n").expect("write log");
 
         let got = read_tail_lines(&path, 2).expect("read tail");
@@ -4325,7 +4324,7 @@ mod tests {
     fn certbot_helpers_build_expected_values() {
         let ip: IpAddr = "203.0.113.42".parse().expect("ip parse");
         let cert_name = certbot_cert_name(ip);
-        assert_eq!(cert_name, "computer-mcp-203-0-113-42");
+        assert_eq!(cert_name, "zodex-203-0-113-42");
 
         let args = build_certbot_args(ip, &cert_name);
         assert!(args.contains(&"certonly".to_string()));
@@ -4382,8 +4381,8 @@ mod tests {
             http_bind_port: Some(8080),
             api_key: "abc123".to_string(),
             tls_mode: "self_signed".to_string(),
-            tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
-            tls_key_path: "/var/lib/computer-mcp/tls/key.pem".to_string(),
+            tls_cert_path: "/var/lib/zodex/tls/cert.pem".to_string(),
+            tls_key_path: "/var/lib/zodex/tls/key.pem".to_string(),
             ..Config::default()
         };
 
@@ -4395,8 +4394,8 @@ mod tests {
         let joined = lines.join("\n");
         assert!(joined.contains("listen: 0.0.0.0:8443"));
         assert!(joined.contains("tls-mode: self_signed"));
-        assert!(joined.contains("tls-cert: /var/lib/computer-mcp/tls/cert.pem"));
-        assert!(joined.contains("tls-key: /var/lib/computer-mcp/tls/key.pem"));
+        assert!(joined.contains("tls-cert: /var/lib/zodex/tls/cert.pem"));
+        assert!(joined.contains("tls-key: /var/lib/zodex/tls/key.pem"));
         assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
         assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));
@@ -4410,8 +4409,8 @@ mod tests {
             http_bind_port: Some(8080),
             api_key: "abc123".to_string(),
             tls_mode: "self_signed".to_string(),
-            tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
-            tls_key_path: "/var/lib/computer-mcp/tls/key.pem".to_string(),
+            tls_cert_path: "/var/lib/zodex/tls/cert.pem".to_string(),
+            tls_key_path: "/var/lib/zodex/tls/key.pem".to_string(),
             ..Config::default()
         };
 
@@ -4425,7 +4424,7 @@ mod tests {
         assert!(joined.contains("service-mode: process"));
         assert!(joined.contains("active: active (running)"));
         assert!(joined.contains("exec-main-status: running pid 4242"));
-        assert!(joined.contains("agent-home: /home/computer-mcp-agent"));
+        assert!(joined.contains("agent-home: /home/zodex-agent"));
         assert!(joined.contains("default-workdir: /workspace"));
         assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
@@ -4450,18 +4449,16 @@ mod tests {
         let lines = build_publisher_status_lines(&config, Ok(ProcessModeState::Running(5150)))
             .expect("build publisher status");
         let joined = lines.join("\n");
-        assert!(joined.contains("service: computer-mcp-prd"));
-        assert!(joined.contains("run-user: computer-mcp-publisher"));
-        assert!(
-            joined.contains("socket: /var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock")
-        );
+        assert!(joined.contains("service: zodex-prd"));
+        assert!(joined.contains("run-user: zodex-publisher"));
+        assert!(joined.contains("socket: /var/lib/zodex/publisher/run/zodex-prd.sock"));
         assert!(joined.contains("allowed-repos: 0"));
         assert!(joined.contains("hint: set `publisher_app_id` in config"));
     }
 
     #[test]
     fn expected_sprite_service_definitions_use_config_path() {
-        let defs = expected_sprite_service_definitions(Path::new("/etc/computer-mcp/custom.toml"));
+        let defs = expected_sprite_service_definitions(Path::new("/etc/zodex/custom.toml"));
 
         assert_eq!(
             defs.get(PUBLISHER_SERVICE_LABEL)
@@ -4470,10 +4467,10 @@ mod tests {
             vec![
                 "-n".to_string(),
                 "-u".to_string(),
-                "computer-mcp-publisher".to_string(),
-                "/usr/local/bin/computer-mcp-prd".to_string(),
+                "zodex-publisher".to_string(),
+                "/usr/local/bin/zodex-prd".to_string(),
                 "--config".to_string(),
-                "/etc/computer-mcp/custom.toml".to_string(),
+                "/etc/zodex/custom.toml".to_string(),
             ]
         );
         assert_eq!(
@@ -4487,7 +4484,7 @@ mod tests {
     #[test]
     fn build_sprite_api_args_include_scope_and_passthrough_curl_flags() {
         let args = build_sprite_api_args(
-            "computer",
+            "spritebox",
             Some("amxv"),
             "/services",
             &["-sS".to_string(), "-X".to_string(), "PUT".to_string()],
@@ -4500,7 +4497,7 @@ mod tests {
                 "-o".to_string(),
                 "amxv".to_string(),
                 "-s".to_string(),
-                "computer".to_string(),
+                "spritebox".to_string(),
                 "/services".to_string(),
                 "--".to_string(),
                 "-sS".to_string(),
@@ -4512,19 +4509,19 @@ mod tests {
 
     #[test]
     fn strip_sprite_api_prelude_removes_wrapper_lines() {
-        let raw = "Calling API: amxv computer\nURL: https://api.sprites.dev/v1/sprites/computer/services\n\n[]\n";
+        let raw = "Calling API: amxv spritebox\nURL: https://api.sprites.dev/v1/sprites/spritebox/services\n\n[]\n";
         assert_eq!(strip_sprite_api_prelude(raw), "[]\n");
     }
 
     #[test]
     fn sprite_service_logs_api_path_adds_optional_query_params() {
         assert_eq!(
-            sprite_service_logs_api_path("computer-mcpd", Some(50), Some("5s")),
-            "/services/computer-mcpd/logs?lines=50&duration=5s"
+            sprite_service_logs_api_path("zodexd", Some(50), Some("5s")),
+            "/services/zodexd/logs?lines=50&duration=5s"
         );
         assert_eq!(
-            sprite_service_logs_api_path("computer-mcpd", None, None),
-            "/services/computer-mcpd/logs"
+            sprite_service_logs_api_path("zodexd", None, None),
+            "/services/zodexd/logs"
         );
     }
 
@@ -4533,21 +4530,19 @@ mod tests {
         let config = Config::default();
         let lines = build_sprite_services_status_lines(
             &config,
-            Path::new("/etc/computer-mcp/config.toml"),
-            "computer",
+            Path::new("/etc/zodex/config.toml"),
+            "spritebox",
             &[],
         );
         let joined = lines.join("\n");
 
         assert!(joined.contains("service-mode: sprite-services"));
-        assert!(joined.contains("service: computer-mcp-prd"));
+        assert!(joined.contains("service: zodex-prd"));
         assert!(joined.contains("active: missing"));
-        assert!(joined.contains("service: computer-mcpd"));
-        assert!(
-            joined.contains(
-                "hint: register Sprite Services with `zodex sprite sync --sprite computer`"
-            )
-        );
+        assert!(joined.contains("service: zodexd"));
+        assert!(joined.contains(
+            "hint: register Sprite Services with `zodex sprite sync --sprite spritebox`"
+        ));
     }
 
     #[test]
@@ -4560,10 +4555,10 @@ mod tests {
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "computer-mcp-publisher".to_string(),
-                    "/usr/local/bin/computer-mcp-prd".to_string(),
+                    "zodex-publisher".to_string(),
+                    "/usr/local/bin/zodex-prd".to_string(),
                     "--config".to_string(),
-                    "/etc/computer-mcp/config.toml".to_string(),
+                    "/etc/zodex/config.toml".to_string(),
                 ],
                 needs: Vec::new(),
                 http_port: None,
@@ -4580,10 +4575,10 @@ mod tests {
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "computer-mcp-agent".to_string(),
-                    "/usr/local/bin/computer-mcpd".to_string(),
+                    "zodex-agent".to_string(),
+                    "/usr/local/bin/zodexd".to_string(),
                     "--config".to_string(),
-                    "/etc/computer-mcp/other.toml".to_string(),
+                    "/etc/zodex/other.toml".to_string(),
                 ],
                 needs: vec![PUBLISHER_SERVICE_LABEL.to_string()],
                 http_port: Some(8080),
@@ -4598,32 +4593,31 @@ mod tests {
 
         let lines = build_sprite_services_status_lines(
             &config,
-            Path::new("/etc/computer-mcp/config.toml"),
-            "computer",
+            Path::new("/etc/zodex/config.toml"),
+            "spritebox",
             &services,
         );
         let joined = lines.join("\n");
 
-        assert!(joined.contains("service: computer-mcpd"));
+        assert!(joined.contains("service: zodexd"));
         assert!(joined.contains("active: starting"));
         assert!(joined.contains("definition-match: no"));
-        assert!(joined.contains("hint: re-sync with `zodex sprite sync --sprite computer`"));
+        assert!(joined.contains("hint: re-sync with `zodex sprite sync --sprite spritebox`"));
         assert!(joined.contains(
-            "hint: inspect logs with `zodex sprite logs --sprite computer --service computer-mcpd`"
+            "hint: inspect logs with `zodex sprite logs --sprite spritebox --service zodexd`"
         ));
     }
 
     #[test]
     fn sprite_service_supervisor_pids_from_ps_matches_sprite_managed_parents() {
         let raw = "\
-11 sudo -n -u computer-mcp-publisher /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
-12 sudo -n -u computer-mcp-agent /usr/local/bin/computer-mcpd --config /etc/computer-mcp/config.toml
-16 /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
-17 /usr/local/bin/computer-mcpd --config /etc/computer-mcp/config.toml
-178 runuser -u computer-mcp-publisher -- /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
+11 sudo -n -u zodex-publisher /usr/local/bin/zodex-prd --config /etc/zodex/config.toml
+12 sudo -n -u zodex-agent /usr/local/bin/zodexd --config /etc/zodex/config.toml
+16 /usr/local/bin/zodex-prd --config /etc/zodex/config.toml
+17 /usr/local/bin/zodexd --config /etc/zodex/config.toml
+178 runuser -u zodex-publisher -- /usr/local/bin/zodex-prd --config /etc/zodex/config.toml
 ";
-        let pids =
-            sprite_service_supervisor_pids_from_ps(raw, Path::new("/etc/computer-mcp/config.toml"));
+        let pids = sprite_service_supervisor_pids_from_ps(raw, Path::new("/etc/zodex/config.toml"));
 
         assert_eq!(pids.get(PUBLISHER_SERVICE_LABEL), Some(&11));
         assert_eq!(pids.get(SPRITE_MAIN_SERVICE_LABEL), Some(&12));
@@ -4703,7 +4697,7 @@ mod tests {
     fn build_reader_status_lines_include_reader_hints() {
         let config = Config::default();
         let joined = build_reader_status_lines(&config).join("\n");
-        assert!(joined.contains("service: computer-mcp-reader"));
+        assert!(joined.contains("service: zodex-reader"));
         assert!(joined.contains("active: not-ready"));
         assert!(joined.contains("hint: set `reader_app_id` in config"));
         assert!(joined.contains("hint: set `reader_installation_id` in config"));
@@ -4712,12 +4706,12 @@ mod tests {
     #[test]
     fn parse_git_credential_request_extracts_known_fields() {
         let request = parse_git_credential_request(
-            "protocol=https\nhost=github.com\npath=amxv/computer-mcp.git\nusername=x-access-token\n\n",
+            "protocol=https\nhost=github.com\npath=amxv/zodex.git\nusername=x-access-token\n\n",
         );
 
         assert_eq!(request.protocol.as_deref(), Some("https"));
         assert_eq!(request.host.as_deref(), Some("github.com"));
-        assert_eq!(request.path.as_deref(), Some("amxv/computer-mcp.git"));
+        assert_eq!(request.path.as_deref(), Some("amxv/zodex.git"));
         assert_eq!(request.username.as_deref(), Some("x-access-token"));
     }
 
@@ -4729,8 +4723,7 @@ mod tests {
 
     #[test]
     fn git_credential_request_targets_github_for_https_url_fallback() {
-        let request =
-            parse_git_credential_request("url=https://github.com/amxv/computer-mcp.git\n\n");
+        let request = parse_git_credential_request("url=https://github.com/amxv/zodex.git\n\n");
         assert!(git_credential_request_targets_github(&request));
     }
 
@@ -4747,11 +4740,11 @@ mod tests {
     #[test]
     fn credential_url_helpers_extract_protocol_and_host() {
         assert_eq!(
-            credential_url_protocol("https://github.com/amxv/computer-mcp.git"),
+            credential_url_protocol("https://github.com/amxv/zodex.git"),
             Some("https")
         );
         assert_eq!(
-            credential_url_host("https://token@github.com/amxv/computer-mcp.git"),
+            credential_url_host("https://token@github.com/amxv/zodex.git"),
             Some("github.com")
         );
         assert!(credential_host_is_github("github.com:443"));
@@ -4762,36 +4755,38 @@ mod tests {
     #[test]
     fn github_repo_normalization_handles_git_suffix_and_url_path() {
         assert_eq!(
-            normalize_github_repo("/amxv/computer-mcp.git"),
-            Some("amxv/computer-mcp".to_string())
+            normalize_github_repo("/amxv/zodex.git"),
+            Some("amxv/zodex".to_string())
         );
         assert_eq!(
-            credential_url_path("https://github.com/amxv/computer-mcp.git"),
-            Some("amxv/computer-mcp.git")
+            credential_url_path("https://github.com/amxv/zodex.git"),
+            Some("amxv/zodex.git")
         );
         assert_eq!(
             git_credential_request_repo(&parse_git_credential_request(
-                "url=https://github.com/amxv/computer-mcp.git\n\n"
+                "url=https://github.com/amxv/zodex.git\n\n"
             )),
-            Some("amxv/computer-mcp".to_string())
+            Some("amxv/zodex".to_string())
         );
     }
 
     #[test]
     fn matching_push_grant_uses_repo_path_and_ignores_ungranted_repo() {
         let grants_dir = tempdir().expect("tempdir");
-        let granted_repo = "amxv/computer-mcp";
-        let grant_path = grants_dir.path().join("amxv__computer-mcp.json");
+        let granted_repo = "amxv/zodex";
+        let grant_path = grants_dir.path().join("amxv__zodex.json");
         fs::write(
             &grant_path,
-            r#"{"repo":"amxv/computer-mcp","token":"push-token","expires_at":"2026-06-26T00:00:00Z"}"#,
+            r#"{"repo":"amxv/zodex","token":"push-token","expires_at":"2026-06-26T00:00:00Z"}"#,
         )
         .expect("write grant");
 
-        let granted_request =
-            parse_git_credential_request("protocol=https\nhost=github.com\npath=amxv/computer-mcp.git\n\n");
-        let ungranted_request =
-            parse_git_credential_request("protocol=https\nhost=github.com\npath=amxv/other.git\n\n");
+        let granted_request = parse_git_credential_request(
+            "protocol=https\nhost=github.com\npath=amxv/zodex.git\n\n",
+        );
+        let ungranted_request = parse_git_credential_request(
+            "protocol=https\nhost=github.com\npath=amxv/other.git\n\n",
+        );
 
         let granted = load_matching_push_grant(&granted_request, grants_dir.path())
             .expect("granted lookup should succeed")
@@ -4813,14 +4808,18 @@ mod tests {
             3,
             4,
             "main",
-            Path::new("/etc/computer-mcp/config.toml"),
+            Path::new("/etc/zodex/config.toml"),
         );
-        let upgrade_script =
-            build_sprite_upgrade_script("latest", "owner/repo", Path::new("/etc/computer-mcp/config.toml"));
+        let upgrade_script = build_sprite_upgrade_script(
+            "latest",
+            "owner/repo",
+            Path::new("/etc/zodex/config.toml"),
+        );
 
         assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
         assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
-        assert!(!setup_script.contains("credential.https://github.com.useHttpPath false"));
-        assert!(!upgrade_script.contains("credential.https://github.com.useHttpPath false"));
+        let disabled_setting = ["credential.https://github.com.useHttpPath ", "false"].concat();
+        assert!(!setup_script.contains(&disabled_setting));
+        assert!(!upgrade_script.contains(&disabled_setting));
     }
 }

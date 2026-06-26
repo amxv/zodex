@@ -18,13 +18,9 @@ jobs:
       matrix:
         include:
           - id: generic
-            image_name: amxv/computer-mcp
+            image_name: amxv/zodex
             dockerfile: ./Dockerfile
-            description: Generic zodex dev/runtime image for standard Linux VPS and container environments.
-          - id: runpod
-            image_name: amxv/computer-mcp-runpod
-            dockerfile: ./Dockerfile.runpod
-            description: Runpod-native zodex template image based on runpod/base with preinstalled dev toolchains and automatic zodex bootstrap.
+            description: Generic zodex dev/runtime image for Sprite-oriented operator and runtime workflows.
     permissions:
       contents: read
       packages: write

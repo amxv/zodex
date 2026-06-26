@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_CONFIG_PATH: &str = "/etc/computer-mcp/config.toml";
+pub const DEFAULT_CONFIG_PATH: &str = "/etc/zodex/config.toml";
 
 const MIN_YIELD_MS: u64 = 50;
 const MAX_YIELD_MS: u64 = 60_000;
@@ -72,8 +72,8 @@ impl Default for Config {
             http_bind_port: None,
             api_key: "change-me".to_string(),
             tls_mode: "auto".to_string(),
-            tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
-            tls_key_path: "/var/lib/computer-mcp/tls/key.pem".to_string(),
+            tls_cert_path: "/var/lib/zodex/tls/cert.pem".to_string(),
+            tls_key_path: "/var/lib/zodex/tls/key.pem".to_string(),
             max_sessions: 64,
             default_exec_timeout_ms: 7_200_000,
             max_exec_timeout_ms: 7_200_000,
@@ -82,16 +82,15 @@ impl Default for Config {
             max_output_chars: 200_000,
             reader_app_id: None,
             reader_installation_id: None,
-            reader_private_key_path: "/etc/computer-mcp/reader/private-key.pem".to_string(),
-            publisher_socket_path: "/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock"
-                .to_string(),
-            publisher_private_key_path: "/etc/computer-mcp/publisher/private-key.pem".to_string(),
+            reader_private_key_path: "/etc/zodex/reader/private-key.pem".to_string(),
+            publisher_socket_path: "/var/lib/zodex/publisher/run/zodex-prd.sock".to_string(),
+            publisher_private_key_path: "/etc/zodex/publisher/private-key.pem".to_string(),
             publisher_app_id: None,
-            agent_user: "computer-mcp-agent".to_string(),
-            agent_home: "/home/computer-mcp-agent".to_string(),
+            agent_user: "zodex-agent".to_string(),
+            agent_home: "/home/zodex-agent".to_string(),
             default_workdir: "/workspace".to_string(),
-            publisher_user: "computer-mcp-publisher".to_string(),
-            service_group: "computer-mcp".to_string(),
+            publisher_user: "zodex-publisher".to_string(),
+            service_group: "zodex".to_string(),
             publisher_branch_prefix: "agent".to_string(),
             publisher_max_bundle_bytes: 8 * 1024 * 1024,
             publisher_max_title_chars: 240,
@@ -172,13 +171,13 @@ mod tests {
             cfg.reader_private_key_path
                 .ends_with("/reader/private-key.pem")
         );
-        assert!(cfg.publisher_socket_path.ends_with("computer-mcp-prd.sock"));
+        assert!(cfg.publisher_socket_path.ends_with("zodex-prd.sock"));
         assert!(cfg.publisher_private_key_path.ends_with("private-key.pem"));
-        assert_eq!(cfg.agent_user, "computer-mcp-agent");
-        assert_eq!(cfg.agent_home, "/home/computer-mcp-agent");
+        assert_eq!(cfg.agent_user, "zodex-agent");
+        assert_eq!(cfg.agent_home, "/home/zodex-agent");
         assert_eq!(cfg.default_workdir, "/workspace");
-        assert_eq!(cfg.publisher_user, "computer-mcp-publisher");
-        assert_eq!(cfg.service_group, "computer-mcp");
+        assert_eq!(cfg.publisher_user, "zodex-publisher");
+        assert_eq!(cfg.service_group, "zodex");
         assert_eq!(cfg.publisher_branch_prefix, "agent");
         assert_eq!(cfg.publisher_max_bundle_bytes, 8 * 1024 * 1024);
         assert!(cfg.publisher_targets.is_empty());
@@ -210,14 +209,14 @@ max_output_chars = 200000
         assert_eq!(parsed.http_bind_port, Some(8080));
         assert_eq!(
             parsed.reader_private_key_path,
-            "/etc/computer-mcp/reader/private-key.pem"
+            "/etc/zodex/reader/private-key.pem"
         );
         assert_eq!(parsed.publisher_app_id, None);
-        assert_eq!(parsed.agent_user, "computer-mcp-agent");
-        assert_eq!(parsed.agent_home, "/home/computer-mcp-agent");
+        assert_eq!(parsed.agent_user, "zodex-agent");
+        assert_eq!(parsed.agent_home, "/home/zodex-agent");
         assert_eq!(parsed.default_workdir, "/workspace");
-        assert_eq!(parsed.publisher_user, "computer-mcp-publisher");
-        assert_eq!(parsed.service_group, "computer-mcp");
+        assert_eq!(parsed.publisher_user, "zodex-publisher");
+        assert_eq!(parsed.service_group, "zodex");
         assert_eq!(parsed.publisher_branch_prefix, "agent");
         assert!(parsed.publisher_targets.is_empty());
     }
@@ -226,8 +225,8 @@ max_output_chars = 200000
     fn publish_target_defaults_to_main_base() {
         let target: PublishTarget = toml::from_str(
             r#"
-id = "amxv/computer-mcp"
-repo = "amxv/computer-mcp"
+id = "amxv/zodex"
+repo = "amxv/zodex"
 installation_id = 123
 "#,
         )

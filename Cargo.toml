@@ -1,31 +1,23 @@
 [package]
-name = "computer-mcp"
+name = "zodex"
 version = "0.1.30"
 edition = "2024"
 
 [[bin]]
-name = "computer-mcp"
-path = "src/bin/computer-mcp.rs"
-
-[[bin]]
 name = "zodex"
-path = "src/bin/computer-mcp.rs"
+path = "src/bin/zodex.rs"
 
 [[bin]]
-name = "computer"
-path = "src/bin/computer.rs"
-
-[[bin]]
-name = "computer-mcpd"
-path = "src/bin/computer-mcpd.rs"
+name = "zodex-client"
+path = "src/bin/zodex-client.rs"
 
 [[bin]]
 name = "zodexd"
-path = "src/bin/computer-mcpd.rs"
+path = "src/bin/zodexd.rs"
 
 [[bin]]
-name = "computer-mcp-prd"
-path = "src/bin/computer-mcp-prd.rs"
+name = "zodex-prd"
+path = "src/bin/zodex-prd.rs"
 
 [dependencies]
 anyhow = "1.0"

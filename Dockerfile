@@ -29,10 +29,10 @@ COPY src ./src
 COPY tests ./tests
 
 RUN cargo build --locked --release \
-      --bin computer \
-      --bin computer-mcp \
-      --bin computer-mcpd \
-      --bin computer-mcp-prd
+      --bin zodex-client \
+      --bin zodex \
+      --bin zodexd \
+      --bin zodex-prd
 
 FROM ubuntu:22.04
 
@@ -44,8 +44,8 @@ ARG GO_VERSION=1.24.1
 ARG RUST_TOOLCHAIN=stable
 ARG TARGETARCH
 
-LABEL org.opencontainers.image.source="https://github.com/amxv/computer-mcp"
-LABEL org.opencontainers.image.description="Generic computer-mcp dev/runtime image for standard Linux VPS and container environments."
+LABEL org.opencontainers.image.source="https://github.com/amxv/zodex"
+LABEL org.opencontainers.image.description="Generic zodex dev/runtime image for standard Linux VPS and container environments."
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV CARGO_HOME=/usr/local/cargo
@@ -130,17 +130,17 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
     python3 -m pip install --no-cache-dir uv && \
     git lfs install --system && \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
-    mkdir -p /workspace /etc/computer-mcp /var/lib/computer-mcp
+    mkdir -p /workspace /etc/zodex /var/lib/zodex
 
-COPY --from=builder /workspace/target/release/computer /usr/local/bin/computer
-COPY --from=builder /workspace/target/release/computer-mcp /usr/local/bin/computer-mcp
-COPY --from=builder /workspace/target/release/computer-mcpd /usr/local/bin/computer-mcpd
-COPY --from=builder /workspace/target/release/computer-mcp-prd /usr/local/bin/computer-mcp-prd
+COPY --from=builder /workspace/target/release/zodex-client /usr/local/bin/zodex-client
+COPY --from=builder /workspace/target/release/zodex /usr/local/bin/zodex
+COPY --from=builder /workspace/target/release/zodexd /usr/local/bin/zodexd
+COPY --from=builder /workspace/target/release/zodex-prd /usr/local/bin/zodex-prd
 
-RUN chmod 0755 /usr/local/bin/computer \
-               /usr/local/bin/computer-mcp \
-               /usr/local/bin/computer-mcpd \
-               /usr/local/bin/computer-mcp-prd
+RUN chmod 0755 /usr/local/bin/zodex-client \
+               /usr/local/bin/zodex \
+               /usr/local/bin/zodexd \
+               /usr/local/bin/zodex-prd
 
 WORKDIR /workspace
 

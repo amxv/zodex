@@ -25,7 +25,7 @@ use crate::protocol::{
 };
 
 const POLL_INTERVAL_MS: u64 = 30;
-const TIMEOUT_NOTICE: &str = "\n[computer-mcpd] process timed out and was terminated\n";
+const TIMEOUT_NOTICE: &str = "\n[zodexd] process timed out and was terminated\n";
 const TERMINATE_GRACE_PERIOD_MS: u64 = 5_000;
 const EXIT_OUTPUT_DRAIN_RETRIES: usize = 4;
 const EXIT_OUTPUT_DRAIN_DELAY_MS: u64 = 10;
@@ -229,7 +229,7 @@ impl SessionRuntime {
 
         if input.kill_process.unwrap_or(false) {
             self.output
-                .append("\n[computer-mcpd] process terminated by kill_process\n")
+                .append("\n[zodexd] process terminated by kill_process\n")
                 .await;
             info!(
                 event = "session_killed",

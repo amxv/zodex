@@ -50,12 +50,12 @@ impl ServiceResponse {
 }
 
 #[derive(Clone)]
-pub struct ComputerService {
+pub struct ZodexService {
     config: Arc<Config>,
     sessions: Arc<SessionManager>,
 }
 
-impl ComputerService {
+impl ZodexService {
     pub fn new(config: Arc<Config>) -> Self {
         let sessions = Arc::new(SessionManager::new(
             config.max_sessions,
@@ -118,10 +118,10 @@ mod tests {
     use crate::config::Config;
     use crate::protocol::{ApplyPatchInput, CommandStatus, ExecCommandInput, WriteStdinInput};
 
-    use super::{ComputerService, ServiceRequest};
+    use super::{ServiceRequest, ZodexService};
 
-    fn test_service() -> ComputerService {
-        ComputerService::new(Arc::new(Config::default()))
+    fn test_service() -> ZodexService {
+        ZodexService::new(Arc::new(Config::default()))
     }
 
     #[tokio::test]

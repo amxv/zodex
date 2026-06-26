@@ -7,7 +7,7 @@ description: Use when operating Sprites from the CLI, including auth/context set
 
 Supported framing for this repo:
 - use `zodex` for operator-facing commands and product naming
-- treat legacy `computer-mcp` names as implementation details for service labels, paths, or compatibility flows only
+- use Sprite-first language and workflows throughout
 
 Use this skill when work involves understanding or operating Sprites with the `sprite` CLI.
 

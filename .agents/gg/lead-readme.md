@@ -17,7 +17,7 @@ You are the orchestrator, not an implementer.
 Worktree-first is the default.
 
 - Any delegated code-changing task should go to an agent with its own branch/worktree via `gg_team_manage.worktree_name`.
-- Use worktrees for Rust code, CLI changes, installer/script changes, tests, Docker/Runpod work, and nontrivial docs changes that are coupled to behavior.
+- Use worktrees for Rust code, CLI changes, installer/script changes, tests, container work, and nontrivial docs changes that are coupled to behavior.
 - Research, investigation, planning, review, and report-only agents do not get worktrees. They stay on `main`.
 - The no-worktree rule is based on task type, not preset.
 - Default to parallel.
@@ -56,9 +56,9 @@ For code-changing agents, require all of the following:
 - Use `gg_process_run` for long-running commands.
 - When choosing checks, match this repo's change surface:
   - Rust code in `src/`, `tests/`, `Cargo.toml`, or `Cargo.lock`: run targeted `cargo test` coverage for the touched area; use full `cargo test` if the change crosses binaries or shared logic.
-  - CLI/service-management changes in `src/bin/computer-mcp.rs`, daemon startup, config loading, or shared runtime logic: usually run `cargo test`, and add `cargo fmt --check` plus `cargo clippy --all-targets -- -D warnings` when behavior changed broadly.
+  - CLI/service-management changes in `src/bin/zodex.rs`, daemon startup, config loading, or shared runtime logic: usually run `cargo test`, and add `cargo fmt --check` plus `cargo clippy --all-targets -- -D warnings` when behavior changed broadly.
   - Installer and script changes in `scripts/`: run the relevant Rust script assertions, especially `cargo test --test install_script` and/or `cargo test --test github_app_scripts` when those flows or their documented commands changed.
-  - Runpod or container changes in `Dockerfile.runpod`, `docker/runpod-bootstrap.sh`, `docker/runpod-run.sh`, `scripts/runpod_api.py`, or `docs/runpod-*`: run the narrowest meaningful checks and explicitly state what could not be validated locally.
+  - Container-path changes: run the narrowest meaningful checks and explicitly state what could not be validated locally.
   - Docs-only changes: do not invent heavyweight checks; run only tests that actually cover the touched docs or commands when applicable.
 - DM me when done with:
   1. a short summary
@@ -128,7 +128,7 @@ The lead integrates from local `main`.
    - script/docs changes that affect installer or GitHub App command examples: `cargo test --test install_script` and/or `cargo test --test github_app_scripts`
    - normal Rust or shared-behavior change: `cargo test`
    - broad Rust/CLI/runtime change or any doubt: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`
-   - Runpod/container-path change: run the narrowest meaningful gate available locally, and do not claim full deployment validation unless someone actually verified the Runpod flow
+   - Container-path change: run the narrowest meaningful gate available locally, and do not claim full deployment validation unless someone actually verified the deployment flow
 9. If the gate passes:
    - `git push origin main`
 10. If the shipped implementation branch exists on the remote, delete it after the green push.
@@ -168,11 +168,8 @@ Integration rules:
 - If the user asks to keep a deployment or infra agent for iteration, run the gate but hold push and removal until the user explicitly approves shipping.
 - If a feature-supervisor is shipping inside its own feature branch/worktree, let it run phase-level checks, commits, and pushes there, but keep final integration to `main` with the lead by default.
 - Only become fully relay-only if the user explicitly wants the feature-supervisor to land directly to `main`.
-- If changes touch Runpod deployment paths, remember the project rules:
-  - do not hardcode live template IDs, pod IDs, public IPs, SSH ports, or real MCP URLs
-  - prefer `scripts/runpod_api.py` for current pod/template metadata
-  - verify public MCP reachability before claiming deployment is complete
-- For release or installer work, distinguish between binary-only updates and image-environment updates. Do not assume every change requires a new Runpod image.
+- If changes touch deployment automation, do not hardcode live IDs, public IPs, SSH ports, or real MCP URLs, and verify public MCP reachability before claiming deployment is complete.
+- For release or installer work, distinguish between binary-only updates and image-environment updates. Do not assume every change requires a new container image.
 - For major infra work, send the agent back for stress testing or deployment verification before shipping.
 
 ## Status Updates
@@ -184,4 +181,4 @@ Use a table when reporting team state:
 | Agent | Preset | Task | Status |
 |-------|--------|------|--------|
 | agent_1 | codex | Example CLI fix | Done |
-| agent_2 | research | Example Runpod investigation | Working |
+| agent_2 | research | Example deployment investigation | Working |

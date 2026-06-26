@@ -10,9 +10,9 @@ use crate::protocol::{
     ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
 };
 
-pub const COMPUTER_URL_ENV: &str = "COMPUTER_URL";
-pub const COMPUTER_KEY_ENV: &str = "COMPUTER_KEY";
-pub const COMPUTER_PROFILE_PATH_ENV: &str = "COMPUTER_PROFILE_PATH";
+pub const ZODEX_URL_ENV: &str = "ZODEX_URL";
+pub const ZODEX_KEY_ENV: &str = "ZODEX_KEY";
+pub const ZODEX_PROFILE_PATH_ENV: &str = "ZODEX_PROFILE_PATH";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionSource {
@@ -57,8 +57,8 @@ pub fn resolve_connection_precedence(
     }
 
     if env_url.is_some() || env_key.is_some() {
-        let url = env_url.ok_or_else(|| anyhow!("missing COMPUTER_URL in environment"))?;
-        let key = env_key.ok_or_else(|| anyhow!("missing COMPUTER_KEY in environment"))?;
+        let url = env_url.ok_or_else(|| anyhow!("missing ZODEX_URL in environment"))?;
+        let key = env_key.ok_or_else(|| anyhow!("missing ZODEX_KEY in environment"))?;
         return Ok(ResolvedConnection {
             url,
             key,
@@ -68,7 +68,7 @@ pub fn resolve_connection_precedence(
 
     let profile = profile.ok_or_else(|| {
         anyhow!(
-            "missing connection settings; provide --url/--key, COMPUTER_URL/COMPUTER_KEY, or run `computer connect`"
+            "missing connection settings; provide --url/--key, ZODEX_URL/ZODEX_KEY, or run `zodex-client connect`"
         )
     })?;
     Ok(ResolvedConnection {
@@ -87,8 +87,8 @@ pub fn resolve_operation_connection(
     resolve_connection_precedence(
         explicit_url,
         explicit_key,
-        std::env::var(COMPUTER_URL_ENV).ok(),
-        std::env::var(COMPUTER_KEY_ENV).ok(),
+        std::env::var(ZODEX_URL_ENV).ok(),
+        std::env::var(ZODEX_KEY_ENV).ok(),
         profile,
     )
 }
@@ -100,8 +100,8 @@ pub fn resolve_connect_connection(
     resolve_connection_precedence(
         explicit_url,
         explicit_key,
-        std::env::var(COMPUTER_URL_ENV).ok(),
-        std::env::var(COMPUTER_KEY_ENV).ok(),
+        std::env::var(ZODEX_URL_ENV).ok(),
+        std::env::var(ZODEX_KEY_ENV).ok(),
         None,
     )
 }
@@ -111,23 +111,25 @@ pub fn profile_path(path_override: Option<&Path>) -> Result<PathBuf> {
         return Ok(path.to_path_buf());
     }
 
-    if let Ok(path) = std::env::var(COMPUTER_PROFILE_PATH_ENV) {
+    if let Ok(path) = std::env::var(ZODEX_PROFILE_PATH_ENV) {
         return Ok(PathBuf::from(path));
     }
 
     if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(path).join("computer").join("profile.json"));
+        return Ok(PathBuf::from(path)
+            .join("zodex-client")
+            .join("profile.json"));
     }
     if let Ok(home) = std::env::var("HOME") {
         return Ok(PathBuf::from(home)
             .join(".config")
-            .join("computer")
+            .join("zodex-client")
             .join("profile.json"));
     }
 
     bail!(
         "unable to determine profile path; set HOME, XDG_CONFIG_HOME, or {}",
-        COMPUTER_PROFILE_PATH_ENV
+        ZODEX_PROFILE_PATH_ENV
     )
 }
 
@@ -165,14 +167,14 @@ pub fn delete_profile(path_override: Option<&Path>) -> Result<bool> {
 }
 
 #[derive(Clone)]
-pub struct ComputerClient {
+pub struct ZodexClient {
     http: reqwest::Client,
     insecure_http: reqwest::Client,
     url: String,
     key: String,
 }
 
-impl ComputerClient {
+impl ZodexClient {
     pub fn new(url: String, key: String) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -212,7 +214,7 @@ impl ComputerClient {
             Ok(response) => response,
             Err(err) if should_retry_insecure(&self.url, &err) => {
                 eprintln!(
-                    "warning: retrying {url} without TLS certificate verification for a self-signed computer-mcp server"
+                    "warning: retrying {url} without TLS certificate verification for a self-signed zodex server"
                 );
                 send_request(&self.insecure_http)
                     .await
@@ -261,7 +263,7 @@ impl ComputerClient {
             Ok(response) => response,
             Err(err) if should_retry_insecure(&self.url, &err) => {
                 eprintln!(
-                    "warning: retrying {url} without TLS certificate verification for a self-signed computer-mcp server"
+                    "warning: retrying {url} without TLS certificate verification for a self-signed zodex server"
                 );
                 send_request(&self.insecure_http)
                     .await
@@ -332,10 +334,10 @@ mod tests {
     use crate::config::Config;
     use crate::http_api::build_http_api_router;
     use crate::protocol::{CommandStatus, ExecCommandInput};
-    use crate::service::ComputerService;
+    use crate::service::ZodexService;
 
     use super::{
-        ComputerClient, ConnectionProfile, ConnectionSource, is_tls_certificate_error_message,
+        ConnectionProfile, ConnectionSource, ZodexClient, is_tls_certificate_error_message,
         resolve_connection_precedence, save_profile,
     };
 
@@ -357,12 +359,12 @@ mod tests {
     async fn verify_connection_rejects_unauthorized_target() {
         crate::install_rustls_crypto_provider();
 
-        let api_key = "phase4-client-key".to_string();
+        let api_key = "client-auth-key".to_string();
         let config = Arc::new(Config {
             api_key,
             ..Config::default()
         });
-        let service = ComputerService::new(config.clone());
+        let service = ZodexService::new(config.clone());
         let app = build_http_api_router(config, service);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -378,7 +380,7 @@ mod tests {
                 .expect("server should run");
         });
 
-        let client = ComputerClient::new(format!("http://{addr}"), "wrong-key".to_string());
+        let client = ZodexClient::new(format!("http://{addr}"), "wrong-key".to_string());
         let err = client
             .verify_connection()
             .await
@@ -451,20 +453,17 @@ mod tests {
             None,
         )
         .expect_err("missing env key should error");
-        assert!(
-            err.to_string()
-                .contains("missing COMPUTER_KEY in environment")
-        );
+        assert!(err.to_string().contains("missing ZODEX_KEY in environment"));
 
         let err = resolve_connection_precedence(None, None, None, None, None)
             .expect_err("missing all sources should error");
-        assert!(err.to_string().contains("computer connect"));
+        assert!(err.to_string().contains("zodex-client connect"));
     }
 
     #[test]
     fn connect_disconnect_profile_persistence_round_trip() {
         let dir = tempdir().expect("tempdir");
-        let profile_path = dir.path().join("computer-profile.json");
+        let profile_path = dir.path().join("zodex-client-profile.json");
         let profile = ConnectionProfile {
             url: "http://saved-profile".to_string(),
             key: "saved-key".to_string(),
@@ -490,12 +489,12 @@ mod tests {
     async fn client_exec_command_smoke_round_trip_against_http_api() {
         crate::install_rustls_crypto_provider();
 
-        let api_key = "phase4-client-key".to_string();
+        let api_key = "client-smoke-key".to_string();
         let config = Arc::new(Config {
             api_key: api_key.clone(),
             ..Config::default()
         });
-        let service = ComputerService::new(config.clone());
+        let service = ZodexService::new(config.clone());
         let app = build_http_api_router(config, service);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -511,7 +510,7 @@ mod tests {
                 .expect("server should run");
         });
 
-        let client = ComputerClient::new(format!("http://{addr}"), api_key);
+        let client = ZodexClient::new(format!("http://{addr}"), api_key);
         let output = client
             .exec_command(ExecCommandInput {
                 cmd: "echo client-smoke".to_string(),

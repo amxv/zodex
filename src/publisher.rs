@@ -24,9 +24,9 @@ const SOCKET_DIR_MODE: u32 = 0o750;
 const SOCKET_MODE: u32 = 0o660;
 const ASKPASS_MODE: u32 = 0o700;
 const MAX_SOCKET_REQUEST_BYTES: usize = 16 * 1024 * 1024;
-const IMPORTED_REF: &str = "refs/heads/__computer_mcp_imported";
+const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
 const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
-const DEFAULT_USER_AGENT: &str = "computer-mcp-prd/0.1";
+const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";
 
 fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn ensure_publisher_socket_parent_dir_sets_group_traversable_mode() {
         let tempdir = tempdir().expect("tempdir");
-        let socket_path = tempdir.path().join("publisher/run/computer-mcp-prd.sock");
+        let socket_path = tempdir.path().join("publisher/run/zodex-prd.sock");
 
         ensure_publisher_socket_parent_dir(&socket_path).expect("socket parent dir");
 

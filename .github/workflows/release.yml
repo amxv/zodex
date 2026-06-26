@@ -31,16 +31,18 @@ jobs:
       - name: Build release binaries
         run: |
           cargo build --locked --release --target "${{ matrix.target }}" \
+            --bin zodex-client \
             --bin zodex \
             --bin zodexd \
-            --bin computer-mcp-prd
+            --bin zodex-prd
 
       - name: Package release archive
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
+          cp "target/${{ matrix.target }}/release/zodex-client" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodexd" "dist/${{ matrix.archive_name }}/"
-          cp "target/${{ matrix.target }}/release/computer-mcp-prd" "dist/${{ matrix.archive_name }}/"
+          cp "target/${{ matrix.target }}/release/zodex-prd" "dist/${{ matrix.archive_name }}/"
           tar -C dist -czf "dist/${{ matrix.archive_name }}.tar.gz" "${{ matrix.archive_name }}"
           (
             cd dist
