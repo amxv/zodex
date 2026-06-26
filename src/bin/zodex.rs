@@ -1656,8 +1656,6 @@ sudo install -d -m 0755 /usr/local/bin
 sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
 sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
 sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
-sudo ln -sf /usr/local/bin/zodex /usr/local/bin/zodex
-sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/zodexd
 
 sudo env \
   ZODEX_HTTP_BIND_PORT=8080 \
@@ -1806,8 +1804,6 @@ sudo install -d -m 0755 /usr/local/bin
 sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
 sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
 sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
-sudo ln -sf /usr/local/bin/zodex /usr/local/bin/zodex
-sudo ln -sf /usr/local/bin/zodexd /usr/local/bin/zodexd
 
 sudo /usr/local/bin/zodex --config "$CFG" install
 
