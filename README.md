@@ -92,7 +92,9 @@ Useful commands:
 ```bash
 zodex proxy inspect --sprite <sprite>
 zodex proxy verify-origin --sprite <sprite>
-zodex proxy deploy --sprite <sprite>
+cd proxy/cloudflare-worker
+# set vars.SPRITE_ORIGIN in wrangler.jsonc first
+npx wrangler deploy
 ```
 
 Treat the proxy or its custom domain as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the MCP clients you care about.

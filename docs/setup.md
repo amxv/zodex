@@ -78,7 +78,9 @@ Use the proxy as the default public MCP front door:
 ```bash
 zodex proxy inspect --sprite <sprite>
 zodex proxy verify-origin --sprite <sprite>
-zodex proxy deploy --sprite <sprite>
+cd proxy/cloudflare-worker
+# set vars.SPRITE_ORIGIN in wrangler.jsonc first
+npx wrangler deploy
 ```
 
 The proxy normalizes `/mcp`, warms cold Sprites, retries transient edge failures, and preserves streaming MCP responses.

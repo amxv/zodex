@@ -1075,7 +1075,8 @@ fn inspect_proxy_component(
             println!("hint: {err}");
         }
     }
-    println!("deploy-command: zodex proxy deploy --sprite <sprite>");
+    println!("deploy-command: cd proxy/cloudflare-worker && npx wrangler deploy");
+    println!("deploy-config: set vars.SPRITE_ORIGIN in wrangler.jsonc first");
     println!("verify-command: zodex proxy verify-origin --sprite <sprite>");
     Ok(())
 }

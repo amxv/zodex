@@ -10,7 +10,8 @@ fn setup_doc_describes_sprite_first_zodex_flow() {
         std::fs::read_to_string(repo_root().join("docs").join("setup.md")).expect("read setup doc");
 
     assert!(setup.contains("zodex sprite setup"));
-    assert!(setup.contains("zodex proxy deploy"));
+    assert!(setup.contains("npx wrangler deploy"));
+    assert!(setup.contains("vars.SPRITE_ORIGIN"));
     assert!(setup.contains("zodex github grant-push"));
     assert!(setup.contains("zodex github revoke-push"));
     assert!(setup.contains("read-only GitHub access"));

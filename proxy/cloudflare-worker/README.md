@@ -19,16 +19,16 @@ It fronts a Sprite-hosted `zodexd` deployment with a stable public MCP edge when
 
 ## Deploy
 
-Use the Rust operator CLI so the Sprite origin is resolved intentionally instead of being copied into source:
+Deploy the Worker directly with Wrangler from this directory:
 
 ```bash
-zodex proxy deploy --sprite <sprite>
+cd proxy/cloudflare-worker
 ```
 
-If you already know the public Sprite URL, pass it directly:
+Set `vars.SPRITE_ORIGIN` in `wrangler.jsonc` to the public Sprite URL you want to front, then deploy:
 
 ```bash
-zodex proxy deploy --origin https://example.sprites.app
+npx wrangler deploy
 ```
 
 ## Inspect
