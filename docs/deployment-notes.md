@@ -2,6 +2,25 @@
 
 This file holds the details that were intentionally kept out of the main README.
 
+## Proxy Component
+
+For Sprite deployments, the Cloudflare Worker in [proxy/cloudflare-worker](../proxy/cloudflare-worker) is part of the supported `zodex` product shape.
+
+Its responsibilities are explicit:
+
+- normalize `/mcp` to the Sprite origin's working `/mcp/` upstream path
+- warm a cold Sprite before proxying
+- retry transient cold-start and edge failures
+- preserve streamed MCP responses
+
+Useful commands:
+
+- `zodex proxy inspect --sprite <sprite>`
+- `zodex proxy verify-origin --sprite <sprite>`
+- `zodex proxy deploy --sprite <sprite>`
+
+Treat the proxy as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the actual MCP clients in use.
+
 ## Default Paths And Defaults
 
 These are the main defaults:
@@ -59,6 +78,8 @@ On Sprite-like hosts:
 - prefer `zodex sprite upgrade` as the normal operator upgrade path
 - `zodex sprite setup` and `zodex sprite upgrade` upload the local `zodex` runtime binaries and run the remote Rust install path instead of relying on the legacy shell installer
 - register Sprite Services with `zodex sprite sync` instead of relying on detached process mode
+- prefer `zodex proxy verify-origin` before assuming the raw Sprite URL is safe to expose directly to MCP clients
+- deploy or update the supported Worker with `zodex proxy deploy --sprite <sprite>` when you need a stable public MCP edge
 - if Sprite Services drift into stale "running" state, use `zodex sprite sync --force-recreate --sprite <sprite> [--org <org>]` from the control-plane side
 - treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
 - `computer-mcp upgrade` and `computer-mcp restart` in guest only cover already-healthy Sprite-managed processes; they are not the primary control-plane upgrade interface

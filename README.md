@@ -1,13 +1,13 @@
 # zodex
 
-Remote coding MCP server for Linux VPS and Sprite deployment.
+Remote coding runtime and operator CLI for Linux VPS and Sprite deployment.
 
 Phase 1 rename note:
 - use `zodex` for the operator CLI
 - use `zodexd` for the daemon
 - legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints still work during the compatibility window
 
-This README is the fast path for a fresh VPS.
+This README is the fast path for a fresh VPS or Sprite-backed `zodex` deployment.
 
 Agents doing a full operator-led setup should read the runbook that matches the target environment first:
 
@@ -25,6 +25,27 @@ For extra detail, see:
 If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
 If the target host is Sprites, use [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md).
 The main README below is the standard Linux VPS path.
+
+## Proxy Front Door
+
+For Sprite deployments, the Cloudflare Worker under [proxy/cloudflare-worker](proxy/cloudflare-worker) is a supported `zodex` component, not an incidental add-on.
+
+Its job is to:
+
+- normalize `/mcp` to the Sprite origin's working `/mcp/` path
+- warm a cold Sprite before proxying
+- retry transient cold-start and edge failures
+- preserve streaming MCP responses
+
+Useful commands:
+
+```bash
+zodex proxy inspect --sprite <sprite>
+zodex proxy verify-origin --sprite <sprite>
+zodex proxy deploy --sprite <sprite>
+```
+
+Use the proxy or its custom domain as the default MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the actual MCP client in use.
 
 Container images:
 - `ghcr.io/amxv/computer-mcp` is the generic image built from [Dockerfile](Dockerfile)

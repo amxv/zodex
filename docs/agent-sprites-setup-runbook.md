@@ -1,6 +1,6 @@
-# computer-mcp Agent Sprites Setup Runbook
+# zodex Agent Sprites Setup Runbook
 
-This runbook is for an agent helping a human set up `computer-mcp` on a Sprite.
+This runbook is for an agent helping a human set up `zodex` on a Sprite.
 
 Use this when the target environment is Sprites (`sprite` CLI), not a traditional VPS over SSH.
 
@@ -11,19 +11,20 @@ For Runpod-specific rollout behavior, use [../.agents/skills/runpod-deployment/S
 
 When this runbook is complete:
 
-- latest `computer-mcp` is installed in the target Sprite
+- latest `zodex` runtime is installed in the target Sprite
 - reader + publisher GitHub App auth is configured
 - publisher and MCP daemons are registered as Sprite Services
 - the coding agent starts in a writable non-root workspace (`/workspace`)
 - the coding agent can commit immediately with the default global Git identity unless the operator overrides it
 - the coding agent can `git clone` private GitHub repos over HTTPS through the reader app
 - MCP endpoint is reachable through the Sprite URL
+- proxy deployment can be managed from the same repo when a stable public MCP front door is needed
 
 ## Why Sprites Need A Slightly Different Path
 
 Sprites are Linux boxes, but ad hoc processes do not survive Sprite sleep and wake cycles.
 
-For `computer-mcp`, the durable deployment model on Sprites is:
+For `zodex`, the durable deployment model on Sprites is:
 
 - non-root local service users inside the Sprite
 - Sprite Services as the platform lifecycle owner
@@ -100,6 +101,16 @@ What `zodex sprite setup` does:
 13. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
 14. prints MCP URL hint based on Sprite URL host
 
+If the Sprite URL needs a more reliable public MCP front door, manage the supported Cloudflare Worker from this repo:
+
+```bash
+zodex proxy inspect --sprite <sprite>
+zodex proxy verify-origin --sprite <sprite>
+zodex proxy deploy --sprite <sprite>
+```
+
+The proxy exists to preserve MCP streaming, normalize `/mcp` to `/mcp/` when the raw Sprite edge disagrees, and recover cold wakes with warmup plus retries.
+
 ## Routine Upgrades
 
 For an already-configured Sprite, prefer the Rust control-plane upgrade flow:
@@ -155,6 +166,9 @@ Useful commands:
 - `zodex sprite sync --sprite <sprite> [--org <org-name>] --force-recreate`
 - `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
 - `zodex sprite logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
+- `zodex proxy inspect --sprite <sprite>`
+- `zodex proxy verify-origin --sprite <sprite>`
+- `zodex proxy deploy --sprite <sprite>`
 - `zodex github grant-push --sprite <sprite> --repo <owner/repo>`
 - `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 

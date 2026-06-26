@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -29,6 +29,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
@@ -65,6 +66,11 @@ const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
 const SPRITE_REMOTE_UPLOAD_CLI_PATH: &str = "/tmp/zodex";
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/computer-mcp-prd";
+const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
+const PROXY_COMPONENT_README: &str = "proxy/cloudflare-worker/README.md";
+const PROXY_WORKER_ENTRYPOINT: &str = "proxy/cloudflare-worker/src/index.js";
+const PROXY_WRANGLER_TEMPLATE_PATH: &str = "proxy/cloudflare-worker/wrangler.jsonc";
+const PROXY_SPRITE_ORIGIN_PLACEHOLDER: &str = "__SPRITE_ORIGIN__";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceManager {
@@ -132,6 +138,10 @@ enum Commands {
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
+    },
+    Proxy {
+        #[command(subcommand)]
+        command: ProxyCommand,
     },
     Github {
         #[command(subcommand)]
@@ -231,6 +241,37 @@ enum SpriteCommand {
         org: Option<String>,
         #[arg(long)]
         url_auth: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProxyCommand {
+    Inspect {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        origin: Option<String>,
+    },
+    #[command(alias = "update")]
+    Deploy {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        origin: Option<String>,
+        #[arg(long, default_value_t = false)]
+        skip_verify_origin: bool,
+    },
+    VerifyOrigin {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        origin: Option<String>,
     },
 }
 
@@ -547,6 +588,35 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Proxy { command } => match command {
+            ProxyCommand::Inspect {
+                sprite,
+                org,
+                origin,
+            } => {
+                inspect_proxy_component(sprite.as_deref(), org.as_deref(), origin.as_deref())?;
+            }
+            ProxyCommand::Deploy {
+                sprite,
+                org,
+                origin,
+                skip_verify_origin,
+            } => {
+                deploy_proxy_component(
+                    sprite.as_deref(),
+                    org.as_deref(),
+                    origin.as_deref(),
+                    skip_verify_origin,
+                )?;
+            }
+            ProxyCommand::VerifyOrigin {
+                sprite,
+                org,
+                origin,
+            } => {
+                verify_proxy_origin_command(sprite.as_deref(), org.as_deref(), origin.as_deref())?;
+            }
+        },
         Commands::Github { command } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
             match command {
@@ -815,6 +885,27 @@ struct SpriteUrlInfo {
     auth: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProxyOriginResolution {
+    origin: String,
+    sprite_url_auth: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProxyDeployCommandSpec {
+    program: String,
+    base_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProxyOriginCheck {
+    origin: String,
+    sprite_url_auth: Option<String>,
+    health_status: u16,
+    mcp_status: u16,
+    mcp_slash_status: u16,
+}
+
 fn validate_sprite_url_auth(url_auth: &str) -> Result<()> {
     if matches!(url_auth, "sprite" | "public") {
         Ok(())
@@ -879,6 +970,299 @@ fn set_sprite_url_auth(sprite: &str, org: Option<&str>, url_auth: &str) -> Resul
     ]);
     run_command_capture("sprite", &args)?;
     Ok(())
+}
+
+fn proxy_component_dir() -> PathBuf {
+    manifest_dir().join(PROXY_COMPONENT_DIR)
+}
+
+fn proxy_component_readme_path() -> PathBuf {
+    manifest_dir().join(PROXY_COMPONENT_README)
+}
+
+fn proxy_worker_entrypoint_path() -> PathBuf {
+    manifest_dir().join(PROXY_WORKER_ENTRYPOINT)
+}
+
+fn proxy_wrangler_template_path() -> PathBuf {
+    manifest_dir().join(PROXY_WRANGLER_TEMPLATE_PATH)
+}
+
+fn normalize_proxy_origin(origin: &str) -> Result<String> {
+    let parsed = Url::parse(origin)
+        .with_context(|| format!("failed to parse proxy origin URL `{origin}`"))?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        bail!("proxy origin must use http or https");
+    }
+    if parsed.host_str().is_none() {
+        bail!("proxy origin must include a host");
+    }
+    if parsed.path() != "/" && !parsed.path().is_empty() {
+        bail!("proxy origin must not include a path; pass the Sprite base URL only");
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        bail!("proxy origin must not include a query string or fragment");
+    }
+
+    let mut normalized = parsed;
+    normalized.set_path("");
+    Ok(normalized.to_string().trim_end_matches('/').to_string())
+}
+
+fn resolve_proxy_origin(
+    sprite: Option<&str>,
+    org: Option<&str>,
+    origin: Option<&str>,
+) -> Result<ProxyOriginResolution> {
+    if let Some(origin) = origin {
+        return Ok(ProxyOriginResolution {
+            origin: normalize_proxy_origin(origin)?,
+            sprite_url_auth: None,
+        });
+    }
+
+    let sprite = sprite.ok_or_else(|| {
+        anyhow!(
+            "pass either `--origin <sprite-url>` or `--sprite <name>` to resolve the proxy target"
+        )
+    })?;
+    let info = sprite_url_info(sprite, org)?;
+    let url = info
+        .url
+        .ok_or_else(|| anyhow!("sprite URL is not available for {sprite}"))?;
+    Ok(ProxyOriginResolution {
+        origin: normalize_proxy_origin(&url)?,
+        sprite_url_auth: info.auth,
+    })
+}
+
+fn inspect_proxy_component(
+    sprite: Option<&str>,
+    org: Option<&str>,
+    origin: Option<&str>,
+) -> Result<()> {
+    let resolved_origin = resolve_proxy_origin(sprite, org, origin).ok();
+    println!("component: zodex proxy");
+    println!("directory: {}", proxy_component_dir().display());
+    println!("entrypoint: {}", proxy_worker_entrypoint_path().display());
+    println!(
+        "wrangler-config-template: {}",
+        proxy_wrangler_template_path().display()
+    );
+    println!("readme: {}", proxy_component_readme_path().display());
+    println!("routes: /health, /mcp, /mcp/");
+    println!(
+        "responsibilities: path-normalization, cold-wake-warmup, retry, streaming-preservation"
+    );
+    match resolved_origin {
+        Some(resolution) => {
+            println!("resolved-sprite-origin: {}", resolution.origin);
+            if let Some(auth) = resolution.sprite_url_auth {
+                println!("sprite-url-auth: {auth}");
+            }
+        }
+        None => {
+            println!("resolved-sprite-origin: <pass --sprite or --origin to resolve>");
+        }
+    }
+
+    match resolve_proxy_deploy_command() {
+        Ok(command) => {
+            println!(
+                "deploy-runner: {} {}",
+                command.program,
+                command.base_args.join(" ")
+            );
+        }
+        Err(err) => {
+            println!("deploy-runner: unavailable");
+            println!("hint: {err}");
+        }
+    }
+    println!("deploy-command: zodex proxy deploy --sprite <sprite>");
+    println!("verify-command: zodex proxy verify-origin --sprite <sprite>");
+    Ok(())
+}
+
+fn deploy_proxy_component(
+    sprite: Option<&str>,
+    org: Option<&str>,
+    origin: Option<&str>,
+    skip_verify_origin: bool,
+) -> Result<()> {
+    let resolution = resolve_proxy_origin(sprite, org, origin)?;
+    ensure_proxy_origin_is_publicly_routable(&resolution)?;
+
+    if !skip_verify_origin {
+        let verification = verify_proxy_origin(&resolution)?;
+        print_proxy_origin_check(&verification);
+    }
+
+    let template = fs::read_to_string(proxy_wrangler_template_path()).with_context(|| {
+        format!(
+            "failed to read {}",
+            proxy_wrangler_template_path().display()
+        )
+    })?;
+    let rendered_config = render_proxy_wrangler_config(&template, &resolution.origin)?;
+    let mut temp_config = NamedTempFile::new_in(proxy_component_dir())
+        .context("failed to create temporary Wrangler config")?;
+    temp_config
+        .write_all(rendered_config.as_bytes())
+        .context("failed to write temporary Wrangler config")?;
+
+    let deploy = resolve_proxy_deploy_command()?;
+    let mut args = deploy.base_args.clone();
+    args.extend([
+        "deploy".to_string(),
+        "--config".to_string(),
+        temp_config.path().display().to_string(),
+    ]);
+
+    let output = run_command_capture_with(&deploy.program, &args, Some(&proxy_component_dir()))?;
+    print!("{output}");
+    println!("proxy-origin: {}", resolution.origin);
+    println!("proxy-deploy: complete");
+    Ok(())
+}
+
+fn render_proxy_wrangler_config(template: &str, origin: &str) -> Result<String> {
+    if !template.contains(PROXY_SPRITE_ORIGIN_PLACEHOLDER) {
+        bail!(
+            "proxy wrangler template is missing placeholder {}",
+            PROXY_SPRITE_ORIGIN_PLACEHOLDER
+        );
+    }
+    Ok(template.replace(PROXY_SPRITE_ORIGIN_PLACEHOLDER, origin))
+}
+
+fn verify_proxy_origin_command(
+    sprite: Option<&str>,
+    org: Option<&str>,
+    origin: Option<&str>,
+) -> Result<()> {
+    let resolution = resolve_proxy_origin(sprite, org, origin)?;
+    let verification = verify_proxy_origin(&resolution)?;
+    print_proxy_origin_check(&verification);
+    Ok(())
+}
+
+fn ensure_proxy_origin_is_publicly_routable(resolution: &ProxyOriginResolution) -> Result<()> {
+    if let Some(auth) = resolution.sprite_url_auth.as_deref()
+        && auth != "public"
+    {
+        bail!(
+            "sprite URL auth is `{auth}` for {}. Proxy deploy expects a publicly reachable Sprite URL. Set the Sprite URL auth to `public` before deploying the Worker.",
+            resolution.origin
+        );
+    }
+    Ok(())
+}
+
+fn verify_proxy_origin(resolution: &ProxyOriginResolution) -> Result<ProxyOriginCheck> {
+    let base = resolution.origin.trim_end_matches('/');
+    let health_status = probe_http_status(&format!("{base}/health"))?;
+    let mcp_status = probe_http_status(&format!("{base}/mcp"))?;
+    let mcp_slash_status = probe_http_status(&format!("{base}/mcp/"))?;
+
+    if health_status != 200 {
+        bail!("raw Sprite origin health probe returned HTTP {health_status} for {base}/health");
+    }
+    if !proxy_mcp_status_looks_healthy(mcp_status) {
+        bail!("raw Sprite origin `/mcp` probe returned HTTP {mcp_status}; expected 200 or 401");
+    }
+    if !proxy_mcp_status_looks_healthy(mcp_slash_status) {
+        bail!(
+            "raw Sprite origin `/mcp/` probe returned HTTP {mcp_slash_status}; expected 200 or 401"
+        );
+    }
+
+    Ok(ProxyOriginCheck {
+        origin: resolution.origin.clone(),
+        sprite_url_auth: resolution.sprite_url_auth.clone(),
+        health_status,
+        mcp_status,
+        mcp_slash_status,
+    })
+}
+
+fn print_proxy_origin_check(check: &ProxyOriginCheck) {
+    println!("origin: {}", check.origin);
+    if let Some(auth) = check.sprite_url_auth.as_deref() {
+        println!("sprite-url-auth: {auth}");
+    }
+    println!("health-status: {}", check.health_status);
+    println!("mcp-status: {}", check.mcp_status);
+    println!("mcp-slash-status: {}", check.mcp_slash_status);
+    if check.mcp_status != check.mcp_slash_status {
+        println!(
+            "route-note: `/mcp` and `/mcp/` differ at the raw Sprite edge; keep the proxy as the default front door"
+        );
+    } else {
+        println!("route-note: raw Sprite `/mcp` and `/mcp/` matched on this probe");
+    }
+    println!("proxy-origin-check: ok");
+}
+
+fn proxy_mcp_status_looks_healthy(status: u16) -> bool {
+    matches!(status, 200 | 401)
+}
+
+fn probe_http_status(url: &str) -> Result<u16> {
+    let raw = run_command_capture(
+        "curl",
+        &[
+            "-sS".to_string(),
+            "-o".to_string(),
+            "/dev/null".to_string(),
+            "-w".to_string(),
+            "%{http_code}".to_string(),
+            "--max-time".to_string(),
+            "20".to_string(),
+            "--retry".to_string(),
+            "2".to_string(),
+            "--retry-delay".to_string(),
+            "2".to_string(),
+            "--retry-all-errors".to_string(),
+            url.to_string(),
+        ],
+    )?;
+    raw.trim()
+        .parse::<u16>()
+        .with_context(|| format!("failed to parse HTTP status from curl probe for {url}: {raw}"))
+}
+
+fn resolve_proxy_deploy_command() -> Result<ProxyDeployCommandSpec> {
+    let local_wrangler = proxy_component_dir().join("node_modules/.bin/wrangler");
+    if local_wrangler.is_file() {
+        return Ok(ProxyDeployCommandSpec {
+            program: local_wrangler.display().to_string(),
+            base_args: Vec::new(),
+        });
+    }
+    if command_exists("wrangler") {
+        return Ok(ProxyDeployCommandSpec {
+            program: "wrangler".to_string(),
+            base_args: Vec::new(),
+        });
+    }
+    if command_exists("bunx") {
+        return Ok(ProxyDeployCommandSpec {
+            program: "bunx".to_string(),
+            base_args: vec!["wrangler".to_string()],
+        });
+    }
+    if command_exists("npx") {
+        return Ok(ProxyDeployCommandSpec {
+            program: "npx".to_string(),
+            base_args: vec!["--yes".to_string(), "wrangler".to_string()],
+        });
+    }
+
+    bail!(
+        "Wrangler was not found. Install it in `{}` or make `wrangler` available on PATH.",
+        proxy_component_dir().display()
+    )
 }
 
 fn derive_remote_target_repo(
@@ -3379,8 +3763,17 @@ fn run_journalctl(args: &[String]) -> Result<String> {
 }
 
 fn run_command_capture(program: &str, args: &[String]) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
+    run_command_capture_with(program, args, None)
+}
+
+fn run_command_capture_with(program: &str, args: &[String], cwd: Option<&Path>) -> Result<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = command
         .output()
         .with_context(|| format!("failed to run {program}"))?;
 
@@ -3735,8 +4128,9 @@ mod tests {
         credential_url_host, credential_url_path, credential_url_protocol,
         ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
         generate_self_signed_certificate, git_credential_request_repo,
-        git_credential_request_targets_github, normalize_github_repo, parse_git_credential_request,
-        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
+        git_credential_request_targets_github, normalize_github_repo, normalize_proxy_origin,
+        parse_git_credential_request, parse_systemctl_show, process_log_path, process_pid_path,
+        proxy_mcp_status_looks_healthy, read_tail_lines, render_proxy_wrangler_config,
         render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
         shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
@@ -3848,6 +4242,38 @@ mod tests {
     #[test]
     fn shell_escape_single_quotes_handles_embedded_quotes() {
         assert_eq!(shell_escape_single_quotes("v0.1.5's"), "'v0.1.5'\"'\"'s'");
+    }
+
+    #[test]
+    fn normalize_proxy_origin_strips_trailing_slash() {
+        let origin =
+            normalize_proxy_origin("https://computer.example.sprites.app/").expect("origin");
+        assert_eq!(origin, "https://computer.example.sprites.app");
+    }
+
+    #[test]
+    fn normalize_proxy_origin_rejects_paths() {
+        let err =
+            normalize_proxy_origin("https://computer.example.sprites.app/mcp").expect_err("path");
+        assert!(err.to_string().contains("must not include a path"));
+    }
+
+    #[test]
+    fn render_proxy_wrangler_config_replaces_origin_placeholder() {
+        let rendered = render_proxy_wrangler_config(
+            r#"{"vars":{"SPRITE_ORIGIN":"__SPRITE_ORIGIN__"}}"#,
+            "https://computer.example.sprites.app",
+        )
+        .expect("render");
+        assert!(rendered.contains("https://computer.example.sprites.app"));
+        assert!(!rendered.contains("__SPRITE_ORIGIN__"));
+    }
+
+    #[test]
+    fn proxy_mcp_status_looks_healthy_accepts_auth_or_success() {
+        assert!(proxy_mcp_status_looks_healthy(200));
+        assert!(proxy_mcp_status_looks_healthy(401));
+        assert!(!proxy_mcp_status_looks_healthy(404));
     }
 
     #[test]
