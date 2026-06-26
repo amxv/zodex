@@ -70,11 +70,11 @@ That model is good for “agent opens PRs without ever holding a write credentia
 The approved new direction is:
 
 - keep the project in Rust for now
-- do not do a full Go rewrite
 - standardize on a simpler, operator-friendly GitHub write model
 - keep read access available by default
 - make push access temporary, repo-specific, and easy to toggle on/off from the operator’s local machine
 - rename the project and CLI to `zodex`
+- end with a clean repo, clear docs, and no conflicting operator or agent instructions
 
 ### Approved GitHub access model
 
@@ -106,6 +106,7 @@ The target product should consist of:
 - a Rust daemon on the Sprite for tool execution
 - a Rust local operator CLI for install, upgrade, service sync, health checks, and credential grants
 - the Cloudflare Worker in the same repo as a supported deployable component
+- a clean documentation and skills surface for operators and agents using Sprites
 
 ### Ideal naming
 
@@ -162,6 +163,27 @@ Target operator flow:
 
 No GitHub settings editing, no manual key copy/paste, no ad hoc token handling during normal usage.
 
+### Ideal documentation and repo state
+
+The final repo should read like a new product, not an accretion of migrations.
+
+It should have:
+
+- a rewritten top-level README for `zodex`
+- one clear quickstart for Sprites.dev
+- one one-time GitHub App setup runbook
+- one operator guide for day-to-day usage
+- one agent-facing guide that explains the access model and expected workflow
+- updated skill and startup docs aligned to the Sprite-first workflow
+- legacy and conflicting docs removed
+
+It should not have:
+
+- multiple competing setup paths with unclear status
+- outdated `computer-mcp` framing in the main docs
+- stale Runpod-specific instructions if Runpod is no longer a supported primary path
+- conflicting agent guidance between README, runbooks, skills, and startup docs
+
 ### Ideal proxy stance
 
 The Cloudflare Worker should live in the same repo and be treated as part of the system.
@@ -174,6 +196,10 @@ Reason:
   - public-edge reliability for MCP clients
 
 The ideal system does not pretend the proxy is incidental.
+
+Current proxy repo on disk:
+
+- `/Users/ashray/code/amxv/computer-mcp-cloudflare-proxy`
 
 ## Cross-provider requirements
 
@@ -188,6 +214,7 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - write access is disabled by default
 - any temporary write grant is repo-scoped and observable
 - revocation removes Sprite-side credential material
+- the default docs describe the Sprite-first workflow and the current access model accurately
 - self-signed TLS and Sprite public/proxy paths remain supported during migration
 
 ## Plan Phases
@@ -205,10 +232,12 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - `Cargo.toml`
 - `README.md`
 - `docs/github-app-agent-auth.md`
+- agent startup and skill entrypoints that define current guidance
 
 ### What to do
 
 - Introduce `zodex` in binaries, help text, docs, and operator-facing commands.
+- Audit existing agent/operator instructions that will eventually need cleanup or consolidation.
 - Finalize binary mapping:
   - `zodex` for the operator CLI
   - `zodexd` for the daemon
@@ -284,6 +313,7 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - `scripts/sprite-services.sh`
 - `docs/agent-sprites-setup-runbook.md`
 - `docs/deployment-notes.md`
+- agent startup docs and Sprite-related skills/instructions
 
 ### What to do
 
@@ -307,6 +337,11 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - Keep locally minted repo-scoped installation tokens as a fallback.
 - Keep the current publisher-daemon PR flow only as a legacy or PR-only mode.
 - Keep shell scripts only as compatibility wrappers if needed.
+- Define the final operator-facing permission flow clearly enough that docs can be rewritten against it:
+  - how read access is set up
+  - how push access is granted
+  - how push access is revoked
+  - how read access can be restricted or disabled if needed
 
 ### Validation strategy
 
@@ -333,7 +368,8 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 
 ### Files to read before starting
 
-- adjacent local proxy repo implementation currently used operationally
+- adjacent local proxy repo implementation currently used operationally:
+  - `/Users/ashray/code/amxv/computer-mcp-cloudflare-proxy`
 - `src/server.rs`
 - Sprite deployment commands and route assumptions in the Rust CLI
 
@@ -365,13 +401,6 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - verify cold-start health through Worker
 - verify MCP initialize path through Worker
 - verify custom-domain route if configured
-
-### Validation strategy
-
-- verify raw Sprite path behavior
-- verify Worker path behavior
-- verify cold-start health through the Worker
-- verify MCP initialize through the Worker
 - install and upgrade from both fresh and existing setups
 - verify old commands either continue to function temporarily or fail with a clear migration message
 - verify docs and examples only reference supported names
@@ -421,9 +450,76 @@ These requirements must remain true across local CLI, HTTP API, MCP, and Sprite 
 - Risk: some users still prefer PR-only isolation
 - Fallback: retain an explicit legacy mode for PR-only publishing
 
+## Phase 6: Final Repo Cleanup, Docs Rewrite, And Repository Rename
+
+### Files to read before starting
+
+- `README.md`
+- all remaining setup and operations docs
+- agent startup docs such as `AGENTS.md` and any agent start guide
+- Sprite-related skills and instructions that will remain supported
+- legacy deployment docs and any Runpod-specific skill/docs still in repo
+- release and install pipeline definitions
+
+### What to do
+
+- Rewrite the top-level README as the canonical `zodex` product document.
+- Rewrite the docs set around the new default workflow:
+  - what `zodex` is
+  - why it exists
+  - how ChatGPT uses it to inspect, edit, and push safely
+  - how to install and run it on Sprites.dev
+  - how to grant and revoke repo-specific push access
+  - how read access works and how to restrict it
+- Add a one-time setup runbook covering GitHub App creation and permissions:
+  - reader app permissions
+  - write-grant app permissions
+  - install scope expectations
+  - Sprite setup prerequisites
+- Add a concise operator usage guide for the steady-state workflow.
+- Add or rewrite an agent-facing instruction guide that explains:
+  - the access model
+  - the difference between read access and temporary push access
+  - how agents should expect the operator to grant/revoke write
+  - how this project is intended to be used on Sprites
+- Update agent startup docs and any Sprite skill/docs so new agents immediately understand the intended workflow.
+- Remove or archive legacy docs that conflict with the new model.
+- Remove repo-local Runpod-specific skill/docs if they are no longer part of the intended product.
+- Clean up the install/release pipeline so new Sprite accounts can set up `zodex` with minimal friction.
+- Rename the repository itself at the end of the migration, after binaries, docs, and release references are ready.
+- Work with the operator to reinstall `zodex` onto the live Sprite and verify the new release end to end against the real environment.
+
+### Validation strategy
+
+- verify the README alone gives a new user a correct high-level understanding of the product
+- verify the setup docs are sufficient for one-time GitHub App and Sprite setup
+- verify the operator docs match the actual CLI
+- verify agent docs, skills, and startup instructions all describe the same access model
+- verify no stale `computer-mcp`-branded docs remain in the main supported path
+- verify install/release references still work after the repo rename
+- perform a real reinstall on the operator's live Sprite
+- verify the live Sprite can be set up from the cleaned docs and release flow
+- verify end-to-end behavior on the live Sprite:
+  - health and service lifecycle
+  - clone via read access
+  - grant push to one repo
+  - push successfully
+  - revoke push and confirm push no longer works
+
+### Risks / fallbacks
+
+- Risk: documentation cleanup happens too early and drifts from implementation
+- Fallback: land the docs rewrite only after the CLI and grant model are stable enough to document precisely
+- Risk: deleting legacy docs removes useful operational knowledge
+- Fallback: move superseded docs into an explicit archive section instead of leaving them in the main path
+- Risk: renaming the repo too early breaks release and install references
+- Fallback: rename the repo only after packaging, docs, and update flows are ready
+- Risk: the cleaned setup flow works in theory but misses live Sprite/account-specific issues
+- Fallback: treat the live reinstall as a required acceptance gate before considering the migration complete
+
 ## Recommended Implementation Decisions
 
-- Keep the repo in Rust and evolve it instead of rewriting in Go.
+- Keep the repo in Rust and evolve it incrementally.
 - Standardize on:
   - read-only GitHub App for autonomous clone/fetch
   - temporary per-repo push grants from the operator machine
@@ -444,11 +540,13 @@ The plan should produce these deliverables:
 - repo-scoped temporary push grant feature
 - revoke/list-grants feature
 - in-repo proxy package and deployment support
-- updated operator docs reflecting the new default workflow
+- rewritten README and docs set for the new default workflow
+- one-time GitHub App setup runbook
+- agent-facing usage/instruction guide
+- cleaned-up skills/startup guidance for Sprite-first development
+- final repository rename to `zodex`
 
 ## Final Recommendation
-
-Do not rewrite the product in Go right now.
 
 The fastest route to the intended operator experience is:
 
