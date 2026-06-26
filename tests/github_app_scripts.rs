@@ -47,8 +47,11 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("plain `git clone https://github.com/<owner>/<repo>.git` works"));
     assert!(docs.contains("zodex github grant-push"));
     assert!(docs.contains("zodex github revoke-push"));
+    assert!(docs.contains("--forget-local-auth"));
     assert!(docs.contains("list-grants"));
     assert!(docs.contains("temporary repo-scoped direct push access"));
+    assert!(docs.contains("opens the GitHub verification URL automatically"));
+    assert!(docs.contains("retains the local device-flow refresh state"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
     assert!(
         mint_script.contains(r#"permissions_json='{"contents":"write","pull_requests":"write"}'"#)

@@ -64,6 +64,8 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 
 That temporary repo-scoped grant flow is the supported write path.
 `grant-push` uses the GitHub App device-flow path.
+By default, `revoke-push` removes the Sprite-side repo grant and keeps the local device-flow refresh state so the next grant usually avoids a full reauth.
+If you want to fully forget the local cached auth state too, add `--forget-local-auth`.
 
 ## Setup
 
@@ -115,6 +117,6 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 
 - Read access comes from the reader GitHub App.
 - Write access is temporary, explicit, and repo-scoped.
-- The preferred write grant path is a GitHub App user token from device flow, cached locally per repo for refresh until revoked.
+- The preferred write grant path is a GitHub App user token from device flow, cached locally per repo for refresh across normal revoke/grant cycles until explicitly forgotten.
 - The agent should not run as root.
 - The operator should treat `grant-push` and `revoke-push` as part of every push.

@@ -290,6 +290,8 @@ enum GithubCommand {
         repo: String,
         #[arg(long)]
         org: Option<String>,
+        #[arg(long, default_value_t = false)]
+        forget_local_auth: bool,
     },
     ListGrants {
         #[arg(long)]
@@ -636,8 +638,13 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                 }
-                GithubCommand::RevokePush { sprite, repo, org } => {
-                    revoke_push_access(&sprite, org.as_deref(), &repo)?;
+                GithubCommand::RevokePush {
+                    sprite,
+                    repo,
+                    org,
+                    forget_local_auth,
+                } => {
+                    revoke_push_access(&sprite, org.as_deref(), &repo, forget_local_auth)?;
                 }
                 GithubCommand::ListGrants { sprite, org } => {
                     list_push_grants(&sprite, org.as_deref())?;
@@ -1906,6 +1913,89 @@ fn remove_cached_device_flow_grant(repo: &str) -> Result<bool> {
     Ok(true)
 }
 
+fn best_effort_open_browser(url: &str) -> bool {
+    for (program, args) in browser_open_attempts(url) {
+        let status = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if matches!(status, Ok(status) if status.success()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn browser_open_attempts(url: &str) -> Vec<(&'static str, Vec<&str>)> {
+    if cfg!(target_os = "macos") {
+        return vec![("open", vec![url])];
+    }
+    if cfg!(target_os = "windows") {
+        return vec![("cmd", vec!["/C", "start", "", url])];
+    }
+
+    let mut attempts = Vec::new();
+    if env::var_os("WSL_DISTRO_NAME").is_some() {
+        attempts.push(("wslview", vec![url]));
+        attempts.push((
+            "powershell.exe",
+            vec!["-NoProfile", "-Command", "Start-Process", url],
+        ));
+    }
+    attempts.push(("xdg-open", vec![url]));
+    attempts
+}
+
+fn best_effort_copy_to_clipboard(text: &str) -> bool {
+    for (program, args) in clipboard_copy_attempts() {
+        let mut child = match Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => continue,
+        };
+
+        let write_result = child
+            .stdin
+            .as_mut()
+            .map(|stdin| stdin.write_all(text.as_bytes()))
+            .transpose();
+        let wait_result = child.wait();
+        if matches!(write_result, Ok(_)) && matches!(wait_result, Ok(status) if status.success()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn clipboard_copy_attempts() -> Vec<(&'static str, Vec<&'static str>)> {
+    if cfg!(target_os = "macos") {
+        return vec![("pbcopy", vec![])];
+    }
+    if cfg!(target_os = "windows") {
+        return vec![("clip.exe", vec![])];
+    }
+
+    let mut attempts = Vec::new();
+    if env::var_os("WAYLAND_DISPLAY").is_some() {
+        attempts.push(("wl-copy", vec![]));
+    }
+    if env::var_os("DISPLAY").is_some() {
+        attempts.push(("xclip", vec!["-selection", "clipboard"]));
+        attempts.push(("xsel", vec!["--clipboard", "--input"]));
+    }
+    if env::var_os("WSL_DISTRO_NAME").is_some() {
+        attempts.push(("clip.exe", vec![]));
+    }
+    attempts
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRepoResponse {
     id: u64,
@@ -2078,6 +2168,8 @@ async fn mint_user_access_token_via_device_flow(
     repository_id: Option<u64>,
 ) -> Result<GitHubUserAccessGrant> {
     let code = request_device_flow_code(client_id).await?;
+    let opened_browser = best_effort_open_browser(&code.verification_uri);
+    let copied_code = best_effort_copy_to_clipboard(&code.user_code);
     println!("github-device-flow: pending");
     println!("repo: {repo}");
     if let Some(repository_id) = repository_id {
@@ -2091,6 +2183,20 @@ async fn mint_user_access_token_via_device_flow(
     println!("verification-uri: {}", code.verification_uri);
     println!("user-code: {}", code.user_code);
     println!("expires-in-seconds: {}", code.expires_in);
+    println!(
+        "verification-uri-opened: {}",
+        if opened_browser { "yes" } else { "no" }
+    );
+    println!(
+        "user-code-copied: {}",
+        if copied_code { "yes" } else { "no" }
+    );
+    if !opened_browser {
+        println!("note: open the verification URI manually if a browser did not launch");
+    }
+    if !copied_code {
+        println!("note: copy the user code manually if clipboard integration is unavailable");
+    }
 
     let mut interval_seconds = code.interval.unwrap_or(5).max(1);
     loop {
@@ -2267,7 +2373,12 @@ async fn grant_push_access(
     Ok(())
 }
 
-fn revoke_push_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()> {
+fn revoke_push_access(
+    sprite: &str,
+    org: Option<&str>,
+    repo: &str,
+    forget_local_auth: bool,
+) -> Result<()> {
     let repo =
         normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
     let exec_args = vec![
@@ -2276,17 +2387,22 @@ fn revoke_push_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()>
         format!("sudo rm -f {}", push_grant_path(&repo).display()),
     ];
     run_sprite_exec(sprite, org, &exec_args, &[])?;
-    let removed_local_state = remove_cached_device_flow_grant(&repo)?;
     println!("push-grant: revoked");
     println!("repo: {repo}");
-    println!(
-        "local-device-flow-state: {}",
-        if removed_local_state {
-            "removed"
-        } else {
-            "not-found"
-        }
-    );
+    if forget_local_auth {
+        let removed_local_state = remove_cached_device_flow_grant(&repo)?;
+        println!(
+            "local-device-flow-state: {}",
+            if removed_local_state {
+                "removed"
+            } else {
+                "not-found"
+            }
+        );
+    } else {
+        println!("local-device-flow-state: retained");
+        println!("note: pass --forget-local-auth to remove the cached local refresh token too");
+    }
     Ok(())
 }
 
@@ -4488,21 +4604,22 @@ mod tests {
     use super::{
         DEFAULT_LOG_LINES, PUBLISHER_SERVICE_LABEL, ProcessModeState, SERVICE_NAME,
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
-        SystemctlAction, build_certbot_args, build_journalctl_args, build_process_status_lines,
-        build_publisher_status_lines, build_reader_status_lines, build_sprite_api_args,
-        build_sprite_services_status_lines, build_sprite_setup_script, build_sprite_upgrade_script,
-        build_status_summary_lines, build_systemctl_args, build_upgrade_shell_args,
-        certbot_cert_name, credential_host_is_github, credential_url_host, credential_url_path,
-        credential_url_protocol, ensure_http_listener_ready_for_start,
-        expected_sprite_service_definitions, generate_self_signed_certificate,
-        git_credential_request_repo, git_credential_request_targets_github,
-        load_matching_push_grant, normalize_github_repo, normalize_proxy_origin,
-        parse_git_credential_request, parse_systemctl_show, process_log_path, process_pid_path,
-        proxy_mcp_status_looks_healthy, read_tail_lines, render_proxy_wrangler_config,
-        render_systemd_unit, resolve_publisher_client_id, select_tls_san_ip,
-        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
-        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
-        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
+        SystemctlAction, browser_open_attempts, build_certbot_args, build_journalctl_args,
+        build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
+        build_sprite_api_args, build_sprite_services_status_lines, build_sprite_setup_script,
+        build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
+        build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
+        credential_url_host, credential_url_path, credential_url_protocol,
+        ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
+        generate_self_signed_certificate, git_credential_request_repo,
+        git_credential_request_targets_github, load_matching_push_grant, normalize_github_repo,
+        normalize_proxy_origin, parse_git_credential_request, parse_systemctl_show,
+        process_log_path, process_pid_path, proxy_mcp_status_looks_healthy, read_tail_lines,
+        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
+        select_tls_san_ip, service_manager_from_pid1, shell_escape_single_quotes,
+        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
+        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
+        write_if_changed,
     };
     use crate::Cli;
     use clap::CommandFactory;
@@ -5243,5 +5360,19 @@ mod tests {
             resolve_publisher_client_id(&config, None),
             Some("Iv1.from-config".to_string())
         );
+    }
+
+    #[test]
+    fn browser_open_attempts_include_platform_fallback() {
+        let attempts = browser_open_attempts("https://github.com/login/device");
+        assert!(!attempts.is_empty());
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(attempts[0].0, "open");
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(attempts[0].0, "cmd");
+        } else {
+            assert!(attempts.iter().any(|(program, _)| *program == "xdg-open"));
+        }
     }
 }

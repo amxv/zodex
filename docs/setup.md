@@ -93,11 +93,15 @@ The supported write path is:
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
 # agent pushes normally with git push
 zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+# optional full local logout for this repo
+zodex github revoke-push --sprite <sprite> --repo <owner/repo> --forget-local-auth
 ```
 
 Read access stays on. Write access is temporary and repo-scoped.
 This is temporary repo-scoped direct push access, not a long-lived write credential.
 By default, `grant-push` runs GitHub App device flow on the operator machine, requests a user access token for the target repo, and places only the temporary token on the Sprite.
+When practical, it also opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable.
+By default, `revoke-push` removes only the Sprite-side repo grant and retains the local device-flow refresh state so repeated grants are faster. Use `--forget-local-auth` when you want a full local logout for that repo too.
 
 ## Day-To-Day Commands
 
@@ -117,7 +121,7 @@ zodex github list-grants --sprite <sprite>
 - plain `git clone https://github.com/<owner>/<repo>.git` works for installed private repos without a manual prompt
 - the agent can `git clone` and `git fetch` private repos without a manual prompt
 - an active grant enables `git push` for the granted repo only
-- `grant-push` shows a GitHub device code and succeeds after browser authorization
+- `grant-push` shows a GitHub device code, tries to open the verification URL, and succeeds after browser authorization
 
 ## Stop Conditions
 
