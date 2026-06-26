@@ -5232,8 +5232,10 @@ mod tests {
 
     #[test]
     fn resolve_publisher_client_id_prefers_explicit_value_then_config() {
-        let mut config = Config::default();
-        config.publisher_client_id = Some("Iv1.from-config".to_string());
+        let config = Config {
+            publisher_client_id: Some("Iv1.from-config".to_string()),
+            ..Config::default()
+        };
 
         assert_eq!(
             resolve_publisher_client_id(&config, Some("Iv1.from-cli")),
