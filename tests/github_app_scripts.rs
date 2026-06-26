@@ -42,6 +42,8 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("Contents: Read & write"));
     assert!(docs.contains("Pull requests: Read & write"));
     assert!(docs.contains("reader app"));
+    assert!(docs.contains("Device Flow"));
+    assert!(docs.contains("publisher_client_id"));
     assert!(docs.contains("plain `git clone https://github.com/<owner>/<repo>.git` works"));
     assert!(docs.contains("zodex github grant-push"));
     assert!(docs.contains("zodex github revoke-push"));

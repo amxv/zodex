@@ -387,6 +387,7 @@ publisher_user = "${ZODEX_PUBLISHER_USER}"
 # Required GitHub App settings:
 # reader_app_id = 123456
 # reader_installation_id = 234567890
+# publisher_client_id = "Iv1.abc123example"
 # publisher_app_id = 345678
 #
 # [[publisher_targets]]
@@ -483,11 +484,12 @@ The commands below assume the default config path. If you changed it, add:
 
 Next steps:
   1. expose HTTP port ${http_port} on your container platform
-  2. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
-  3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  4. place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
-  5. zodex start
-  6. zodex show-url --host "${public_host}"
+  2. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
+  3. enable Device Flow on the push-grant GitHub App
+  4. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
+  5. if you want installation-token fallback or the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
+  6. zodex start
+  7. zodex show-url --host "${public_host}"
 
 Verify:
   - zodex status
@@ -497,6 +499,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
+  - direct pushes prefer GitHub App device flow via publisher_client_id; revoke with: zodex github revoke-push --sprite <sprite> --repo <owner/repo>
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
     return
@@ -513,11 +516,12 @@ The commands below assume the default config path. If you changed it, add:
   --config "${ZODEX_CONFIG_PATH}"
 
 Next steps:
-  1. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
-  2. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  3. place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
-  4. zodex start
-  5. zodex show-url --host "${public_host}"
+  1. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
+  2. enable Device Flow on the push-grant GitHub App
+  3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
+  4. if you want installation-token fallback or the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
+  5. zodex start
+  6. zodex show-url --host "${public_host}"
 
 Verify:
   - zodex status
@@ -527,6 +531,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
+  - direct pushes prefer GitHub App device flow via publisher_client_id; revoke with: zodex github revoke-push --sprite <sprite> --repo <owner/repo>
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
 }

@@ -14,6 +14,7 @@ The product model is:
 - the agent can inspect, edit, test, and commit without GitHub write access
 - write access is off by default
 - the operator grants temporary repo-scoped push access only when a push is intended
+- the default push-grant path uses GitHub App user access tokens obtained locally with device flow
 - the operator revokes that access after the push
 
 `zodex` is designed for Sprites.dev and assumes a proxy-backed public MCP front door.
@@ -35,7 +36,7 @@ That is enough for the normal coding loop:
 
 1. Set up the two GitHub Apps once:
    - a read-only reader app
-   - a temporary push-grant app
+   - a temporary push-grant app with device flow enabled
 2. Install `zodex` on a Sprite.
 3. Point MCP clients at the proxy-backed public URL.
 4. Let the agent clone, inspect, edit, test, and commit.
@@ -43,6 +44,15 @@ That is enough for the normal coding loop:
 
 ```bash
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
+```
+
+If the push-grant app client ID is not present in config, pass it directly:
+
+```bash
+zodex github grant-push \
+  --sprite <sprite> \
+  --repo <owner/repo> \
+  --publisher-client-id <push-grant-app-client-id>
 ```
 
 6. The agent pushes normally with `git push`.
@@ -53,6 +63,7 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
 That temporary repo-scoped grant flow is the supported write path.
+`grant-push` prefers the GitHub App device-flow path and falls back to the installation-token app-key path only when needed.
 
 ## Setup
 
@@ -70,6 +81,9 @@ zodex sprite setup \
   --publisher-pem /absolute/path/to/push-grant-app.pem \
   --url-auth sprite
 ```
+
+For day-to-day push grants, also set `publisher_client_id` in `/etc/zodex/config.toml` or export `ZODEX_PUBLISHER_CLIENT_ID` on the operator machine.
+The publisher app key remains available as the fallback grant path and for the internal `zodex-prd` publish flow.
 
 ## Proxy Front Door
 
@@ -99,5 +113,6 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 
 - Read access comes from the reader GitHub App.
 - Write access is temporary, explicit, and repo-scoped.
+- The preferred write grant path is a GitHub App user token from device flow, cached locally per repo for refresh until revoked.
 - The agent should not run as root.
 - The operator should treat `grant-push` and `revoke-push` as part of every push.

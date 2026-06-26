@@ -32,6 +32,7 @@ pub struct Config {
     pub publisher_socket_path: String,
     pub publisher_private_key_path: String,
     pub publisher_app_id: Option<u64>,
+    pub publisher_client_id: Option<String>,
     pub agent_user: String,
     pub agent_home: String,
     pub default_workdir: String,
@@ -86,6 +87,7 @@ impl Default for Config {
             publisher_socket_path: "/var/lib/zodex/publisher/run/zodex-prd.sock".to_string(),
             publisher_private_key_path: "/etc/zodex/publisher/private-key.pem".to_string(),
             publisher_app_id: None,
+            publisher_client_id: None,
             agent_user: "zodex-agent".to_string(),
             agent_home: "/home/zodex-agent".to_string(),
             default_workdir: "/workspace".to_string(),
@@ -176,6 +178,7 @@ mod tests {
         assert_eq!(cfg.agent_user, "zodex-agent");
         assert_eq!(cfg.agent_home, "/home/zodex-agent");
         assert_eq!(cfg.default_workdir, "/workspace");
+        assert_eq!(cfg.publisher_client_id, None);
         assert_eq!(cfg.publisher_user, "zodex-publisher");
         assert_eq!(cfg.service_group, "zodex");
         assert_eq!(cfg.publisher_branch_prefix, "agent");
@@ -212,6 +215,7 @@ max_output_chars = 200000
             "/etc/zodex/reader/private-key.pem"
         );
         assert_eq!(parsed.publisher_app_id, None);
+        assert_eq!(parsed.publisher_client_id, None);
         assert_eq!(parsed.agent_user, "zodex-agent");
         assert_eq!(parsed.agent_home, "/home/zodex-agent");
         assert_eq!(parsed.default_workdir, "/workspace");

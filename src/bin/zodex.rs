@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -23,6 +24,7 @@ use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use reqwest::Url;
+use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
@@ -61,6 +63,13 @@ const PRIMARY_OPERATOR_BINARY: &str = "zodex";
 const PRIMARY_DAEMON_BINARY: &str = "zodexd";
 const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
 const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
+const GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR: &str = ".config/zodex/github-device-flow";
+const GITHUB_PUSH_GRANT_CLIENT_ID_ENV: &str = "ZODEX_PUBLISHER_CLIENT_ID";
+const GITHUB_API_BASE: &str = "https://api.github.com";
+const GITHUB_API_VERSION: &str = "2022-11-28";
+const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+const GITHUB_OAUTH_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+const DEFAULT_GITHUB_USER_AGENT: &str = "zodex/0.1";
 const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
 const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
 const SPRITE_REMOTE_UPLOAD_CLI_PATH: &str = "/tmp/zodex";
@@ -272,6 +281,8 @@ enum GithubCommand {
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
+        publisher_client_id: Option<String>,
+        #[arg(long)]
         publisher_app_id: Option<u64>,
         #[arg(long)]
         publisher_pem: Option<PathBuf>,
@@ -324,6 +335,34 @@ struct PushGrantRecord {
     token: String,
     #[serde(default)]
     expires_at: Option<String>,
+    #[serde(default)]
+    token_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CachedDeviceFlowGrant {
+    client_id: String,
+    repo: String,
+    refresh_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubDeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
+    interval: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubOAuthTokenResponse {
+    access_token: Option<String>,
+    expires_in: Option<u64>,
+    refresh_token: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+    interval: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -590,6 +629,7 @@ async fn main() -> Result<()> {
                     sprite,
                     repo,
                     org,
+                    publisher_client_id,
                     publisher_app_id,
                     publisher_pem,
                 } => {
@@ -598,6 +638,7 @@ async fn main() -> Result<()> {
                         &sprite,
                         org.as_deref(),
                         &repo,
+                        publisher_client_id.as_deref(),
                         publisher_app_id,
                         publisher_pem.as_deref(),
                     )
@@ -1827,22 +1868,463 @@ fn resolve_publisher_access(
     Ok((app_id, pem_path))
 }
 
+fn resolve_publisher_client_id(
+    config: &Config,
+    publisher_client_id: Option<&str>,
+) -> Option<String> {
+    publisher_client_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            env::var(GITHUB_PUSH_GRANT_CLIENT_ID_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| config.publisher_client_id.clone())
+}
+
+fn push_grant_cache_path(repo: &str) -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME must be set to use GitHub App device flow")?;
+    let root = Path::new(&home).join(GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR);
+    Ok(root.join(push_grant_file_name(repo)))
+}
+
+fn save_cached_device_flow_grant(repo: &str, grant: &CachedDeviceFlowGrant) -> Result<()> {
+    let path = push_grant_cache_path(repo)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let raw =
+        serde_json::to_vec_pretty(grant).context("failed to encode cached device-flow grant")?;
+    fs::write(&path, raw).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn load_cached_device_flow_grant(
+    repo: &str,
+    client_id: &str,
+) -> Result<Option<CachedDeviceFlowGrant>> {
+    let path = push_grant_cache_path(repo)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let grant: CachedDeviceFlowGrant = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    if grant.client_id != client_id {
+        return Ok(None);
+    }
+    Ok(Some(grant))
+}
+
+fn remove_cached_device_flow_grant(repo: &str) -> Result<bool> {
+    let path = push_grant_cache_path(repo)?;
+    if !path.exists() {
+        return Ok(false);
+    }
+    fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
+    Ok(true)
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepoResponse {
+    id: u64,
+}
+
+#[derive(Debug)]
+struct GitHubUserAccessGrant {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_at: Option<String>,
+}
+
+async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option<u64>> {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .get(format!("{GITHUB_API_BASE}/repos/{repo}"))
+        .header(ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header(USER_AGENT, DEFAULT_GITHUB_USER_AGENT);
+    if let Some(token) = bearer_token {
+        request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+    }
+    let response = request
+        .send()
+        .await
+        .context("failed to resolve GitHub repository metadata")?;
+
+    if response.status().as_u16() == 404 || response.status().as_u16() == 403 {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub repository lookup failed ({status}): {body}");
+    }
+
+    let payload: GitHubRepoResponse = response
+        .json()
+        .await
+        .context("failed to decode GitHub repository metadata")?;
+    Ok(Some(payload.id))
+}
+
+async fn try_resolve_repo_id_for_device_flow(
+    config: &Config,
+    repo: &str,
+    publisher_app_id: Option<u64>,
+    publisher_pem: Option<&Path>,
+) -> Result<Option<u64>> {
+    if let Some(repo_id) = github_repo_id(repo, None).await? {
+        return Ok(Some(repo_id));
+    }
+
+    if let (Some(app_id), Some(installation_id)) =
+        (config.reader_app_id, config.reader_installation_id)
+        && Path::new(&config.reader_private_key_path).exists()
+    {
+        let token = mint_reader_installation_token(
+            app_id,
+            Path::new(&config.reader_private_key_path),
+            installation_id,
+        )
+        .await?;
+        if let Some(repo_id) = github_repo_id(repo, Some(&token)).await? {
+            return Ok(Some(repo_id));
+        }
+    }
+
+    if let Ok((app_id, pem_path)) =
+        resolve_publisher_access(config, publisher_app_id, publisher_pem)
+    {
+        let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
+        let token =
+            mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id)
+                .await?
+                .token;
+        if let Some(repo_id) = github_repo_id(repo, Some(&token)).await? {
+            return Ok(Some(repo_id));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn request_device_flow_code(client_id: &str) -> Result<GitHubDeviceCodeResponse> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(GITHUB_OAUTH_DEVICE_CODE_URL)
+        .header(ACCEPT, "application/json")
+        .header(USER_AGENT, DEFAULT_GITHUB_USER_AGENT)
+        .form(&[("client_id", client_id)])
+        .send()
+        .await
+        .context("failed to request GitHub device code")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub device code request failed ({status}): {body}");
+    }
+
+    response
+        .json()
+        .await
+        .context("failed to decode GitHub device code response")
+}
+
+async fn poll_device_flow_access_token(
+    client_id: &str,
+    device_code: &str,
+    repository_id: Option<u64>,
+) -> Result<GitHubOAuthTokenResponse> {
+    let client = reqwest::Client::new();
+    let mut params = vec![
+        ("client_id", client_id.to_string()),
+        ("device_code", device_code.to_string()),
+        (
+            "grant_type",
+            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+        ),
+    ];
+    if let Some(repository_id) = repository_id {
+        params.push(("repository_id", repository_id.to_string()));
+    }
+
+    let response = client
+        .post(GITHUB_OAUTH_ACCESS_TOKEN_URL)
+        .header(ACCEPT, "application/json")
+        .header(USER_AGENT, DEFAULT_GITHUB_USER_AGENT)
+        .form(&params)
+        .send()
+        .await
+        .context("failed to poll GitHub device flow token")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub device flow token request failed ({status}): {body}");
+    }
+
+    response
+        .json()
+        .await
+        .context("failed to decode GitHub device flow token response")
+}
+
+async fn refresh_user_access_token(
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<GitHubOAuthTokenResponse> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(GITHUB_OAUTH_ACCESS_TOKEN_URL)
+        .header(ACCEPT, "application/json")
+        .header(USER_AGENT, DEFAULT_GITHUB_USER_AGENT)
+        .form(&[
+            ("client_id", client_id),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ])
+        .send()
+        .await
+        .context("failed to refresh GitHub user access token")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub user access token refresh failed ({status}): {body}");
+    }
+
+    response
+        .json()
+        .await
+        .context("failed to decode GitHub user access token refresh response")
+}
+
+fn oauth_token_response_error(response: &GitHubOAuthTokenResponse) -> Option<&str> {
+    response.error.as_deref()
+}
+
+fn expires_at_from_expires_in(expires_in: Option<u64>) -> Option<String> {
+    expires_in.map(|seconds| format!("approximately {} seconds after grant", seconds))
+}
+
+async fn mint_user_access_token_via_device_flow(
+    client_id: &str,
+    repo: &str,
+    repository_id: Option<u64>,
+) -> Result<GitHubUserAccessGrant> {
+    let code = request_device_flow_code(client_id).await?;
+    println!("github-device-flow: pending");
+    println!("repo: {repo}");
+    if let Some(repository_id) = repository_id {
+        println!("repository-id: {repository_id}");
+    } else {
+        println!("repository-id: unresolved");
+        println!(
+            "note: GitHub-side token narrowing could not be confirmed; Sprite delivery remains repo-scoped"
+        );
+    }
+    println!("verification-uri: {}", code.verification_uri);
+    println!("user-code: {}", code.user_code);
+    println!("expires-in-seconds: {}", code.expires_in);
+
+    let mut interval_seconds = code.interval.unwrap_or(5).max(1);
+    loop {
+        tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
+        let response =
+            poll_device_flow_access_token(client_id, &code.device_code, repository_id).await?;
+        match oauth_token_response_error(&response) {
+            None => {
+                let access_token = response.access_token.ok_or_else(|| {
+                    anyhow!("GitHub device flow completed without an access token")
+                })?;
+                return Ok(GitHubUserAccessGrant {
+                    access_token,
+                    refresh_token: response.refresh_token,
+                    expires_at: expires_at_from_expires_in(response.expires_in),
+                });
+            }
+            Some("authorization_pending") => continue,
+            Some("slow_down") => {
+                interval_seconds = response
+                    .interval
+                    .unwrap_or(interval_seconds + 5)
+                    .max(interval_seconds + 1);
+            }
+            Some("expired_token") | Some("token_expired") => {
+                bail!("GitHub device flow code expired before authorization completed");
+            }
+            Some("access_denied") => bail!("GitHub device flow authorization was cancelled"),
+            Some("device_flow_disabled") => {
+                bail!("GitHub App device flow is disabled; enable device flow in the app settings")
+            }
+            Some(other) => {
+                let details = response
+                    .error_description
+                    .as_deref()
+                    .unwrap_or("no description");
+                bail!("GitHub device flow failed with {other}: {details}");
+            }
+        }
+    }
+}
+
+async fn mint_device_flow_push_grant(
+    config: &Config,
+    repo: &str,
+    client_id: &str,
+    publisher_app_id: Option<u64>,
+    publisher_pem: Option<&Path>,
+) -> Result<PushGrantRecord> {
+    if let Some(cached) = load_cached_device_flow_grant(repo, client_id)? {
+        let refreshed = refresh_user_access_token(client_id, &cached.refresh_token).await;
+        match refreshed {
+            Ok(response) if response.error.is_none() => {
+                let access_token = response
+                    .access_token
+                    .ok_or_else(|| anyhow!("GitHub refresh completed without an access token"))?;
+                if let Some(refresh_token) = response.refresh_token.clone() {
+                    save_cached_device_flow_grant(
+                        repo,
+                        &CachedDeviceFlowGrant {
+                            client_id: client_id.to_string(),
+                            repo: repo.to_string(),
+                            refresh_token,
+                        },
+                    )?;
+                }
+                return Ok(PushGrantRecord {
+                    repo: repo.to_string(),
+                    token: access_token,
+                    expires_at: expires_at_from_expires_in(response.expires_in),
+                    token_source: Some("github-app-user-token".to_string()),
+                });
+            }
+            Ok(response)
+                if matches!(
+                    oauth_token_response_error(&response),
+                    Some("bad_refresh_token")
+                ) =>
+            {
+                remove_cached_device_flow_grant(repo)?;
+            }
+            Ok(response) => {
+                let error = response
+                    .error
+                    .unwrap_or_else(|| "unknown_error".to_string());
+                let details = response
+                    .error_description
+                    .unwrap_or_else(|| "no description".to_string());
+                bail!("GitHub user access token refresh failed with {error}: {details}");
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("incorrect_client_credentials")
+                    || message.contains("bad_refresh_token")
+                {
+                    remove_cached_device_flow_grant(repo)?;
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    let repository_id =
+        try_resolve_repo_id_for_device_flow(config, repo, publisher_app_id, publisher_pem).await?;
+    let grant = mint_user_access_token_via_device_flow(client_id, repo, repository_id).await?;
+    if let Some(refresh_token) = grant.refresh_token.clone() {
+        save_cached_device_flow_grant(
+            repo,
+            &CachedDeviceFlowGrant {
+                client_id: client_id.to_string(),
+                repo: repo.to_string(),
+                refresh_token,
+            },
+        )?;
+    }
+
+    Ok(PushGrantRecord {
+        repo: repo.to_string(),
+        token: grant.access_token,
+        expires_at: grant.expires_at,
+        token_source: Some("github-app-user-token".to_string()),
+    })
+}
+
+async fn mint_installation_token_push_grant(
+    config: &Config,
+    repo: &str,
+    publisher_app_id: Option<u64>,
+    publisher_pem: Option<&Path>,
+) -> Result<PushGrantRecord> {
+    let (app_id, pem_path) = resolve_publisher_access(config, publisher_app_id, publisher_pem)?;
+    let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
+    let minted =
+        mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id).await?;
+    Ok(PushGrantRecord {
+        repo: repo.to_string(),
+        token: minted.token,
+        expires_at: minted.expires_at,
+        token_source: Some("installation-token-fallback".to_string()),
+    })
+}
+
 async fn grant_push_access(
     config: &Config,
     sprite: &str,
     org: Option<&str>,
     repo: &str,
+    publisher_client_id: Option<&str>,
     publisher_app_id: Option<u64>,
     publisher_pem: Option<&Path>,
 ) -> Result<()> {
-    let (app_id, pem_path) = resolve_publisher_access(config, publisher_app_id, publisher_pem)?;
-    let installation_id = resolve_repo_installation_id(app_id, &pem_path, repo).await?;
-    let minted =
-        mint_publisher_installation_token_with_metadata(app_id, &pem_path, installation_id).await?;
-    let grant = PushGrantRecord {
-        repo: repo.to_string(),
-        token: minted.token,
-        expires_at: minted.expires_at,
+    let repo =
+        normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
+    let grant = if let Some(client_id) = resolve_publisher_client_id(config, publisher_client_id) {
+        match mint_device_flow_push_grant(
+            config,
+            &repo,
+            &client_id,
+            publisher_app_id,
+            publisher_pem,
+        )
+        .await
+        {
+            Ok(grant) => grant,
+            Err(err) => {
+                let fallback = resolve_publisher_access(config, publisher_app_id, publisher_pem);
+                match fallback {
+                    Ok(_) => {
+                        eprintln!(
+                            "device-flow grant failed, falling back to installation-token path: {err}"
+                        );
+                        mint_installation_token_push_grant(
+                            config,
+                            &repo,
+                            publisher_app_id,
+                            publisher_pem,
+                        )
+                        .await?
+                    }
+                    Err(_) => return Err(err),
+                }
+            }
+        }
+    } else {
+        mint_installation_token_push_grant(config, &repo, publisher_app_id, publisher_pem).await?
     };
     let raw = serde_json::to_string(&grant).context("failed to serialize push grant")?;
     let mut grant_file = NamedTempFile::new().context("failed to create grant temp file")?;
@@ -1858,7 +2340,7 @@ async fn grant_push_access(
             "sudo install -d -m 0750 -o zodex-agent -g zodex {dir} && sudo install -m 0640 -o zodex-agent -g zodex {tmp} {dest} && rm -f {tmp}",
             dir = PUSH_GRANTS_DIR,
             tmp = PUSH_GRANT_REMOTE_TMP_PATH,
-            dest = push_grant_path(repo).display()
+            dest = push_grant_path(&repo).display()
         ),
     ];
     run_sprite_exec(
@@ -1870,6 +2352,13 @@ async fn grant_push_access(
 
     println!("push-grant: active");
     println!("repo: {repo}");
+    println!(
+        "token-source: {}",
+        grant
+            .token_source
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+    );
     if let Some(expires_at) = grant.expires_at.as_deref() {
         println!("expires-at: {expires_at}");
     }
@@ -1877,14 +2366,25 @@ async fn grant_push_access(
 }
 
 fn revoke_push_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()> {
+    let repo =
+        normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        format!("sudo rm -f {}", push_grant_path(repo).display()),
+        format!("sudo rm -f {}", push_grant_path(&repo).display()),
     ];
     run_sprite_exec(sprite, org, &exec_args, &[])?;
+    let removed_local_state = remove_cached_device_flow_grant(&repo)?;
     println!("push-grant: revoked");
     println!("repo: {repo}");
+    println!(
+        "local-device-flow-state: {}",
+        if removed_local_state {
+            "removed"
+        } else {
+            "not-found"
+        }
+    );
     Ok(())
 }
 
@@ -1913,6 +2413,9 @@ fn list_push_grants(sprite: &str, org: Option<&str>) -> Result<()> {
 
     for grant in grants {
         println!("repo: {}", grant.repo);
+        if let Some(source) = grant.token_source.as_deref() {
+            println!("token-source: {source}");
+        }
         println!(
             "expires-at: {}",
             grant.expires_at.unwrap_or_else(|| "unknown".to_string())
@@ -4094,8 +4597,8 @@ mod tests {
         load_matching_push_grant, normalize_github_repo, normalize_proxy_origin,
         parse_git_credential_request, parse_systemctl_show, process_log_path, process_pid_path,
         proxy_mcp_status_looks_healthy, read_tail_lines, render_proxy_wrangler_config,
-        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, sprite_service_logs_api_path,
+        render_systemd_unit, resolve_publisher_client_id, select_tls_san_ip,
+        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
     };
@@ -4821,5 +5324,20 @@ mod tests {
         let disabled_setting = ["credential.https://github.com.useHttpPath ", "false"].concat();
         assert!(!setup_script.contains(&disabled_setting));
         assert!(!upgrade_script.contains(&disabled_setting));
+    }
+
+    #[test]
+    fn resolve_publisher_client_id_prefers_explicit_value_then_config() {
+        let mut config = Config::default();
+        config.publisher_client_id = Some("Iv1.from-config".to_string());
+
+        assert_eq!(
+            resolve_publisher_client_id(&config, Some("Iv1.from-cli")),
+            Some("Iv1.from-cli".to_string())
+        );
+        assert_eq!(
+            resolve_publisher_client_id(&config, None),
+            Some("Iv1.from-config".to_string())
+        );
     }
 }
