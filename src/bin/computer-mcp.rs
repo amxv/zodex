@@ -632,9 +632,7 @@ async fn handle_git_credential_helper(config: &Config, operation: &str) -> Resul
         return Ok(());
     }
 
-    if let Some(repo) = git_credential_request_repo(&request)
-        && let Some(grant) = load_push_grant(&repo)?
-    {
+    if let Some(grant) = load_matching_push_grant(&request, Path::new(PUSH_GRANTS_DIR))? {
         println!("username=x-access-token");
         println!("password={}", grant.token);
         println!();
@@ -752,8 +750,8 @@ fn push_grant_path(repo: &str) -> PathBuf {
     Path::new(PUSH_GRANTS_DIR).join(push_grant_file_name(repo))
 }
 
-fn load_push_grant(repo: &str) -> Result<Option<PushGrantRecord>> {
-    let path = push_grant_path(repo);
+fn load_push_grant_from_dir(repo: &str, grants_dir: &Path) -> Result<Option<PushGrantRecord>> {
+    let path = grants_dir.join(push_grant_file_name(repo));
     if !path.exists() {
         return Ok(None);
     }
@@ -763,6 +761,16 @@ fn load_push_grant(repo: &str) -> Result<Option<PushGrantRecord>> {
     let grant: PushGrantRecord = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(Some(grant))
+}
+
+fn load_matching_push_grant(
+    request: &GitCredentialRequest,
+    grants_dir: &Path,
+) -> Result<Option<PushGrantRecord>> {
+    let Some(repo) = git_credential_request_repo(request) else {
+        return Ok(None);
+    };
+    load_push_grant_from_dir(&repo, grants_dir)
 }
 
 fn manifest_dir() -> &'static Path {
@@ -1692,7 +1700,7 @@ sudo chmod 0640 "$CFG"
 
 helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath false
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath true
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.name "Computer MCP Agent"
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global user.email "computer-mcp-agent@local.invalid"
 
@@ -1776,7 +1784,7 @@ fi
 
 helper_cmd="/usr/local/bin/zodex --config $CFG git-credential-helper"
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
-sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath false
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global credential.https://github.com.useHttpPath true
 
 current_name="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.name || true)"
 current_email="$(sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git config --global --get user.email || true)"
@@ -4078,18 +4086,20 @@ mod tests {
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
         SystemctlAction, build_certbot_args, build_journalctl_args, build_process_status_lines,
         build_publisher_status_lines, build_reader_status_lines, build_sprite_api_args,
-        build_sprite_services_status_lines, build_status_summary_lines, build_systemctl_args,
+        build_sprite_services_status_lines, build_sprite_setup_script,
+        build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
         build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
         credential_url_host, credential_url_path, credential_url_protocol,
         ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
         generate_self_signed_certificate, git_credential_request_repo,
-        git_credential_request_targets_github, normalize_github_repo, normalize_proxy_origin,
-        parse_git_credential_request, parse_systemctl_show, process_log_path, process_pid_path,
-        proxy_mcp_status_looks_healthy, read_tail_lines, render_proxy_wrangler_config,
-        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, sprite_service_logs_api_path,
-        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
-        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
+        git_credential_request_targets_github, load_matching_push_grant, normalize_github_repo,
+        normalize_proxy_origin, parse_git_credential_request, parse_systemctl_show,
+        process_log_path, process_pid_path, proxy_mcp_status_looks_healthy, read_tail_lines,
+        render_proxy_wrangler_config, render_systemd_unit, select_tls_san_ip,
+        service_manager_from_pid1, shell_escape_single_quotes,
+        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
+        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
+        write_if_changed,
     };
     use crate::Cli;
     use clap::CommandFactory;
@@ -4765,5 +4775,52 @@ mod tests {
             )),
             Some("amxv/computer-mcp".to_string())
         );
+    }
+
+    #[test]
+    fn matching_push_grant_uses_repo_path_and_ignores_ungranted_repo() {
+        let grants_dir = tempdir().expect("tempdir");
+        let granted_repo = "amxv/computer-mcp";
+        let grant_path = grants_dir.path().join("amxv__computer-mcp.json");
+        fs::write(
+            &grant_path,
+            r#"{"repo":"amxv/computer-mcp","token":"push-token","expires_at":"2026-06-26T00:00:00Z"}"#,
+        )
+        .expect("write grant");
+
+        let granted_request =
+            parse_git_credential_request("protocol=https\nhost=github.com\npath=amxv/computer-mcp.git\n\n");
+        let ungranted_request =
+            parse_git_credential_request("protocol=https\nhost=github.com\npath=amxv/other.git\n\n");
+
+        let granted = load_matching_push_grant(&granted_request, grants_dir.path())
+            .expect("granted lookup should succeed")
+            .expect("grant should exist");
+        let ungranted = load_matching_push_grant(&ungranted_request, grants_dir.path())
+            .expect("ungranted lookup should succeed");
+
+        assert_eq!(granted.repo, granted_repo);
+        assert_eq!(granted.token, "push-token");
+        assert!(ungranted.is_none());
+    }
+
+    #[test]
+    fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path() {
+        let setup_script = build_sprite_setup_script(
+            "owner/repo",
+            1,
+            2,
+            3,
+            4,
+            "main",
+            Path::new("/etc/computer-mcp/config.toml"),
+        );
+        let upgrade_script =
+            build_sprite_upgrade_script("latest", "owner/repo", Path::new("/etc/computer-mcp/config.toml"));
+
+        assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
+        assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
+        assert!(!setup_script.contains("credential.https://github.com.useHttpPath false"));
+        assert!(!upgrade_script.contains("credential.https://github.com.useHttpPath false"));
     }
 }
