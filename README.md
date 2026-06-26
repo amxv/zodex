@@ -1,6 +1,6 @@
 # zodex
 
-`zodex` is a remote coding runtime plus operator CLI for Sprite-first deployments.
+`zodex` is a Sprite-first remote coding runtime plus operator CLI.
 
 It gives ChatGPT or another coding agent a narrow remote execution surface:
 
@@ -8,97 +8,71 @@ It gives ChatGPT or another coding agent a narrow remote execution surface:
 - `write_stdin`
 - `apply_patch`
 
-The default product story is simple:
+The supported product story is:
 
-- the Sprite always has read access to approved GitHub repos through a read-only GitHub App
-- the agent can inspect code, edit code, run tests, and commit locally at any time
+- the runtime gets read access to approved GitHub repos through a read-only GitHub App
+- the agent can inspect code, edit files, run tests, and commit locally without GitHub write access
 - direct GitHub write access is off by default
 - the operator grants temporary push access for one repo only when it is time to push
 - the operator revokes that push access when the task is done
 
-This repo is in a rename window:
+The primary deployment target is Sprites.dev. VPS support remains available, but the supported default workflow is Sprite-first and proxy-backed.
 
-- use `zodex` for the operator CLI
-- use `zodexd` for the daemon
-- legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints still exist for compatibility
+## Why It Exists
 
-## Default Workflow
+`zodex` is for the case where you want a coding agent to work inside a real remote Linux environment without handing it permanent GitHub write credentials.
 
-1. install `zodex` on a Sprite
-2. configure the reader GitHub App so the agent can clone and fetch private repos
-3. point MCP clients at the proxy-backed public URL
-4. let the agent inspect, edit, test, and commit
-5. when the operator wants the agent to push, run:
-   `zodex github grant-push --sprite <sprite> --repo <owner/repo> [--publisher-app-id ... --publisher-pem ...]`
-6. the agent pushes normally with `git push`
-7. revoke the grant:
-   `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
+It keeps the surface intentionally small:
 
-That push-grant flow is the only supported write path described by the primary docs.
+- remote shell execution
+- persistent PTY sessions
+- structured file patching
 
-## Sprite Front Door
+That is enough for the normal coding loop:
 
-For Sprite deployments, the Cloudflare Worker under [proxy/cloudflare-worker](proxy/cloudflare-worker) is a supported `zodex` component.
+1. clone and inspect a repo
+2. edit code and rerun checks
+3. discuss changes with the operator
+4. grant push access briefly
+5. push normally with `git push`
+6. revoke write access again
 
-It is responsible for:
+## Supported Workflow
 
-- normalizing `/mcp` to the Sprite origin's working `/mcp/` path
-- warming a cold Sprite before proxying
-- retrying transient cold-start and edge failures
-- preserving streaming MCP responses
-
-Useful commands:
+1. Set up the two GitHub Apps once:
+   - a read-only reader app
+   - a temporary push-grant app
+2. Install `zodex` on a Sprite.
+3. Point MCP clients at the proxy-backed public URL.
+4. Let the agent clone, inspect, edit, test, and commit.
+5. When the operator wants a push, run:
 
 ```bash
-zodex proxy inspect --sprite <sprite>
-zodex proxy verify-origin --sprite <sprite>
-zodex proxy deploy --sprite <sprite>
+zodex github grant-push --sprite <sprite> --repo <owner/repo>
 ```
 
-Treat the proxy or its custom domain as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the MCP clients you care about.
+6. The agent pushes normally with `git push`.
+7. Revoke the grant:
 
-## Read This First
-
-- Sprite setup: [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
-- VPS setup: [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
-- GitHub app and push-grant model: [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
-- deployment details: [docs/deployment-notes.md](docs/deployment-notes.md)
-
-If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
-
-## How It Works
-
-`zodexd` exposes a small remote coding surface over MCP and a matching HTTP API.
-
-At a high level:
-
-- `exec_command` starts a shell command and returns output plus session metadata
-- `write_stdin` writes to or polls a running session by handle
-- `apply_patch` applies structured Codex-style patches using an explicit `workdir`
-
-Those three tools are enough for the standard coding loop:
-
-1. inspect the repo and run code
-2. keep terminal state alive across calls
-3. edit files precisely
-4. rerun checks and tests
-
-## One-Time Setup
-
-You need:
-
-- a Sprite or Linux VPS
-- `root` or `sudo`
-- a reader GitHub App private key
-- a push-grant GitHub App private key kept on the operator machine
-
-Default config path:
-
-```text
-/etc/computer-mcp/config.toml
+```bash
+zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
-The clean Sprite-first path is:
+That temporary repo-scoped grant flow is the supported write path.
+
+## Quickstart
+
+### 1. Read the one-time setup docs
+
+- Sprite setup runbook: [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
+- GitHub App setup and permissions: [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
+- Day-to-day operator flow: [docs/operator-guide.md](docs/operator-guide.md)
+- Agent expectations and access model: [docs/agent-instructions.md](docs/agent-instructions.md)
+- Deployment details and compatibility notes: [docs/deployment-notes.md](docs/deployment-notes.md)
+
+### 2. Install on a Sprite
+
+The supported install path is the Rust operator CLI:
 
 ```bash
 zodex sprite setup \
@@ -111,20 +85,46 @@ zodex sprite setup \
   --url-auth sprite
 ```
 
-The setup command derives installation IDs, uploads the runtime, configures read access, verifies the workspace, syncs Sprite Services, and leaves the deployment ready for proxy verification and later push grants.
+If the Sprite is in a non-default org, add:
 
-## Day-To-Day Commands
+```bash
+--org <org-name>
+```
+
+### 3. Verify the public MCP front door
+
+For Sprite deployments, the Cloudflare Worker under [proxy/cloudflare-worker](proxy/cloudflare-worker) is part of the supported system.
+
+Useful commands:
+
+```bash
+zodex proxy inspect --sprite <sprite>
+zodex proxy verify-origin --sprite <sprite>
+zodex proxy deploy --sprite <sprite>
+```
+
+Treat the proxy or its custom domain as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the MCP clients you care about.
+
+## Core Commands
+
+Sprite lifecycle:
 
 ```bash
 zodex sprite status --sprite <sprite>
 zodex sprite logs --sprite <sprite> --service computer-mcpd --lines 100
-zodex proxy deploy --sprite <sprite>
+zodex sprite sync --sprite <sprite> --force-recreate
+zodex sprite upgrade --sprite <sprite>
+```
+
+GitHub access control:
+
+```bash
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
 zodex github list-grants --sprite <sprite>
 zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
-For local service management on non-Sprite hosts:
+Local non-Sprite service management:
 
 ```bash
 zodex start
@@ -134,9 +134,52 @@ zodex status
 zodex logs
 ```
 
-## Notes
+## Access Model
 
-- the runtime keeps remote execution stable during the product rename
-- the config path is still `/etc/computer-mcp/config.toml` during this migration window
-- the proxy is part of the supported system for Sprite deployments, not an afterthought
-- the main safety model is read-mostly by default plus temporary repo-scoped write grants
+Read access:
+
+- comes from the reader GitHub App
+- is intended for clone, fetch, and inspection
+- stays available without granting write access
+
+Write access:
+
+- is off by default
+- is granted explicitly by the operator
+- is scoped to one repo at a time
+- should be revoked after the push
+
+This model only means anything if the coding runtime is not effectively root. The supported deployment path keeps the agent on a dedicated non-root user with a writable `/workspace`.
+
+## Installation And Compatibility Notes
+
+The operator-facing product names are:
+
+- `zodex` for the operator CLI
+- `zodexd` for the daemon
+
+Compatibility details still exist where needed:
+
+- host config path remains `/etc/computer-mcp/config.toml`
+- Sprite service labels remain `computer-mcpd` and `computer-mcp-prd`
+- some on-host users, groups, and sockets still use legacy `computer-mcp` names
+- legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints may still exist during the migration window
+
+Those compatibility details are implementation facts, not the supported product narrative.
+
+## Secondary Paths
+
+- VPS setup remains documented in [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md) for non-Sprite environments.
+- Runpod-specific rollout guidance remains in [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md) as a legacy compatibility surface, not the primary product path.
+
+## Repository Direction
+
+This repo is being finalized around the `zodex` product shape:
+
+- Sprite-first deployment
+- proxy-backed MCP front door
+- read-only by default
+- temporary repo-scoped write grants
+- aligned operator and agent docs
+
+If you are updating docs or workflows, preserve that story and remove competing setup guidance from the supported path instead of adding more variants.

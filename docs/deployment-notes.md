@@ -1,10 +1,21 @@
 # Deployment Notes
 
-This file holds the details that were intentionally kept out of the main README.
+This file holds details that are intentionally kept out of the main README.
+
+## Supported Product Shape
+
+The supported path is:
+
+- `zodex` as the operator CLI
+- `zodexd` as the daemon
+- Sprites.dev as the primary deployment target
+- proxy-backed public MCP access by default
+- read-only GitHub access by default
+- temporary repo-scoped push grants when the operator wants a push
 
 ## Proxy Component
 
-For Sprite deployments, the Cloudflare Worker in [proxy/cloudflare-worker](../proxy/cloudflare-worker) is part of the supported `zodex` product shape.
+For Sprite deployments, the Cloudflare Worker in [proxy/cloudflare-worker](../proxy/cloudflare-worker) is part of the supported `zodex` system.
 
 Its responsibilities are explicit:
 
@@ -19,11 +30,11 @@ Useful commands:
 - `zodex proxy verify-origin --sprite <sprite>`
 - `zodex proxy deploy --sprite <sprite>`
 
-Treat the proxy as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the actual MCP clients in use.
+Treat the proxy as the default public MCP front door for Sprite deployments unless the raw Sprite URL has already been re-validated against the MCP clients you care about.
 
-## Default Paths And Defaults
+## Current Host-Level Defaults
 
-These are the main defaults:
+These remain the runtime defaults today:
 
 - config file: `/etc/computer-mcp/config.toml`
 - reader key: `/etc/computer-mcp/reader/private-key.pem`
@@ -35,53 +46,56 @@ These are the main defaults:
 - publisher user: `computer-mcp-publisher`
 - publisher socket: `/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock`
 
-Most deployments only need to change:
+These are compatibility paths and identifiers. They are still supported, but they are not the operator-facing product naming.
 
-- `reader_app_id`
-- `reader_installation_id`
+## Release And Install Shape
 
-Use overrides only when you actually need them, for example a non-443 port or a custom config path.
+The supported release/install story should read as `zodex`:
 
-## Install From A Private Repo Checkout
-
-The public installer tries GitHub Release artifacts first. If no matching release asset exists, it falls back to a source build.
+- release archives are published under `zodex` names
+- the installer prefers `zodex` artifacts
+- host installs still provide compatibility links for legacy `computer-mcp` entrypoints where needed
 
 If the public installer URL is not usable, build from a local checkout and point the installer at the built binaries:
 
 ```bash
-cargo build --release --bin computer-mcp --bin computer-mcpd --bin computer-mcp-prd
+cargo build --release --bin zodex --bin zodexd --bin computer-mcp-prd
 sudo COMPUTER_MCP_BINARY_SOURCE_DIR="$PWD/target/release" bash scripts/install.sh
 ```
 
-## Container Hosts
+## Sprite Runtime Notes
 
-Before using the standard start flow, check whether the host actually has a usable `systemd`:
+On Sprites:
+
+- prefer `zodex sprite setup` for initial installation
+- prefer `zodex sprite upgrade` for routine upgrades
+- prefer `zodex sprite sync` for service reconciliation
+- `zodex sprite setup` and `zodex sprite upgrade` run the remote Rust install path
+- prefer `zodex proxy verify-origin` before exposing the raw Sprite URL directly
+- use `zodex proxy deploy` when you need the stable public MCP edge
+- treat Sprite Services as the lifecycle source of truth
+
+If Sprite Services drift into stale `running` state, use:
 
 ```bash
-ps -p 1 -o pid=,comm=,args=
-which systemctl || true
-systemctl is-system-running || true
+zodex sprite sync --sprite <sprite> --force-recreate
 ```
 
-If PID 1 is not `systemd`, `computer-mcp` uses process mode instead.
+The built-in `sprite` user may have passwordless `sudo`, which would effectively hand the coding agent root and break the temporary-write-control model. The supported setup keeps the coding runtime on `computer-mcp-agent` instead.
 
-On container-style hosts:
-- `computer-mcp start` runs `computer-mcp-prd` and `computer-mcpd` as detached processes
-- pid and log files are stored under the state directory
-- restart persistence depends on the container lifecycle, not `systemd`
+## Standard Linux Hosts
 
-On Sprite-like hosts:
-- keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user
-- prefer `zodex sprite upgrade` as the normal operator upgrade path
-- `zodex sprite setup` and `zodex sprite upgrade` upload the local `zodex` runtime binaries and run the remote Rust install path instead of relying on the legacy shell installer
-- register Sprite Services with `zodex sprite sync` instead of relying on detached process mode
-- prefer `zodex proxy verify-origin` before assuming the raw Sprite URL is safe to expose directly to MCP clients
-- deploy or update the supported Worker with `zodex proxy deploy --sprite <sprite>` when you need a stable public MCP edge
-- if Sprite Services drift into stale "running" state, use `zodex sprite sync --force-recreate --sprite <sprite> [--org <org>]` from the control-plane side
-- treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
-- `computer-mcp upgrade` and `computer-mcp restart` in guest only cover already-healthy Sprite-managed processes; they are not the primary control-plane upgrade interface
+If the target host is a normal Linux VPS with working `systemd`, the existing CLI flow is still appropriate:
 
-The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the temporary-write-control model.
+```bash
+zodex start
+zodex stop
+zodex restart
+zodex status
+zodex logs
+```
+
+If PID 1 is not `systemd`, the runtime falls back to process mode.
 
 ## Access Model
 
@@ -99,20 +113,12 @@ Daily operator commands:
 - `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 
 Important limits:
+
 - do not run the coding agent as `root` if you want repo-scoped write control to mean anything
 - do not give the coding agent unrestricted `sudo`
-- prefer a dedicated writable workspace such as `/workspace`, owned by `agent_user`
+- prefer a dedicated writable workspace such as `/workspace`
 - keep the push-grant app private key on the operator machine
 - keep the push-grant app installed only on approved repositories
-
-The installer configures a host-scoped Git credential helper for `https://github.com` under the agent user's home. That helper mints short-lived reader-app installation tokens on demand, so normal HTTPS clone/fetch operations can read private repos without exposing the push-grant write credential.
-
-The installer also sets a default global commit identity for the agent user so fresh repos can commit immediately:
-
-- `Computer MCP Agent`
-- `computer-mcp-agent@local.invalid`
-
-If you want a different identity, pass `COMPUTER_MCP_GIT_USER_NAME` and `COMPUTER_MCP_GIT_USER_EMAIL` during install or upgrade. Reinstalls preserve an existing custom identity unless you explicitly override it.
 
 ## Useful Installer Overrides
 
@@ -142,12 +148,4 @@ If you want a different identity, pass `COMPUTER_MCP_GIT_USER_NAME` and `COMPUTE
 - `COMPUTER_MCP_PUBLIC_HOST`
 - `COMPUTER_MCP_ENABLE_CERTBOT`
 
-Example:
-
-```bash
-COMPUTER_MCP_VERSION=v0.1.0 \
-COMPUTER_MCP_INSTALL_DIR=/usr/local/bin \
-curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo -E bash
-```
-
-If you use a non-default config file, add `--config /path/to/config.toml` to the `computer-mcp` commands from the main README.
+Those names remain legacy for compatibility with the current host layout.

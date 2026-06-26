@@ -17,8 +17,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            archive_name: computer-mcp-x86_64-unknown-linux-gnu
-            client_asset_name: computer-x86_64-unknown-linux-gnu
+            archive_name: zodex-x86_64-unknown-linux-gnu
 
     steps:
       - name: Checkout
@@ -32,22 +31,19 @@ jobs:
       - name: Build release binaries
         run: |
           cargo build --locked --release --target "${{ matrix.target }}" \
-            --bin computer \
-            --bin computer-mcp \
-            --bin computer-mcpd \
+            --bin zodex \
+            --bin zodexd \
             --bin computer-mcp-prd
 
       - name: Package release archive
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
-          cp "target/${{ matrix.target }}/release/computer" "dist/${{ matrix.client_asset_name }}"
-          cp "target/${{ matrix.target }}/release/computer-mcp" "dist/${{ matrix.archive_name }}/"
-          cp "target/${{ matrix.target }}/release/computer-mcpd" "dist/${{ matrix.archive_name }}/"
+          cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
+          cp "target/${{ matrix.target }}/release/zodexd" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/computer-mcp-prd" "dist/${{ matrix.archive_name }}/"
           tar -C dist -czf "dist/${{ matrix.archive_name }}.tar.gz" "${{ matrix.archive_name }}"
           (
             cd dist
-            sha256sum "${{ matrix.client_asset_name }}" > "${{ matrix.client_asset_name }}.sha256"
             sha256sum "${{ matrix.archive_name }}.tar.gz" > "${{ matrix.archive_name }}.tar.gz.sha256"
           )
 
@@ -56,8 +52,6 @@ jobs:
         with:
           name: ${{ matrix.archive_name }}
           path: |
-            dist/${{ matrix.client_asset_name }}
-            dist/${{ matrix.client_asset_name }}.sha256
             dist/${{ matrix.archive_name }}.tar.gz
             dist/${{ matrix.archive_name }}.tar.gz.sha256
 
@@ -66,7 +60,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/${{ matrix.client_asset_name }}
-            dist/${{ matrix.client_asset_name }}.sha256
             dist/${{ matrix.archive_name }}.tar.gz
             dist/${{ matrix.archive_name }}.tar.gz.sha256

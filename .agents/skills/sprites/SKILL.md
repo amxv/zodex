@@ -5,9 +5,9 @@ description: Use when operating Sprites from the CLI, including auth/context set
 
 # Sprites System
 
-Rename note for the current repo:
-- prefer `zodex` for operator-facing commands
-- keep legacy `computer-mcp` names when referring to current service labels, paths, or compatibility flows that have not been cleaned up yet
+Supported framing for this repo:
+- use `zodex` for operator-facing commands and product naming
+- treat legacy `computer-mcp` names as implementation details for service labels, paths, or compatibility flows only
 
 Use this skill when work involves understanding or operating Sprites with the `sprite` CLI.
 
@@ -56,10 +56,10 @@ Use commands in four groups:
 
 ## Recommended Operator Workflow (Existing Sprite)
 
-For an existing Sprite (example: `computer`):
+For an existing Sprite (example: `coding-sprite`):
 
 ```bash
-sprite use computer
+sprite use coding-sprite
 sprite exec 'echo hello && uname -a && pwd'
 sprite console
 ```
@@ -67,11 +67,11 @@ sprite console
 Use `sprite exec` for automation and repeatable scripts.
 Use `sprite console` for exploratory debugging.
 
-For `computer-mcp` on Sprites, prefer control-plane lifecycle commands over in-guest service management:
+For `zodex` on Sprites, prefer control-plane lifecycle commands over in-guest service management:
 
-- Initial install or full reconfiguration: `scripts/setup-sprite.sh`
-- Routine upgrade: `scripts/upgrade-sprite.sh --sprite <sprite> [--org <org>]`
-- If control-plane state is stale: `scripts/sprite-services.sh sync --sprite <sprite> [--org <org>] --force-recreate`
+- Initial install or full reconfiguration: `zodex sprite setup --sprite <sprite> --repo <owner/repo> ...`
+- Routine upgrade: `zodex sprite upgrade --sprite <sprite> [--org <org>]`
+- If control-plane state is stale: `zodex sprite sync --sprite <sprite> [--org <org>] --force-recreate`
 
 That keeps Sprite Services as the lifecycle owner and avoids depending on guest-local process state when upgrading.
 

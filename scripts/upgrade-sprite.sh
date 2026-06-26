@@ -16,8 +16,8 @@ Usage:
     [--url-auth <sprite|public>]
 
 What this script does:
-  1. Verifies the Sprite already has a computer-mcp config.
-  2. Installs the requested computer-mcp build inside the Sprite.
+  1. Verifies the Sprite already has a compatible runtime config.
+  2. Installs the requested zodex-compatible build inside the Sprite.
   3. Force-recreates Sprite Services from the control plane.
   4. Verifies local health, agent commit identity, reader Git access, socket permissions,
      and publisher-key isolation.

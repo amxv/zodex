@@ -5,7 +5,7 @@ This runbook is for an agent helping a human set up `zodex` on a Sprite.
 Use this when the target environment is Sprites (`sprite` CLI), not a traditional VPS over SSH.
 
 For traditional VPS setup, use [agent-vps-setup-runbook.md](agent-vps-setup-runbook.md).
-For Runpod-specific rollout behavior, use [../.agents/skills/runpod-deployment/SKILL.md](../.agents/skills/runpod-deployment/SKILL.md).
+For Runpod-specific rollout behavior, use [../.agents/skills/runpod-deployment/SKILL.md](../.agents/skills/runpod-deployment/SKILL.md). Runpod remains a legacy compatibility path, not the supported default product path.
 
 ## Outcome
 
@@ -50,7 +50,7 @@ This matters on Sprites because the built-in `sprite` user commonly has password
 
 ## Required Inputs
 
-- Sprite name (example: `computer`)
+- Sprite name (example: `coding-sprite`)
 - optional organization name
 - target repo slug (example: `owner/repo`)
 - reader app ID
@@ -68,8 +68,8 @@ Example:
 
 ```bash
 zodex sprite setup \
-  --sprite computer \
-  --repo amxv/computer-mcp \
+  --sprite coding-sprite \
+  --repo owner/repo \
   --reader-app-id <reader-app-id> \
   --reader-pem /absolute/path/to/reader-private-key.pem \
   --publisher-app-id <publisher-app-id> \
@@ -126,7 +126,7 @@ For an already-configured Sprite, prefer the Rust control-plane upgrade flow:
 Example:
 
 ```bash
-zodex sprite upgrade --sprite computer --org amxv
+zodex sprite upgrade --sprite coding-sprite --org <org-name>
 ```
 
 That command uploads the current local operator/runtime binaries, installs them inside the Sprite through the remote Rust CLI, force-recreates the Sprite Services from the control plane, verifies local health, and verifies reader-backed GitHub HTTPS access still works.

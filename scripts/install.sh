@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.14"
+SCRIPT_VERSION="0.1.15"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -42,15 +42,15 @@ TARGET_TRIPLE="unknown"
 TMP_DIR=""
 
 log() {
-  printf '[computer-mcp install] %s\n' "$*"
+  printf '[zodex install] %s\n' "$*"
 }
 
 warn() {
-  printf '[computer-mcp install] WARNING: %s\n' "$*" >&2
+  printf '[zodex install] WARNING: %s\n' "$*" >&2
 }
 
 die() {
-  printf '[computer-mcp install] ERROR: %s\n' "$*" >&2
+  printf '[zodex install] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -262,6 +262,28 @@ resolve_release_api_url() {
   fi
 }
 
+resolve_release_asset_url_by_name() {
+  local metadata="$1"
+  local archive_name="$2"
+  printf '%s' "${metadata}" \
+    | tr '\n' ' ' \
+    | sed 's/},{/},\n{/g' \
+    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*/${archive_name}\"" \
+    | head -n1 \
+      | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
+}
+
+resolve_release_asset_url_legacy_pattern() {
+  local metadata="$1"
+  local server_archive_name="$2"
+  printf '%s' "${metadata}" \
+    | tr '\n' ' ' \
+    | sed 's/},{/},\n{/g' \
+    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*/${server_archive_name}\"" \
+    | head -n1 \
+    | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
+}
+
 resolve_release_asset_url() {
   if [[ -n "${COMPUTER_MCP_ASSET_URL}" ]]; then
     printf '%s\n' "${COMPUTER_MCP_ASSET_URL}"
@@ -272,14 +294,12 @@ resolve_release_asset_url() {
   metadata="$(curl -fsSL "$(resolve_release_api_url)")" || return 1
 
   local server_archive_name="computer-mcp-${TARGET_TRIPLE}.tar.gz"
-  local asset_url
-  asset_url="$(printf '%s' "${metadata}" \
-    | tr '\n' ' ' \
-    | sed 's/},{/},\n{/g' \
-    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*/${server_archive_name}\"" \
-    | head -n1 \
-    | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/' \
-  )"
+  local primary_server_archive_name="zodex-${TARGET_TRIPLE}.tar.gz"
+  local asset_url=""
+  asset_url="$(resolve_release_asset_url_by_name "${metadata}" "${primary_server_archive_name}")"
+  if [[ -z "${asset_url}" ]]; then
+    asset_url="$(resolve_release_asset_url_legacy_pattern "${metadata}" "${server_archive_name}")"
+  fi
 
   [[ -n "${asset_url}" ]] || return 1
   printf '%s\n' "${asset_url}"
@@ -287,14 +307,25 @@ resolve_release_asset_url() {
 
 install_binaries_from_dir() {
   local src_dir="$1"
-  [[ -x "${src_dir}/computer-mcp" ]] || die "missing executable ${src_dir}/computer-mcp"
-  [[ -x "${src_dir}/computer-mcpd" ]] || die "missing executable ${src_dir}/computer-mcpd"
+  local cli_src="${src_dir}/zodex"
+  local daemon_src="${src_dir}/zodexd"
+  if [[ ! -x "${cli_src}" && -x "${src_dir}/computer-mcp" ]]; then
+    cli_src="${src_dir}/computer-mcp"
+  fi
+  if [[ ! -x "${daemon_src}" && -x "${src_dir}/computer-mcpd" ]]; then
+    daemon_src="${src_dir}/computer-mcpd"
+  fi
+
+  [[ -x "${cli_src}" ]] || die "missing executable ${src_dir}/zodex or ${src_dir}/computer-mcp"
+  [[ -x "${daemon_src}" ]] || die "missing executable ${src_dir}/zodexd or ${src_dir}/computer-mcpd"
   [[ -x "${src_dir}/computer-mcp-prd" ]] || die "missing executable ${src_dir}/computer-mcp-prd"
 
   install -d -m 0755 "${COMPUTER_MCP_INSTALL_DIR}"
-  install -m 0755 "${src_dir}/computer-mcp" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcp"
-  install -m 0755 "${src_dir}/computer-mcpd" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcpd"
+  install -m 0755 "${cli_src}" "${COMPUTER_MCP_INSTALL_DIR}/zodex"
+  install -m 0755 "${daemon_src}" "${COMPUTER_MCP_INSTALL_DIR}/zodexd"
   install -m 0755 "${src_dir}/computer-mcp-prd" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcp-prd"
+  ln -sf "${COMPUTER_MCP_INSTALL_DIR}/zodex" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcp"
+  ln -sf "${COMPUTER_MCP_INSTALL_DIR}/zodexd" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcpd"
 }
 
 install_binaries_from_release() {
@@ -307,7 +338,7 @@ install_binaries_from_release() {
   tar -xzf "${archive}" -C "${TMP_DIR}"
 
   local cli_path
-  cli_path="$(find "${TMP_DIR}" -type f -name computer-mcp -print -quit)"
+  cli_path="$(find "${TMP_DIR}" -type f \( -name zodex -o -name computer-mcp \) -print -quit)"
   [[ -n "${cli_path}" ]] || return 1
 
   local extracted_dir
@@ -337,7 +368,11 @@ install_binaries_from_source() {
 
   (
     cd "${src_dir}"
-    cargo build --release --bin computer-mcp --bin computer-mcpd --bin computer-mcp-prd
+    if cargo build --release --bin zodex --bin zodexd --bin computer-mcp-prd; then
+      :
+    else
+      cargo build --release --bin computer-mcp --bin computer-mcpd --bin computer-mcp-prd
+    fi
   )
 
   install_binaries_from_dir "${src_dir}/target/release"
@@ -402,8 +437,8 @@ EOF
 }
 
 run_cli_install() {
-  local cli="${COMPUTER_MCP_INSTALL_DIR}/computer-mcp"
-  [[ -x "${cli}" ]] || die "computer-mcp not installed at ${cli}"
+  local cli="${COMPUTER_MCP_INSTALL_DIR}/zodex"
+  [[ -x "${cli}" ]] || die "zodex not installed at ${cli}"
   "${cli}" --config "${COMPUTER_MCP_CONFIG_PATH}" install
 }
 
@@ -429,7 +464,7 @@ run_as_agent_user() {
 }
 
 configure_agent_git_reader_helper() {
-  local helper_cmd="${COMPUTER_MCP_INSTALL_DIR}/computer-mcp --config ${COMPUTER_MCP_CONFIG_PATH} git-credential-helper"
+  local helper_cmd="${COMPUTER_MCP_INSTALL_DIR}/zodex --config ${COMPUTER_MCP_CONFIG_PATH} git-credential-helper"
 
   run_as_agent_user \
     git config --global --replace-all credential.https://github.com.helper "${helper_cmd}"
@@ -485,16 +520,16 @@ Next steps:
   2. review "${COMPUTER_MCP_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
   3. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
   4. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
-  5. computer-mcp start
-  6. computer-mcp show-url --host "${public_host}"
+  5. zodex start
+  6. zodex show-url --host "${public_host}"
 
 Verify:
-  - computer-mcp status
+  - zodex status
   - curl "https://${public_host}/health"
   - MCP URL shape: https://${public_host}/mcp?key=<redacted>
 
 Optional:
-  - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
+  - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
   - agent commits default to ${COMPUTER_MCP_GIT_USER_NAME} <${COMPUTER_MCP_GIT_USER_EMAIL}> unless you override COMPUTER_MCP_GIT_USER_NAME / COMPUTER_MCP_GIT_USER_EMAIL during install
 EOF
@@ -515,16 +550,16 @@ Next steps:
   1. review "${COMPUTER_MCP_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
   2. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
   3. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
-  4. computer-mcp start
-  5. computer-mcp show-url --host "${public_host}"
+  4. zodex start
+  5. zodex show-url --host "${public_host}"
 
 Verify:
-  - computer-mcp status
+  - zodex status
   - curl -k "https://${public_host}/health"
   - MCP URL shape: https://${public_host}/mcp?key=<redacted>
 
 Optional:
-  - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
+  - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
   - agent commits default to ${COMPUTER_MCP_GIT_USER_NAME} <${COMPUTER_MCP_GIT_USER_EMAIL}> unless you override COMPUTER_MCP_GIT_USER_NAME / COMPUTER_MCP_GIT_USER_EMAIL during install
 EOF

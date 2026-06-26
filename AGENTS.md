@@ -1,10 +1,18 @@
 # AGENTS.md
 
-## Runpod
+## Product Story
 
-Phase 1 naming note:
-- prefer `zodex` and `zodexd` in operator-facing guidance
-- keep legacy `computer-mcp`, `computer`, and daemon/service names when compatibility or exact on-host identifiers matter
+Treat the supported product story as:
+
+- product and operator CLI: `zodex`
+- daemon: `zodexd`
+- primary deployment target: Sprites.dev
+- default access model: reader GitHub App for read, temporary repo-scoped `zodex github grant-push` for write
+- default public front door for Sprite deployments: the proxy-backed MCP URL
+
+Legacy `computer-mcp`, `computer`, daemon/service labels, config paths, and host usernames still exist where compatibility or exact on-host identifiers matter, but they should not be the primary operator-facing framing.
+
+## Runpod
 
 For Runpod-specific deployment and rollout work, use the repo-local skill at [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
 

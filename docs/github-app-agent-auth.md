@@ -1,8 +1,10 @@
-# GitHub App Auth
+# GitHub App Setup And Access Model
+
+This is the one-time setup runbook for the supported `zodex` GitHub access model.
 
 `zodex` uses two GitHub Apps:
 
-- a **reader app** for always-on read access from the Sprite runtime
+- a **reader app** for always-on read access from the runtime
 - a **push-grant app** for temporary repo-scoped direct push access
 
 The default model is:
@@ -27,6 +29,8 @@ Push-grant app:
 - `Pull requests: Read & write`
 - everything else: `No access`
 
+Do not widen those permissions as part of normal setup.
+
 ## Installation Scope
 
 Install both apps on `Only select repositories`.
@@ -36,9 +40,9 @@ Normal expectations:
 - the reader app may be installed on every repo the agent should be allowed to inspect
 - the push-grant app should be installed only on repos where the operator may later allow direct pushes
 
-## Runtime Read Access
+## What The Runtime Uses
 
-The Sprite runtime uses the reader app automatically once these config values are present:
+The runtime read path needs these values:
 
 - `reader_app_id`
 - `reader_installation_id`
@@ -50,9 +54,21 @@ The installer configures a host-scoped Git credential helper for `https://github
 - `git fetch`
 - `git ls-remote`
 
-use short-lived reader tokens without manual username/password prompts.
+work through short-lived reader tokens without a manual username/password prompt.
 
 In other words, plain `git clone https://github.com/<owner>/<repo>.git` works once the reader app is configured.
+
+## One-Time Setup Checklist
+
+1. Create the reader app with read-only `Contents`.
+2. Create the push-grant app with only `Contents: Read & write` and `Pull requests: Read & write`.
+3. Install both apps on `Only select repositories`.
+4. Download both PEM files and keep them on the operator machine.
+5. Record:
+   - reader app ID
+   - push-grant app ID
+   - the target repo slug
+6. Run the Sprite setup flow from [agent-sprites-setup-runbook.md](agent-sprites-setup-runbook.md).
 
 ## Temporary Push Grants
 
@@ -60,8 +76,8 @@ When the operator wants the agent to push to one repo, grant access explicitly:
 
 ```bash
 zodex github grant-push \
-  --sprite computer \
-  --repo amxv/computer-mcp \
+  --sprite <sprite> \
+  --repo <owner/repo> \
   --publisher-app-id <push-grant-app-id> \
   --publisher-pem /absolute/path/to/push-grant-app.pem
 ```
@@ -71,53 +87,37 @@ If the local machine already has matching config values, `--publisher-app-id` an
 Inspect active grants:
 
 ```bash
-zodex github list-grants --sprite computer
+zodex github list-grants --sprite <sprite>
 ```
 
 Revoke the grant when the task is done:
 
 ```bash
-zodex github revoke-push --sprite computer --repo amxv/computer-mcp
+zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
-Grant behavior in the current implementation:
+Grant behavior in the supported model:
 
 - write is off by default
 - the granted token is scoped to one repo
 - the granted token is stored on the Sprite only while the grant is active
 - every other repo still uses the read-only helper path
 
-## Example Config
+## Runtime Paths And Defaults
 
-The runtime config only needs the reader-side values for the default read path:
+The current host-level defaults remain:
 
-```toml
-reader_app_id = 123456
-reader_installation_id = 234567890
-```
+- config file: `/etc/computer-mcp/config.toml`
+- reader key: `/etc/computer-mcp/reader/private-key.pem`
+- publisher key: `/etc/computer-mcp/publisher/private-key.pem`
 
-Default reader key path:
-
-```text
-/etc/computer-mcp/reader/private-key.pem
-```
-
-Place the reader key there:
-
-```bash
-sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader
-sudo install -m 0640 -o root -g computer-mcp \
-  /path/to/reader-app.pem \
-  /etc/computer-mcp/reader/private-key.pem
-```
+Those are compatibility paths. They remain supported even though the operator-facing product name is `zodex`.
 
 Then start the runtime:
 
 ```bash
 zodex start
 ```
-
-The push-grant app is still required for the full workflow, but the default runtime path is built around read access plus explicit temporary grants, not a resident write workflow.
 
 ## Commit Identity
 
@@ -149,5 +149,6 @@ Bad:
 ## Primary References
 
 - Sprite setup: [agent-sprites-setup-runbook.md](agent-sprites-setup-runbook.md)
-- VPS setup: [agent-vps-setup-runbook.md](agent-vps-setup-runbook.md)
-- deployment details: [deployment-notes.md](deployment-notes.md)
+- Operator workflow: [operator-guide.md](operator-guide.md)
+- Agent expectations: [agent-instructions.md](agent-instructions.md)
+- Deployment details: [deployment-notes.md](deployment-notes.md)

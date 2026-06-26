@@ -21,7 +21,7 @@ Usage:
 What this script does:
   1. Derives GitHub App installation IDs for the target repo.
   2. Validates reader/publisher app token minting locally.
-  3. Installs latest computer-mcp on the target Sprite.
+  3. Installs the latest zodex-compatible runtime on the target Sprite.
   4. Installs PEM keys + writes managed config block.
   5. Adapts ports for Sprite service-mode runtime:
      - bind_port = 8443 (TLS)

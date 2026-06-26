@@ -7,7 +7,7 @@ Usage:
   scripts/sprite-services.sh <command> [options]
 
 Commands:
-  sync     Create or update the Sprite Services for computer-mcp.
+  sync     Create or update the Sprite Services for zodex.
   status   List Sprite Services and pretty-print their current state.
   logs     Read Sprite Service logs for a specific service.
 

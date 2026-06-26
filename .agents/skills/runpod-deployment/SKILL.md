@@ -1,13 +1,13 @@
 ---
 name: runpod-deployment
-description: Use when updating, verifying, or rolling out computer-mcp on Runpod, including deciding between binary-only upgrades and full Runpod image/template/pod rollouts.
+description: Use when updating, verifying, or rolling out zodex on Runpod, including deciding between binary-only upgrades and full Runpod image/template/pod rollouts.
 ---
 
 # Runpod Deployment
 
-Rename note for the current migration phase:
-- prefer `zodex` and `zodexd` in operator-facing guidance
-- keep legacy `computer-mcp` identifiers where they are still the live image, repo, service, or compatibility names
+Runpod is a legacy compatibility deployment surface in this repo, not the primary supported product path.
+
+Use `zodex` and `zodexd` in operator-facing guidance. Keep legacy `computer-mcp` identifiers only where they are still the live image, repo, service, or compatibility names.
 
 Use this skill when the target host is Runpod and the task involves any of:
 
