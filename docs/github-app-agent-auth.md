@@ -1,6 +1,10 @@
 # GitHub App Auth
 
-`computer-mcp` uses two GitHub Apps:
+`zodex` uses two GitHub Apps.
+
+Compatibility note:
+- use `zodex` for operator-facing commands in this document
+- legacy `computer-mcp` and daemon names still work in the current migration release
 
 - a **reader app** for read-only private repo access
 - a **publisher app** for branch push + PR creation
@@ -9,7 +13,7 @@ The publisher side uses a split local model:
 
 - the coding agent edits code, runs tests, and makes a local commit
 - the local publisher daemon holds the GitHub App private key
-- `computer-mcp publish-pr` sends a local `git bundle` to the publisher daemon
+- `zodex publish-pr` sends a local `git bundle` to the publisher daemon
 - the publisher daemon mints a short-lived installation token internally, pushes a generated branch, opens the PR, and returns the PR URL
 
 By default the coding daemon runs as `computer-mcp-agent`, with:
@@ -70,7 +74,7 @@ Create two private GitHub Apps, install both on `Only select repositories`, then
 - publisher installation ID
 - publisher PEM path
 
-## Configure `computer-mcp`
+## Configure `zodex`
 
 Example config:
 
@@ -102,10 +106,10 @@ sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
 Then start the stack:
 
 ```bash
-computer-mcp start
+zodex start
 ```
 
-`computer-mcp start` validates both apps, creates TLS artifacts if needed, starts the publisher daemon, and starts the MCP daemon.
+`zodex start` validates both apps, creates TLS artifacts if needed, starts the publisher daemon, and starts the MCP daemon.
 
 The installer also configures the agent user's Git config with a host-scoped helper for `https://github.com`. Once `reader_app_id`, `reader_installation_id`, and the reader PEM are present, normal HTTPS `git clone`, `git fetch`, and `git ls-remote` use short-lived reader tokens automatically.
 
@@ -121,10 +125,10 @@ If you want a different commit identity, override `COMPUTER_MCP_GIT_USER_NAME` a
 Run `publish-pr` from inside the repo checkout after the change has already been committed:
 
 ```bash
-computer-mcp publish-pr \
+zodex publish-pr \
   --repo amxv/computer-mcp \
   --title "Agent: example change" \
-  --body "Automated change from computer-mcp."
+  --body "Automated change from zodex."
 ```
 
 Current requirements:

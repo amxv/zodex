@@ -2,6 +2,10 @@
 
 ## Runpod
 
+Phase 1 naming note:
+- prefer `zodex` and `zodexd` in operator-facing guidance
+- keep legacy `computer-mcp`, `computer`, and daemon/service names when compatibility or exact on-host identifiers matter
+
 For Runpod-specific deployment and rollout work, use the repo-local skill at [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
 
 Keep only these policy rules in mind here:

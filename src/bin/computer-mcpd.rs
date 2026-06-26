@@ -8,8 +8,8 @@ use computer_mcp::server::run_server;
 use tracing::warn;
 
 #[derive(Debug, Parser)]
-#[command(name = "computer-mcpd")]
-#[command(about = "Computer MCP daemon")]
+#[command(name = "zodexd")]
+#[command(about = "Zodex daemon for remote execution (compatible with legacy computer-mcpd)")]
 struct Args {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     config: String,
@@ -29,9 +29,20 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(Some(Path::new(&args.config)))?;
 
-    warn!(
-        "computer-mcpd exposes high-privilege remote execution; protect API keys and network access"
-    );
+    warn!("zodexd exposes high-privilege remote execution; protect API keys and network access");
 
     run_server(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_help_uses_zodexd_name() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("zodexd"));
+        assert!(help.contains("legacy computer-mcpd"));
+    }
 }

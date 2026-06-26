@@ -5,6 +5,10 @@ description: Use when updating, verifying, or rolling out computer-mcp on Runpod
 
 # Runpod Deployment
 
+Rename note for the current migration phase:
+- prefer `zodex` and `zodexd` in operator-facing guidance
+- keep legacy `computer-mcp` identifiers where they are still the live image, repo, service, or compatibility names
+
 Use this skill when the target host is Runpod and the task involves any of:
 
 - updating the dedicated Runpod image

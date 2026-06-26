@@ -1,6 +1,11 @@
-# computer-mcp
+# zodex
 
-Remote coding MCP server for Linux VPS deployment.
+Remote coding MCP server for Linux VPS and Sprite deployment.
+
+Phase 1 rename note:
+- use `zodex` for the operator CLI
+- use `zodexd` for the daemon
+- legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints still work during the compatibility window
 
 This README is the fast path for a fresh VPS.
 
@@ -27,7 +32,7 @@ Container images:
 
 ## How It Works
 
-`computer-mcp` exposes a small remote coding surface over MCP so a model can control a Linux VPS the same way Codex-style agents control a local coding sandbox.
+`zodex` exposes a small remote coding surface over MCP so a model can control a Linux VPS the same way Codex-style agents control a local coding sandbox.
 
 At a high level:
 
@@ -53,6 +58,8 @@ That is the main purpose of this repository: give models a narrow remote executi
 - A publisher GitHub App private key
 
 Default config file: `/etc/computer-mcp/config.toml`
+
+The compatibility release keeps legacy paths, service names, and payload formats unchanged while moving operator-facing commands to `zodex`.
 
 The commands below assume that default path. If you use a different config file, add `--config /path/to/config.toml`.
 
@@ -110,10 +117,10 @@ sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
 ## 4. Start
 
 ```bash
-computer-mcp start
+zodex start
 ```
 
-`computer-mcp start` does the rest:
+`zodex start` does the rest:
 
 - checks both GitHub Apps are configured
 - creates TLS artifacts if they do not exist yet
@@ -123,14 +130,14 @@ computer-mcp start
 The installer already generated an API key. Rotate it only if you want a new one:
 
 ```bash
-computer-mcp set-key "<strong-random-key>"
+zodex set-key "<strong-random-key>"
 ```
 
 ## 5. Verify
 
 ```bash
-computer-mcp status
-computer-mcp show-url --host "<public_ip_or_host>"
+zodex status
+zodex show-url --host "<public_ip_or_host>"
 curl -k "https://<public_ip_or_host>/health"
 ```
 
@@ -145,10 +152,10 @@ https://<public_ip_or_host>/mcp?key=<api_key>
 After the agent has finished work in a local git checkout and committed the change:
 
 ```bash
-computer-mcp publish-pr \
+zodex publish-pr \
   --repo amxv/computer-mcp \
   --title "Agent: example change" \
-  --body "Automated change from computer-mcp."
+  --body "Automated change from zodex."
 ```
 
 Requirements:
@@ -159,11 +166,11 @@ Requirements:
 ## Common Commands
 
 ```bash
-computer-mcp start
-computer-mcp stop
-computer-mcp status
-computer-mcp logs
-computer-mcp publisher status
-computer-mcp publisher logs
-computer-mcp restart
+zodex start
+zodex stop
+zodex status
+zodex logs
+zodex publisher status
+zodex publisher logs
+zodex restart
 ```

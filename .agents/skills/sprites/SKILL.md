@@ -5,6 +5,10 @@ description: Use when operating Sprites from the CLI, including auth/context set
 
 # Sprites System
 
+Rename note for the current repo:
+- prefer `zodex` for operator-facing commands
+- keep legacy `computer-mcp` names when referring to current service labels, paths, or compatibility flows that have not been cleaned up yet
+
 Use this skill when work involves understanding or operating Sprites with the `sprite` CLI.
 
 This skill is based on:

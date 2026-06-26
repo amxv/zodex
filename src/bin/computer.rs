@@ -11,7 +11,9 @@ use computer_mcp::protocol::{ApplyPatchInput, ExecCommandInput, WriteStdinInput}
 
 #[derive(Debug, Parser)]
 #[command(name = "computer")]
-#[command(about = "Thin HTTP CLI for remote computer-mcp operations")]
+#[command(
+    about = "Thin HTTP CLI for remote zodex operations (legacy computer compatibility surface)"
+)]
 #[command(version)]
 struct Cli {
     #[arg(long, global = true)]
@@ -165,7 +167,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::serve;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use tempfile::tempdir;
     use tokio::sync::oneshot;
 
@@ -173,6 +175,13 @@ mod tests {
     use computer_mcp::config::Config;
     use computer_mcp::http_api::build_http_api_router;
     use computer_mcp::service::ComputerService;
+
+    #[test]
+    fn clap_help_mentions_zodex_compatibility_surface() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("remote zodex operations"));
+        assert!(help.contains("legacy computer compatibility surface"));
+    }
 
     #[test]
     fn parses_exec_command_and_global_connection_flags() {

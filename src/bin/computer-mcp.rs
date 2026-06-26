@@ -54,6 +54,8 @@ const PROCESS_STOP_POLL_MS: u64 = 100;
 const SHARED_PROCESS_DIR_MODE: u32 = 0o750;
 const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
 const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
+const PRIMARY_OPERATOR_BINARY: &str = "zodex";
+const PRIMARY_DAEMON_BINARY: &str = "zodexd";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceManager {
@@ -62,8 +64,8 @@ enum ServiceManager {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "computer-mcp")]
-#[command(about = "Computer MCP CLI")]
+#[command(name = "zodex")]
+#[command(about = "Zodex operator CLI (compatible with legacy computer-mcp commands)")]
 #[command(version)]
 struct Cli {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
@@ -752,7 +754,7 @@ fn ensure_linux() -> Result<()> {
     if cfg!(target_os = "linux") {
         Ok(())
     } else {
-        bail!("computer-mcp CLI service management is Linux-only");
+        bail!("{PRIMARY_OPERATOR_BINARY} service management is Linux-only");
     }
 }
 
@@ -1094,7 +1096,7 @@ fn resolve_daemon_binary_path() -> Result<PathBuf> {
     candidates
         .into_iter()
         .find(|path| path.exists())
-        .ok_or_else(|| anyhow!("failed to locate computer-mcpd binary"))
+        .ok_or_else(|| anyhow!("failed to locate {PRIMARY_DAEMON_BINARY} binary"))
 }
 
 fn resolve_publisher_daemon_binary_path() -> Result<PathBuf> {
@@ -1870,7 +1872,7 @@ fn build_single_sprite_service_status_lines(
 
     if status != "running" {
         lines.push(format!(
-            "hint: inspect logs with `computer-mcp sprite service-logs --sprite {sprite} --service {service_name}`"
+                    "hint: inspect logs with `{PRIMARY_OPERATOR_BINARY} sprite service-logs --sprite {sprite} --service {service_name}`"
         ));
     }
 
@@ -2088,18 +2090,21 @@ fn build_process_status_lines(
     ];
 
     if !matches!(state, ProcessModeState::Running(_)) {
-        lines.push("hint: run `computer-mcp start`".to_string());
+        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} start`"));
     }
     if let Some(port) = config.http_bind_port {
         lines.push(format!("http-proxy-listen: {}:{port}", config.bind_host));
     }
     if !tls_artifacts_exist(config) {
-        lines
-            .push("note: `computer-mcp start` will create TLS artifacts automatically".to_string());
+        lines.push(format!(
+            "note: `{PRIMARY_OPERATOR_BINARY} start` will create TLS artifacts automatically"
+        ));
     }
     if matches!(state, ProcessModeState::Stale(_)) {
         lines.push(
-            "hint: stale pid file detected; `computer-mcp restart` will cleanly recover"
+            format!(
+                "hint: stale pid file detected; `{PRIMARY_OPERATOR_BINARY} restart` will cleanly recover"
+            )
                 .to_string(),
         );
     }
@@ -2145,7 +2150,7 @@ fn build_publisher_status_lines(
     ];
 
     if !matches!(state, ProcessModeState::Running(_)) {
-        lines.push("hint: run `computer-mcp start`".to_string());
+        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} start`"));
     }
     if config.publisher_app_id.is_none() {
         lines.push("hint: set `publisher_app_id` in config".to_string());
@@ -2167,7 +2172,7 @@ fn render_systemd_unit(daemon_path: &Path, config_path: &Path) -> String {
 
     format!(
         "[Unit]
-Description=computer-mcp daemon
+Description=zodex daemon (computer-mcp compatible)
 After=network-online.target
 Wants=network-online.target
 
@@ -2346,17 +2351,18 @@ fn build_status_summary_lines(
     ];
 
     if active != "active" {
-        lines.push("hint: run `computer-mcp start`".to_string());
+        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} start`"));
     }
     if let Some(port) = config.http_bind_port {
         lines.push(format!("http-proxy-listen: {}:{port}", config.bind_host));
     }
     if unit_file_state != "enabled" {
-        lines.push("hint: run `computer-mcp install`".to_string());
+        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} install`"));
     }
     if !tls_artifacts_exist(config) {
-        lines
-            .push("note: `computer-mcp start` will create TLS artifacts automatically".to_string());
+        lines.push(format!(
+            "note: `{PRIMARY_OPERATOR_BINARY} start` will create TLS artifacts automatically"
+        ));
     }
     lines
 }
@@ -2564,7 +2570,7 @@ fn restart_service_after_tls_setup(config: &Config, config_path: &Path) {
                 Ok(_) => println!("restarted {SERVICE_NAME} to apply TLS changes"),
                 Err(err) => eprintln!(
                     "warning: TLS artifacts were updated but service restart failed. \
-run `computer-mcp restart` manually.\n{err}"
+run `{PRIMARY_OPERATOR_BINARY} restart` manually.\n{err}"
                 ),
             }
         }
@@ -2575,7 +2581,7 @@ run `computer-mcp restart` manually.\n{err}"
                 {
                     eprintln!(
                         "warning: TLS artifacts were updated but process-mode restart failed. \
-run `computer-mcp --config \"{}\" restart` manually.\n{}",
+run `{PRIMARY_OPERATOR_BINARY} --config \"{}\" restart` manually.\n{}",
                         config_path.display(),
                         err
                     );
@@ -2585,7 +2591,7 @@ run `computer-mcp --config \"{}\" restart` manually.\n{}",
             }
             Ok(_) => {
                 println!(
-                    "TLS artifacts are ready. Start the stack with `computer-mcp --config \"{}\" start`.",
+                    "TLS artifacts are ready. Start the stack with `{PRIMARY_OPERATOR_BINARY} --config \"{}\" start`.",
                     config_path.display(),
                 );
             }
@@ -2615,11 +2621,20 @@ mod tests {
         state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
         write_if_changed,
     };
+    use crate::Cli;
+    use clap::CommandFactory;
     use computer_mcp::config::Config;
     use std::fs;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
+
+    #[test]
+    fn clap_help_uses_zodex_name() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("zodex"));
+        assert!(help.contains("legacy computer-mcp commands"));
+    }
 
     #[test]
     fn render_systemd_unit_contains_expected_execstart() {
@@ -2910,9 +2925,9 @@ mod tests {
             .expect("build process status");
         let joined = lines.join("\n");
         assert!(joined.contains("active: inactive (stale pid file)"));
-        assert!(joined.contains(
-            "hint: stale pid file detected; `computer-mcp restart` will cleanly recover"
-        ));
+        assert!(
+            joined.contains("hint: stale pid file detected; `zodex restart` will cleanly recover")
+        );
     }
 
     #[test]
@@ -3081,7 +3096,7 @@ mod tests {
                 .contains("hint: re-sync with `scripts/sprite-services.sh sync --sprite computer`")
         );
         assert!(joined.contains(
-            "hint: inspect logs with `computer-mcp sprite service-logs --sprite computer --service computer-mcpd`"
+            "hint: inspect logs with `zodex sprite service-logs --sprite computer --service computer-mcpd`"
         ));
     }
 
@@ -3129,9 +3144,7 @@ mod tests {
         let lines = build_status_summary_lines(raw, &config, None);
         let joined = lines.join("\n");
 
-        assert!(
-            joined.contains("note: `computer-mcp start` will create TLS artifacts automatically")
-        );
+        assert!(joined.contains("note: `zodex start` will create TLS artifacts automatically"));
     }
 
     #[test]

@@ -110,8 +110,9 @@ impl ComputerMcpService {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ComputerMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("computer-mcp remote execution tools")
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "zodex remote execution tools with stable computer-mcp compatibility",
+        )
     }
 }
 
@@ -176,7 +177,7 @@ pub async fn run_server(config: Config) -> Result<()> {
     let key_path = Path::new(&config.tls_key_path);
     if !cert_path.exists() || !key_path.exists() {
         bail!(
-            "TLS cert/key not found (cert: {}, key: {}). Run `computer-mcp start` or `computer-mcp tls setup` first.",
+            "TLS cert/key not found (cert: {}, key: {}). Run `zodex start` or `zodex tls setup` first.",
             config.tls_cert_path,
             config.tls_key_path
         );
@@ -218,7 +219,7 @@ pub async fn run_server(config: Config) -> Result<()> {
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     });
 
-    info!("computer-mcpd listening on https://{bind}");
+    info!("zodexd listening on https://{bind}");
     let tls_app = app.clone();
     let tls_server = async move {
         axum_server::bind_rustls(addr, rustls)
@@ -229,7 +230,7 @@ pub async fn run_server(config: Config) -> Result<()> {
     };
 
     if let Some(http_addr) = http_addr {
-        info!("computer-mcpd also listening on http://{http_addr}");
+        info!("zodexd also listening on http://{http_addr}");
         let listener = tokio::net::TcpListener::bind(http_addr)
             .await
             .with_context(|| format!("failed to bind HTTP listener on {http_addr}"))?;
@@ -305,6 +306,7 @@ mod tests {
     use crate::service::ComputerService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, Uri};
+    use rmcp::ServerHandler;
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ToolAnnotations;
     use serde_json::json;
@@ -386,6 +388,24 @@ mod tests {
         assert!(
             names.iter().all(|name| name != "publish_pr"),
             "publish_pr must not be exposed on remote MCP surface"
+        );
+    }
+
+    #[test]
+    fn server_info_mentions_zodex_compatibility_layer() {
+        let service = ComputerMcpService::new(ComputerService::new(test_config()));
+        let info = service.get_info();
+        assert!(
+            info.instructions
+                .as_deref()
+                .unwrap_or_default()
+                .contains("zodex remote execution tools")
+        );
+        assert!(
+            info.instructions
+                .as_deref()
+                .unwrap_or_default()
+                .contains("computer-mcp compatibility")
         );
     }
 

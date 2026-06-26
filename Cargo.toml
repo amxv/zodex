@@ -8,11 +8,19 @@ name = "computer-mcp"
 path = "src/bin/computer-mcp.rs"
 
 [[bin]]
+name = "zodex"
+path = "src/bin/computer-mcp.rs"
+
+[[bin]]
 name = "computer"
 path = "src/bin/computer.rs"
 
 [[bin]]
 name = "computer-mcpd"
+path = "src/bin/computer-mcpd.rs"
+
+[[bin]]
+name = "zodexd"
 path = "src/bin/computer-mcpd.rs"
 
 [[bin]]
