@@ -65,6 +65,12 @@ What the setup command does:
 7. verifies local health, workspace writeability, and reader-backed Git access
 8. prints the MCP URL hint for the Sprite host
 
+Operator build note:
+
+- `zodex sprite setup` uploads operator-built `zodex` binaries to the Sprite.
+- The uploaded binaries must be runnable on the Sprite target.
+- If you run setup from a non-Linux machine, do not assume the local development build is suitable for the Sprite guest. Use a Linux-compatible build or install from a release artifact instead.
+
 After setup, add the push-grant app client ID to the operator-side config:
 
 ```toml
@@ -104,6 +110,17 @@ This is temporary repo-scoped direct push access, not a long-lived write credent
 By default, `grant-push` runs GitHub App device flow on the operator machine, requests a user access token for the target repo, and places only the temporary token on the Sprite.
 When practical, it also opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable.
 By default, `revoke-push` removes only the Sprite-side repo grant and retains the local device-flow refresh state so repeated grants are faster. Use `--forget-local-auth` when you want a full local logout for that repo too.
+
+## Migration Notes
+
+If you are migrating an older pre-`zodex` Sprite rather than doing a clean install, check these before debugging the new runtime:
+
+- remove or disable legacy `computer-mcpd` and `computer-mcp-prd` Sprite Services so `zodexd` can claim its ports cleanly
+- migrate any old `/etc/computer-mcp` repo target references to the current repo slug expected by `/etc/zodex/config.toml`
+- verify `/var/lib/zodex/publisher` is writable by the configured publisher user before expecting `zodex-prd` to start
+- if TLS artifacts do not exist yet, run the TLS setup path and then re-sync Sprite Services
+
+These are migration quirks from older installs, not part of the normal clean setup flow.
 
 ## Day-To-Day Commands
 
