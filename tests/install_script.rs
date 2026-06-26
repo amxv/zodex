@@ -61,6 +61,8 @@ fn install_script_has_expected_structure() {
         "reader_installation_id",
         "publisher_client_id",
         "enable Device Flow on the push-grant GitHub App",
+        "# id = \"amxv/zodex\"",
+        "# repo = \"amxv/zodex\"",
         "rotate the installer-generated API key",
         "curl -k \"https://${public_host}/health\"",
         "MCP URL shape: https://${public_host}/mcp?key=<redacted>",

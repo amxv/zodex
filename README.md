@@ -19,6 +19,8 @@ The product model is:
 
 `zodex` is designed for Sprites.dev and assumes a proxy-backed public MCP front door.
 
+The supported repository slug for this project is `amxv/zodex`.
+
 ## Why It Exists
 
 `zodex` is for the case where you want a coding agent to work inside a real remote Linux environment without handing it permanent GitHub write credentials.
@@ -76,7 +78,7 @@ The install path is the Rust operator CLI:
 ```bash
 zodex sprite setup \
   --sprite <sprite> \
-  --repo <owner/repo> \
+  --repo amxv/zodex \
   --reader-app-id <reader-app-id> \
   --reader-pem /absolute/path/to/reader.pem \
   --publisher-app-id <push-grant-app-id> \

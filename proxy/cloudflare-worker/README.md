@@ -4,6 +4,8 @@ This Worker is a supported `zodex` component.
 
 It fronts a Sprite-hosted `zodexd` deployment with a stable public MCP edge when the raw Sprite URL is not reliable enough for MCP clients on its own.
 
+For this repository, pair it with the `amxv/zodex` release and setup flow.
+
 ## Responsibilities
 
 - normalize `/mcp` to the Sprite origin's working `/mcp/` upstream path

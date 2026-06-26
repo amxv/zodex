@@ -2,6 +2,8 @@
 
 This is the one canonical setup document for `zodex`.
 
+For this project's own deployment and release paths, the canonical repository slug is `amxv/zodex`.
+
 ## Outcome
 
 When setup is complete:
@@ -16,7 +18,7 @@ When setup is complete:
 
 - Sprite name
 - optional Sprite organization
-- target repo slug, for example `owner/repo`
+- target repo slug, for example `amxv/zodex`
 - reader GitHub App ID
 - absolute path to the reader app PEM
 - push-grant GitHub App client ID with device flow enabled
@@ -37,7 +39,7 @@ The push-grant app should keep user access token expiration enabled and have **D
 ```bash
 zodex sprite setup \
   --sprite <sprite> \
-  --repo <owner/repo> \
+  --repo amxv/zodex \
   --reader-app-id <reader-app-id> \
   --reader-pem /absolute/path/to/reader.pem \
   --publisher-app-id <push-grant-app-id> \
@@ -118,7 +120,7 @@ zodex github list-grants --sprite <sprite>
 - `zodex sprite status` shows `zodexd` and `zodex-prd`
 - the proxy-backed public URL serves `/health` and `/mcp`
 - the agent can create a commit in `/workspace`
-- plain `git clone https://github.com/<owner>/<repo>.git` works for installed private repos without a manual prompt
+- plain `git clone https://github.com/amxv/zodex.git` works for installed private repos without a manual prompt
 - the agent can `git clone` and `git fetch` private repos without a manual prompt
 - an active grant enables `git push` for the granted repo only
 - `grant-push` shows a GitHub device code, tries to open the verification URL, and succeeds after browser authorization

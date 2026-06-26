@@ -18,6 +18,9 @@ fn setup_doc_describes_sprite_first_zodex_flow() {
     assert!(setup.contains("read-only GitHub access"));
     assert!(setup.contains("temporary repo-scoped direct push access"));
     assert!(setup.contains("retains the local device-flow refresh state"));
+    assert!(setup.contains("canonical repository slug is `amxv/zodex`"));
+    assert!(setup.contains("--repo amxv/zodex"));
+    assert!(setup.contains("https://github.com/amxv/zodex.git"));
     let deprecated_deploy_path = ["Run", "pod"].join("");
     let deprecated_vm_path = ['V', 'P', 'S'].iter().collect::<String>();
     assert!(!setup.contains(&deprecated_deploy_path));

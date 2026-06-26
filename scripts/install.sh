@@ -391,8 +391,8 @@ publisher_user = "${ZODEX_PUBLISHER_USER}"
 # publisher_app_id = 345678
 #
 # [[publisher_targets]]
-# id = "owner/repo"
-# repo = "owner/repo"
+# id = "amxv/zodex"
+# repo = "amxv/zodex"
 # default_base = "main"
 # installation_id = 456789012
 EOF
