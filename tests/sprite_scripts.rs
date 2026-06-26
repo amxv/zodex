@@ -63,10 +63,10 @@ fn sprite_docs_prefer_zodex_control_plane_commands() {
     assert!(runbook.contains("zodex sprite upgrade"));
     assert!(runbook.contains("zodex sprite sync"));
     assert!(runbook.contains("zodex github grant-push"));
-    assert!(
-        runbook.contains("uploads the local `zodex`, `zodexd`, and `computer-mcp-prd` binaries")
-    );
+    assert!(runbook.contains("zodex github revoke-push"));
+    assert!(runbook.contains("normal write flow"));
     assert!(deployment_notes.contains("zodex sprite upgrade"));
     assert!(deployment_notes.contains("zodex sprite sync"));
     assert!(deployment_notes.contains("run the remote Rust install path"));
+    assert!(deployment_notes.contains("temporary repo-scoped push access"));
 }

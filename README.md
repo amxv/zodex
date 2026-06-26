@@ -1,41 +1,51 @@
 # zodex
 
-Remote coding runtime and operator CLI for Linux VPS and Sprite deployment.
+`zodex` is a remote coding runtime plus operator CLI for Sprite-first deployments.
 
-Phase 1 rename note:
+It gives ChatGPT or another coding agent a narrow remote execution surface:
+
+- `exec_command`
+- `write_stdin`
+- `apply_patch`
+
+The default product story is simple:
+
+- the Sprite always has read access to approved GitHub repos through a read-only GitHub App
+- the agent can inspect code, edit code, run tests, and commit locally at any time
+- direct GitHub write access is off by default
+- the operator grants temporary push access for one repo only when it is time to push
+- the operator revokes that push access when the task is done
+
+This repo is in a rename window:
+
 - use `zodex` for the operator CLI
 - use `zodexd` for the daemon
-- legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints still work during the compatibility window
+- legacy `computer-mcp`, `computer`, and `computer-mcpd` entrypoints still exist for compatibility
 
-This README is the fast path for a fresh VPS or Sprite-backed `zodex` deployment.
+## Default Workflow
 
-Agents doing a full operator-led setup should read the runbook that matches the target environment first:
+1. install `zodex` on a Sprite
+2. configure the reader GitHub App so the agent can clone and fetch private repos
+3. point MCP clients at the proxy-backed public URL
+4. let the agent inspect, edit, test, and commit
+5. when the operator wants the agent to push, run:
+   `zodex github grant-push --sprite <sprite> --repo <owner/repo> [--publisher-app-id ... --publisher-pem ...]`
+6. the agent pushes normally with `git push`
+7. revoke the grant:
+   `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 
-- Sprites: [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
-- VPS: [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
+That push-grant flow is the only supported write path described by the primary docs.
 
-For extra detail, see:
-- [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
-- [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
-- [docs/deployment-notes.md](docs/deployment-notes.md)
-- [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
-- [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md)
-- [gg/agent-outputs/computer-cli-quickstart-for-agents.md](gg/agent-outputs/computer-cli-quickstart-for-agents.md)
+## Sprite Front Door
 
-If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
-If the target host is Sprites, use [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md).
-The main README below is the standard Linux VPS path.
+For Sprite deployments, the Cloudflare Worker under [proxy/cloudflare-worker](proxy/cloudflare-worker) is a supported `zodex` component.
 
-## Proxy Front Door
+It is responsible for:
 
-For Sprite deployments, the Cloudflare Worker under [proxy/cloudflare-worker](proxy/cloudflare-worker) is a supported `zodex` component, not an incidental add-on.
-
-Its job is to:
-
-- normalize `/mcp` to the Sprite origin's working `/mcp/` path
-- warm a cold Sprite before proxying
-- retry transient cold-start and edge failures
-- preserve streaming MCP responses
+- normalizing `/mcp` to the Sprite origin's working `/mcp/` path
+- warming a cold Sprite before proxying
+- retrying transient cold-start and edge failures
+- preserving streaming MCP responses
 
 Useful commands:
 
@@ -45,153 +55,88 @@ zodex proxy verify-origin --sprite <sprite>
 zodex proxy deploy --sprite <sprite>
 ```
 
-Use the proxy or its custom domain as the default MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the actual MCP client in use.
+Treat the proxy or its custom domain as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the MCP clients you care about.
 
-Container images:
-- `ghcr.io/amxv/computer-mcp` is the generic image built from [Dockerfile](Dockerfile)
-- `ghcr.io/amxv/computer-mcp-runpod` is the dedicated Runpod template image built from [Dockerfile.runpod](Dockerfile.runpod)
+## Read This First
+
+- Sprite setup: [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
+- VPS setup: [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
+- GitHub app and push-grant model: [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
+- deployment details: [docs/deployment-notes.md](docs/deployment-notes.md)
+
+If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
 
 ## How It Works
 
-`zodex` exposes a small remote coding surface over MCP so a model can control a Linux VPS the same way Codex-style agents control a local coding sandbox.
+`zodexd` exposes a small remote coding surface over MCP and a matching HTTP API.
 
 At a high level:
 
-- `exec_command` starts a shell command on the VPS and returns output plus session metadata (`status`, `cwd`, and `termination_reason` when finished) and a `session_handle` if the command is still running
-- `write_stdin` writes to or polls that running session by `session_handle`, returns the same session metadata shape, and keeps the session alive by resetting the idle timeout
-- `apply_patch` applies structured Codex-style patches to files without handing the model raw filesystem write primitives; patch input includes a required `workdir` used to resolve relative patch paths
+- `exec_command` starts a shell command and returns output plus session metadata
+- `write_stdin` writes to or polls a running session by handle
+- `apply_patch` applies structured Codex-style patches using an explicit `workdir`
 
-Those three tools are enough to simulate the core Codex workflow:
+Those three tools are enough for the standard coding loop:
 
-1. inspect and run code with `exec_command`
-2. keep stateful terminal sessions alive with `write_stdin`
-3. make precise code edits with `apply_patch`
-4. rerun commands to validate the result
+1. inspect the repo and run code
+2. keep terminal state alive across calls
+3. edit files precisely
+4. rerun checks and tests
 
-That is the main purpose of this repository: give models a narrow remote execution interface that feels like a Codex environment, while keeping GitHub write access separated behind the local publisher daemon described in [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md).
+## One-Time Setup
 
-## What You Need
+You need:
 
-- A Linux VPS
+- a Sprite or Linux VPS
 - `root` or `sudo`
-- A public IP or host for the MCP endpoint
-- A reader GitHub App private key
-- A publisher GitHub App private key
+- a reader GitHub App private key
+- a push-grant GitHub App private key kept on the operator machine
 
-Default config file: `/etc/computer-mcp/config.toml`
-
-The compatibility release keeps legacy paths, service names, and payload formats unchanged while moving operator-facing commands to `zodex`.
-
-The commands below assume that default path. If you use a different config file, add `--config /path/to/config.toml`.
-
-## 1. Install
-
-If you have a public installer URL:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo bash
-```
-
-The installer downloads prebuilt Linux release artifacts when they are available.
-It falls back to a source build only if no matching release asset exists.
-
-If this repository is private or the raw installer URL is not accessible, use the local-source install in [docs/deployment-notes.md](docs/deployment-notes.md).
-
-## 2. Edit Only What You Need
-
-Edit `/etc/computer-mcp/config.toml`.
-
-Most installs can keep the defaults. The installer already creates a strong random API key, default users, default paths, and the default HTTPS bind.
-
-You usually only need to add the two GitHub App settings:
-
-```toml
-reader_app_id = 123456
-reader_installation_id = 234567890
-publisher_app_id = 3123864
-
-[[publisher_targets]]
-id = "amxv/computer-mcp"
-repo = "amxv/computer-mcp"
-default_base = "main"
-installation_id = 117314785
-```
-
-## 3. Place Both GitHub App Keys
-
-Default key paths:
-
-- reader: `/etc/computer-mcp/reader/private-key.pem`
-- publisher: `/etc/computer-mcp/publisher/private-key.pem`
-
-```bash
-sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader
-sudo install -m 0640 -o root -g computer-mcp \
-  /path/to/reader-app.pem \
-  /etc/computer-mcp/reader/private-key.pem
-
-sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
-  /path/to/publisher-app.pem \
-  /etc/computer-mcp/publisher/private-key.pem
-```
-
-## 4. Start
-
-```bash
-zodex start
-```
-
-`zodex start` does the rest:
-
-- checks both GitHub Apps are configured
-- creates TLS artifacts if they do not exist yet
-- starts the publisher daemon
-- starts the MCP daemon
-
-The installer already generated an API key. Rotate it only if you want a new one:
-
-```bash
-zodex set-key "<strong-random-key>"
-```
-
-## 5. Verify
-
-```bash
-zodex status
-zodex show-url --host "<public_ip_or_host>"
-curl -k "https://<public_ip_or_host>/health"
-```
-
-Expected MCP URL shape:
+Default config path:
 
 ```text
-https://<public_ip_or_host>/mcp?key=<api_key>
+/etc/computer-mcp/config.toml
 ```
 
-## 6. Open A PR From The Agent
-
-After the agent has finished work in a local git checkout and committed the change:
+The clean Sprite-first path is:
 
 ```bash
-zodex publish-pr \
-  --repo amxv/computer-mcp \
-  --title "Agent: example change" \
-  --body "Automated change from zodex."
+zodex sprite setup \
+  --sprite <sprite> \
+  --repo <owner/repo> \
+  --reader-app-id <reader-app-id> \
+  --reader-pem /absolute/path/to/reader.pem \
+  --publisher-app-id <push-grant-app-id> \
+  --publisher-pem /absolute/path/to/push-grant-app.pem \
+  --url-auth sprite
 ```
 
-Requirements:
-- run it from inside the repo checkout
-- keep the worktree clean
-- make sure the change is already committed on `HEAD`
+The setup command derives installation IDs, uploads the runtime, configures read access, verifies the workspace, syncs Sprite Services, and leaves the deployment ready for proxy verification and later push grants.
 
-## Common Commands
+## Day-To-Day Commands
+
+```bash
+zodex sprite status --sprite <sprite>
+zodex sprite logs --sprite <sprite> --service computer-mcpd --lines 100
+zodex proxy deploy --sprite <sprite>
+zodex github grant-push --sprite <sprite> --repo <owner/repo>
+zodex github list-grants --sprite <sprite>
+zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+```
+
+For local service management on non-Sprite hosts:
 
 ```bash
 zodex start
 zodex stop
+zodex restart
 zodex status
 zodex logs
-zodex publisher status
-zodex publisher logs
-zodex restart
 ```
+
+## Notes
+
+- the runtime keeps remote execution stable during the product rename
+- the config path is still `/etc/computer-mcp/config.toml` during this migration window
+- the proxy is part of the supported system for Sprite deployments, not an afterthought
+- the main safety model is read-mostly by default plus temporary repo-scoped write grants

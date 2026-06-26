@@ -12,7 +12,7 @@ Use this document exactly as written. It is optimized for:
 - an agent who can run shell commands locally and over SSH
 - the split auth model:
   - a **reader app** for read-only private repo access
-  - a **publisher app** for branch push + PR creation
+  - a **push-grant app** for temporary repo-scoped write access
 
 If the target host is Runpod, use [../.agents/skills/runpod-deployment/SKILL.md](../.agents/skills/runpod-deployment/SKILL.md) as the single source of truth for Runpod-specific rollout and template behavior.
 
@@ -26,14 +26,14 @@ When this runbook is complete:
 - the MCP HTTPS endpoint is live
 - the VPS has both GitHub apps configured
 - the reader app is stored for read-only repo access
-- the publisher app is stored for local `publish-pr`
+- the push-grant app can later be used for temporary direct push grants
 - the agent user can commit immediately with the default global Git identity unless the operator overrides it
 
 ## Important Constraints
 
 - Both GitHub Apps are required. Do not offer one-app or optional-app variants.
 - The **reader app** must be read-only.
-- The **publisher app** must have only the minimum write permissions needed for PR publishing.
+- The **push-grant app** must have only the minimum write permissions needed for temporary repo-scoped pushes.
 - The stack is started with one command:
   - `computer-mcp start`
 - This runbook assumes the default config path:
@@ -50,8 +50,8 @@ You need these inputs before you can finish setup:
 - target GitHub repo slug, for example `owner/repo`
 - reader GitHub App ID
 - absolute local path to the reader app PEM file
-- publisher GitHub App ID
-- absolute local path to the publisher app PEM file
+- push-grant GitHub App ID
+- absolute local path to the push-grant app PEM file
 
 Do not ask the human to find installation IDs manually. You will derive them yourself after they create and install the apps.
 
@@ -82,7 +82,7 @@ App 1: computer-mcp-reader
 App 2: computer-mcp-publisher
 - Create it from this pre-filled URL:
   https://github.com/settings/apps/new?name=computer-mcp-publisher&description=Branch%20push%20and%20PR%20creation%20for%20computer-mcp&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=write&pull_requests=write
-- Purpose: create a branch and open a PR
+- Purpose: temporary repo-scoped direct push access for the operator grant flow
 - Homepage URL: use your repo URL or GitHub profile URL
 - After the form opens, uncheck Webhook Active before creating the app
 - Request user authorization during installation: OFF
@@ -95,7 +95,7 @@ App 2: computer-mcp-publisher
 - Where can this GitHub App be installed?: Only on this account
 - After creating it, open:
   https://github.com/settings/apps/computer-mcp-publisher/installations
-- Install it on your account, choose Only select repositories, and select only the repos this agent should be able to publish PRs to
+- Install it on your account, choose Only select repositories, and select only the repos this agent should be able to push to when the operator grants access
 
 When both apps are created and installed, send me:
 - the Reader App ID
@@ -273,7 +273,7 @@ vps_ssh '
 Meaning:
 
 - the reader PEM is group-readable by `computer-mcp`
-- the publisher PEM is readable only by `computer-mcp-publisher`
+- the push-grant PEM is readable only by `computer-mcp-publisher`
 
 ## Step 8: Write The Config
 
@@ -305,9 +305,8 @@ vps_ssh 'computer-mcp start'
 `computer-mcp start` does all of this automatically:
 
 - validates the reader app config and reader key
-- validates the publisher app config and publisher key
+- validates the push-grant app config and key material
 - creates TLS artifacts if they do not exist yet
-- starts the publisher daemon
 - starts the MCP daemon
 
 ## Step 10: Verify The Deployment
@@ -345,7 +344,7 @@ Setup is complete.
 
 The VPS now has:
 - a reader GitHub App for read-only repo access
-- a publisher GitHub App for branch push + PR creation
+- a push-grant GitHub App for temporary direct pushes when the operator allows them
 - a live computer-mcp endpoint
 
 Important files:
@@ -358,6 +357,8 @@ Useful commands:
 - computer-mcp stop
 - computer-mcp status
 - computer-mcp logs
+- zodex github grant-push --sprite <sprite> --repo <owner/repo>
+- zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 - computer-mcp publisher status
 - computer-mcp publisher logs
 - computer-mcp show-url --host "<public_ip_or_host>"

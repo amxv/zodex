@@ -17,8 +17,8 @@ use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
 use computer_mcp::install_rustls_crypto_provider;
 use computer_mcp::publisher::{
-    build_publish_request, detect_repo_root, mint_publisher_installation_token_with_metadata,
-    mint_reader_installation_token, resolve_repo_installation_id, submit_publish_request,
+    mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
+    resolve_repo_installation_id,
 };
 use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
@@ -117,20 +117,7 @@ enum Commands {
         #[command(subcommand)]
         command: TlsCommand,
     },
-    PublishPr {
-        #[arg(long)]
-        repo: String,
-        #[arg(long)]
-        title: String,
-        #[arg(long)]
-        body: Option<String>,
-        #[arg(long)]
-        body_file: Option<String>,
-        #[arg(long)]
-        base: Option<String>,
-        #[arg(long, default_value_t = false)]
-        draft: bool,
-    },
+    #[command(hide = true)]
     Publisher {
         #[command(subcommand)]
         command: PublisherCommand,
@@ -449,27 +436,6 @@ async fn main() -> Result<()> {
         Commands::Tls { command } => match command {
             TlsCommand::Setup => tls_setup(&config_path)?,
         },
-        Commands::PublishPr {
-            repo,
-            title,
-            body,
-            body_file,
-            base,
-            draft,
-        } => {
-            ensure_linux()?;
-            let config = Config::load(Some(Path::new(&config_path)))?;
-            let body = resolve_pr_body(body, body_file.as_deref())?;
-            let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-            let repo_root = detect_repo_root(&cwd)?;
-            let request =
-                build_publish_request(&config, repo, base, title, body, draft, &repo_root)?;
-            let response =
-                submit_publish_request(Path::new(&config.publisher_socket_path), &request).await?;
-            println!("pr-url: {}", response.pr_url);
-            println!("branch: {}", response.branch);
-            println!("pull-number: {}", response.pull_number);
-        }
         Commands::Publisher { command } => {
             ensure_linux()?;
             let config = Config::load(Some(Path::new(&config_path)))?;
@@ -648,17 +614,6 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn resolve_pr_body(body: Option<String>, body_file: Option<&str>) -> Result<String> {
-    match (body, body_file) {
-        (Some(_), Some(_)) => bail!("--body and --body-file are mutually exclusive"),
-        (Some(body), None) => Ok(body),
-        (None, Some(path)) => {
-            fs::read_to_string(path).with_context(|| format!("failed to read PR body file {path}"))
-        }
-        (None, None) => Ok(String::new()),
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -4149,6 +4104,8 @@ mod tests {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("zodex"));
         assert!(help.contains("legacy computer-mcp commands"));
+        assert!(!help.contains("publish-pr"));
+        assert!(!help.contains("\npublisher"));
     }
 
     #[test]

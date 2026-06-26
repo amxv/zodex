@@ -8,7 +8,7 @@ use computer_mcp::publisher::serve_publisher;
 
 #[derive(Debug, Parser)]
 #[command(name = "computer-mcp-prd")]
-#[command(about = "Computer MCP local PR publisher daemon")]
+#[command(about = "Legacy internal publisher daemon kept for compatibility during migration")]
 struct Args {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     config: String,

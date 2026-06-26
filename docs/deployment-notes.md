@@ -39,8 +39,6 @@ Most deployments only need to change:
 
 - `reader_app_id`
 - `reader_installation_id`
-- `publisher_app_id`
-- `publisher_targets`
 
 Use overrides only when you actually need them, for example a non-443 port or a custom config path.
 
@@ -74,7 +72,6 @@ On container-style hosts:
 
 On Sprite-like hosts:
 - keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user
-- keep the publisher daemon on `computer-mcp-publisher`
 - prefer `zodex sprite upgrade` as the normal operator upgrade path
 - `zodex sprite setup` and `zodex sprite upgrade` upload the local `zodex` runtime binaries and run the remote Rust install path instead of relying on the legacy shell installer
 - register Sprite Services with `zodex sprite sync` instead of relying on detached process mode
@@ -84,25 +81,31 @@ On Sprite-like hosts:
 - treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
 - `computer-mcp upgrade` and `computer-mcp restart` in guest only cover already-healthy Sprite-managed processes; they are not the primary control-plane upgrade interface
 
-The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the publisher-key isolation model.
+The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the temporary-write-control model.
 
-## Security Model
+## Access Model
 
-The deployment is split into two local services:
+The supported operator story is:
 
-- `computer-mcpd` runs the remote coding tools as `agent_user`
-- `computer-mcp-prd` holds the GitHub App private key as `publisher_user`
+- the runtime has read access through the reader app helper
+- the agent can clone, fetch, edit, test, and commit without write access
+- the operator grants temporary repo-scoped push access only when needed
+- the operator revokes that access afterward
 
-`computer-mcp publish-pr` creates a local `git bundle` and sends it over a Unix socket to the publisher daemon. The agent never needs the GitHub write credential directly.
+Daily operator commands:
+
+- `zodex github grant-push --sprite <sprite> --repo <owner/repo>`
+- `zodex github list-grants --sprite <sprite>`
+- `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 
 Important limits:
-- do not run the coding agent as `root` if you want publisher-key isolation
+- do not run the coding agent as `root` if you want repo-scoped write control to mean anything
 - do not give the coding agent unrestricted `sudo`
 - prefer a dedicated writable workspace such as `/workspace`, owned by `agent_user`
-- keep the publisher key readable only by `publisher_user`
-- keep `publisher_targets` restricted to approved repositories
+- keep the push-grant app private key on the operator machine
+- keep the push-grant app installed only on approved repositories
 
-The installer configures a host-scoped Git credential helper for `https://github.com` under the agent user's home. That helper mints short-lived reader-app installation tokens on demand, so normal HTTPS clone/fetch operations can read private repos without exposing the publisher write credential.
+The installer configures a host-scoped Git credential helper for `https://github.com` under the agent user's home. That helper mints short-lived reader-app installation tokens on demand, so normal HTTPS clone/fetch operations can read private repos without exposing the push-grant write credential.
 
 The installer also sets a default global commit identity for the agent user so fresh repos can commit immediately:
 

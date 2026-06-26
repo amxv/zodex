@@ -12,8 +12,8 @@ For Runpod-specific rollout behavior, use [../.agents/skills/runpod-deployment/S
 When this runbook is complete:
 
 - latest `zodex` runtime is installed in the target Sprite
-- reader + publisher GitHub App auth is configured
-- publisher and MCP daemons are registered as Sprite Services
+- reader + push-grant GitHub App auth is configured
+- the MCP daemon and supporting runtime services are registered as Sprite Services
 - the coding agent starts in a writable non-root workspace (`/workspace`)
 - the coding agent can commit immediately with the default global Git identity unless the operator overrides it
 - the coding agent can `git clone` private GitHub repos over HTTPS through the reader app
@@ -55,8 +55,8 @@ This matters on Sprites because the built-in `sprite` user commonly has password
 - target repo slug (example: `owner/repo`)
 - reader app ID
 - absolute local path to reader PEM
-- publisher app ID
-- absolute local path to publisher PEM
+- push-grant app ID
+- absolute local path to push-grant PEM
 
 Do not ask the human for installation IDs manually. Derive them.
 
@@ -86,20 +86,28 @@ If the Sprite is in a non-default org, add:
 
 What `zodex sprite setup` does:
 
-1. derives reader and publisher installation IDs from app ID + PEM + repo
+1. derives reader and push-grant installation IDs from app ID + PEM + repo
 2. validates both apps from the local Rust CLI path
-3. uploads the local `zodex`, `zodexd`, and `computer-mcp-prd` binaries to the Sprite
+3. uploads the local `zodex` runtime binaries and supporting components to the Sprite
 4. runs the remote Rust install path to create users, directories, and config state
-5. installs key files at default paths
+5. installs the reader key and records the push-grant app details needed by the control-plane flow
 6. writes a managed GitHub app config block
 7. enforces Sprite-safe ports (`8443` TLS + `8080` HTTP)
 8. configures the agent Git identity and reader credential helper
 9. stops any detached process-mode daemons left from older installs
-10. creates or updates Sprite Services for `computer-mcp-prd` and `computer-mcpd`
+10. creates or updates the Sprite-managed runtime services
 11. verifies Service inventory, Service logs, and public Sprite health
 12. verifies the agent can commit with the default Git identity
 13. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
 14. prints MCP URL hint based on Sprite URL host
+
+After setup, the normal write flow is:
+
+```bash
+zodex github grant-push --sprite <sprite> --repo <owner/repo>
+# agent pushes normally with git push
+zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+```
 
 If the Sprite URL needs a more reliable public MCP front door, manage the supported Cloudflare Worker from this repo:
 
@@ -121,7 +129,7 @@ Example:
 zodex sprite upgrade --sprite computer --org amxv
 ```
 
-That command uploads the current local operator/runtime binaries, installs them inside the Sprite through the remote Rust CLI, force-recreates the Sprite Services from the control plane, verifies local health, verifies the agent can still commit, verifies reader-backed GitHub HTTPS access, verifies publisher socket permissions, and confirms the agent still cannot read the publisher PEM.
+That command uploads the current local operator/runtime binaries, installs them inside the Sprite through the remote Rust CLI, force-recreates the Sprite Services from the control plane, verifies local health, and verifies reader-backed GitHub HTTPS access still works.
 
 ## Manual Path (If You Need It)
 
@@ -170,6 +178,7 @@ Useful commands:
 - `zodex proxy verify-origin --sprite <sprite>`
 - `zodex proxy deploy --sprite <sprite>`
 - `zodex github grant-push --sprite <sprite> --repo <owner/repo>`
+- `zodex github list-grants --sprite <sprite>`
 - `zodex github revoke-push --sprite <sprite> --repo <owner/repo>`
 
 If `zodex sprite status` shows a service as running but guest-side `ps` or `/health` disagrees, prefer `zodex sprite sync --force-recreate` from a machine with Sprite CLI access. That clears stale control-plane state without widening agent-user access or exposing the publisher key.
