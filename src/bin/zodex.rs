@@ -1967,7 +1967,7 @@ fn best_effort_copy_to_clipboard(text: &str) -> bool {
             .map(|stdin| stdin.write_all(text.as_bytes()))
             .transpose();
         let wait_result = child.wait();
-        if matches!(write_result, Ok(_)) && matches!(wait_result, Ok(status) if status.success()) {
+        if write_result.is_ok() && matches!(wait_result, Ok(status) if status.success()) {
             return true;
         }
     }
