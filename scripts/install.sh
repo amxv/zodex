@@ -361,6 +361,7 @@ ensure_dirs_and_config() {
 
   if [[ ! -f "${ZODEX_CONFIG_PATH}" ]]; then
     local api_key
+    local bind_port_line=""
     local http_bind_port_line=""
     if command_exists openssl; then
       api_key="$(openssl rand -hex 24)"
@@ -369,12 +370,14 @@ ensure_dirs_and_config() {
     fi
 
     if [[ -n "$(resolved_http_bind_port)" ]]; then
+      bind_port_line="bind_port = 8443"
       http_bind_port_line="http_bind_port = $(resolved_http_bind_port)"
     fi
 
     umask 077
     cat >"${ZODEX_CONFIG_PATH}" <<EOF
 api_key = "${api_key}"
+${bind_port_line}
 ${http_bind_port_line}
 agent_user = "${ZODEX_AGENT_USER}"
 agent_home = "${ZODEX_AGENT_HOME}"
