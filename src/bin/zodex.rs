@@ -1419,7 +1419,6 @@ fn derive_remote_target_repo(
     remote_config: &Path,
 ) -> Result<Option<String>> {
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "awk".to_string(),
         "-F\"".to_string(),
@@ -1630,7 +1629,6 @@ fn verify_sprite_health(sprite: &str, org: Option<&str>, url_auth: Option<&str>)
             .or_else(|| url.trim_end_matches('/').strip_prefix("http://"))
         {
             let exec_args = vec![
-                "--".to_string(),
                 "sudo".to_string(),
                 AGENT_OPERATOR_BINARY.to_string(),
                 "show-url".to_string(),
@@ -5341,6 +5339,34 @@ mod tests {
                 "PUT".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn sprite_exec_verification_helpers_do_not_prepend_separator() {
+        let source =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("bin").join("zodex.rs"))
+                .expect("read zodex source");
+
+        for fn_name in [
+            "derive_remote_target_repo",
+            "verify_local_sprite_health",
+            "verify_agent_git_identity",
+            "verify_reader_git_access",
+            "verify_publisher_socket_permissions",
+            "verify_publisher_key_isolation",
+            "verify_sprite_health",
+        ] {
+            let start = source
+                .find(&format!("fn {fn_name}"))
+                .unwrap_or_else(|| panic!("missing function {fn_name}"));
+            let tail = &source[start..];
+            let end = tail.find("\nfn ").unwrap_or(tail.len());
+            let body = &tail[..end];
+            assert!(
+                !body.contains("\"--\".to_string()"),
+                "{fn_name} should not prepend `--` when building run_sprite_exec args"
+            );
+        }
     }
 
     #[test]
