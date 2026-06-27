@@ -1532,7 +1532,6 @@ cd /workspace
 rm -rf "$smoke_dir"
 "#;
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
         "zodex-agent".to_string(),
@@ -1548,7 +1547,6 @@ rm -rf "$smoke_dir"
 
 fn verify_reader_git_access(sprite: &str, org: Option<&str>, repo: &str) -> Result<()> {
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
         "zodex-agent".to_string(),
@@ -1575,7 +1573,6 @@ sock_path=/var/lib/zodex/publisher/run/zodex-prd.sock
 [[ "$(stat -c %G "$sock_path")" == "zodex" ]]
 "#;
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "bash".to_string(),
         "-lc".to_string(),
@@ -1588,7 +1585,6 @@ sock_path=/var/lib/zodex/publisher/run/zodex-prd.sock
 fn verify_publisher_key_isolation(sprite: &str, org: Option<&str>) -> Result<()> {
     let script = r#"cat /etc/zodex/publisher/private-key.pem >/dev/null 2>&1"#;
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "-u".to_string(),
         "zodex-agent".to_string(),
