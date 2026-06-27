@@ -502,7 +502,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - agent-facing GitHub auth is restricted to zodex-agent: request push with `zodex-agent github request-push --repo <owner/repo>` and revoke with `zodex-agent github revoke-push --repo <owner/repo>`
+  - agent-facing GitHub auth is restricted to zodex-agent: request push with 'zodex-agent github request-push --repo <owner/repo>' and revoke with 'zodex-agent github revoke-push --repo <owner/repo>'
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
     return
@@ -534,7 +534,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - agent-facing GitHub auth is restricted to zodex-agent: request push with `zodex-agent github request-push --repo <owner/repo>` and revoke with `zodex-agent github revoke-push --repo <owner/repo>`
+  - agent-facing GitHub auth is restricted to zodex-agent: request push with 'zodex-agent github request-push --repo <owner/repo>' and revoke with 'zodex-agent github revoke-push --repo <owner/repo>'
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
 }

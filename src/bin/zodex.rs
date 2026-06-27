@@ -1444,7 +1444,6 @@ fn sync_sprite_services(
 ) -> Result<()> {
     if !skip_stop_detached {
         let stop_args = vec![
-            "--".to_string(),
             "sudo".to_string(),
             "zodex".to_string(),
             "stop".to_string(),
