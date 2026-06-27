@@ -76,7 +76,7 @@ const GITHUB_OAUTH_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/acce
 const DEFAULT_GITHUB_USER_AGENT: &str = "zodex/0.1";
 const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
 const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
-const SPRITE_REMOTE_UPLOAD_CLI_PATH: &str = "/tmp/zodex";
+const SPRITE_REMOTE_INSTALLER_PATH: &str = "/tmp/zodex-install.sh";
 const SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH: &str = "/tmp/zodex-agent";
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
@@ -398,7 +398,6 @@ struct SpriteSetupOptions<'a> {
 
 #[derive(Debug, Clone)]
 struct LocalOperatorBinaries {
-    cli: PathBuf,
     agent_cli: PathBuf,
     daemon: PathBuf,
     publisher: PathBuf,
@@ -951,14 +950,6 @@ fn manifest_dir() -> &'static Path {
 }
 
 fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
-    let cli_candidates = [
-        manifest_dir().join("target/debug/zodex"),
-        manifest_dir().join("target/release/zodex"),
-        manifest_dir().join("target/debug/zodex"),
-        manifest_dir().join("target/release/zodex"),
-        PathBuf::from("/usr/local/bin/zodex"),
-        PathBuf::from("/usr/local/bin/zodex"),
-    ];
     let agent_cli_candidates = [
         manifest_dir().join("target/debug/zodex-agent"),
         manifest_dir().join("target/release/zodex-agent"),
@@ -978,29 +969,24 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
         PathBuf::from("/usr/local/bin/zodex-prd"),
     ];
 
-    let mut cli = first_existing_executable(&cli_candidates);
     let mut agent_cli = first_existing_executable(&agent_cli_candidates);
     let mut daemon = first_existing_executable(&daemon_candidates);
     let mut publisher = first_existing_executable(&publisher_candidates);
 
-    if cli.is_none() || agent_cli.is_none() || daemon.is_none() || publisher.is_none() {
+    if agent_cli.is_none() || daemon.is_none() || publisher.is_none() {
         build_local_operator_binaries()?;
-        cli = first_existing_executable(&cli_candidates);
         agent_cli = first_existing_executable(&agent_cli_candidates);
         daemon = first_existing_executable(&daemon_candidates);
         publisher = first_existing_executable(&publisher_candidates);
     }
 
-    match (cli, agent_cli, daemon, publisher) {
-        (Some(cli), Some(agent_cli), Some(daemon), Some(publisher)) => Ok(LocalOperatorBinaries {
-            cli,
+    match (agent_cli, daemon, publisher) {
+        (Some(agent_cli), Some(daemon), Some(publisher)) => Ok(LocalOperatorBinaries {
             agent_cli,
             daemon,
             publisher,
         }),
-        _ => bail!(
-            "failed to locate local zodex binaries; expected zodex, zodex-agent, zodexd, and zodex-prd"
-        ),
+        _ => bail!("failed to locate local zodex runtime binaries; expected zodex-agent, zodexd, and zodex-prd"),
     }
 }
 
@@ -1011,8 +997,6 @@ fn first_existing_executable(candidates: &[PathBuf]) -> Option<PathBuf> {
 fn build_local_operator_binaries() -> Result<()> {
     let args = vec![
         "build".to_string(),
-        "--bin".to_string(),
-        "zodex".to_string(),
         "--bin".to_string(),
         "zodex-agent".to_string(),
         "--bin".to_string(),
@@ -1444,8 +1428,13 @@ fn sync_sprite_services(
     if !skip_stop_detached {
         let stop_args = vec![
             "sudo".to_string(),
-            "zodex".to_string(),
-            "stop".to_string(),
+            "bash".to_string(),
+            "-lc".to_string(),
+            format!(
+                "pkill -f -- \"/usr/local/bin/zodexd --config {}\" || true; pkill -f -- \"/usr/local/bin/zodex-prd --config {}\" || true",
+                config_path.display(),
+                config_path.display()
+            ),
         ];
         if let Err(err) = run_sprite_exec(sprite, org, &stop_args, &[]) {
             eprintln!("warning: failed to stop detached daemons before Sprite sync: {err}");
@@ -1682,6 +1671,7 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
     script_file
         .write_all(script.as_bytes())
         .context("failed to write setup script")?;
+    let installer_script = manifest_dir().join("scripts/install.sh");
 
     let exec_args = vec![
         "bash".to_string(),
@@ -1693,7 +1683,7 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
         &exec_args,
         &[
             (script_file.path(), SPRITE_SETUP_REMOTE_SCRIPT_PATH),
-            (&local_binaries.cli, SPRITE_REMOTE_UPLOAD_CLI_PATH),
+            (&installer_script, SPRITE_REMOTE_INSTALLER_PATH),
             (
                 &local_binaries.agent_cli,
                 SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
@@ -1791,17 +1781,14 @@ if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y --no-install-recommends git curl ca-certificates
 fi
 
-sudo install -d -m 0755 /usr/local/bin
-sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
-sudo install -m 0755 {agent_cli_upload} /usr/local/bin/zodex-agent
-sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
-sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
-
 sudo env \
+  ZODEX_INSTALL_OPERATOR_CLI=0 \
+  ZODEX_BINARY_SOURCE_DIR=/tmp \
+  ZODEX_CONFIG_PATH="$CFG" \
   ZODEX_HTTP_BIND_PORT=8080 \
   ZODEX_AGENT_HOME=/home/zodex-agent \
   ZODEX_DEFAULT_WORKDIR=/workspace \
-  /usr/local/bin/zodex --config "$CFG" install
+  bash {installer_script}
 
 sudo install -d -m 0750 -o root -g zodex /etc/zodex/reader /etc/zodex/publisher
 sudo install -m 0640 -o root -g zodex /tmp/zodex-reader.pem /etc/zodex/reader/private-key.pem
@@ -1903,8 +1890,8 @@ if sudo -u zodex-agent env HOME=/home/zodex-agent \
   exit 1
 fi
 
-sudo zodex stop || true
-rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {cli_upload} {agent_cli_upload} {daemon_upload} {publisher_upload}
+sudo bash -lc 'pkill -f -- "/usr/local/bin/zodexd --config $1" || true; pkill -f -- "/usr/local/bin/zodex-prd --config $1" || true' -- "$CFG"
+rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_script} {agent_cli_upload} {daemon_upload} {publisher_upload}
 "#,
         repo = shell_escape_single_quotes(repo),
         repo_plain = repo,
@@ -1915,7 +1902,7 @@ rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {cli_upload}
         publisher_installation_id = publisher_installation_id,
         default_base = default_base,
         setup_script = SPRITE_SETUP_REMOTE_SCRIPT_PATH,
-        cli_upload = SPRITE_REMOTE_UPLOAD_CLI_PATH,
+        installer_script = SPRITE_REMOTE_INSTALLER_PATH,
         agent_cli_upload = SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
         daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
         publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH
@@ -1958,6 +1945,7 @@ sudo env \
   ZODEX_REPO="$REPO_FOR_INSTALL" \
   ZODEX_VERSION="$VERSION" \
   ZODEX_SOURCE_REF="$VERSION" \
+  ZODEX_INSTALL_OPERATOR_CLI=0 \
   ZODEX_CONFIG_PATH="$CFG" \
   ZODEX_HTTP_BIND_PORT="$HTTP_BIND_PORT" \
   bash "$TMP_INSTALLER"

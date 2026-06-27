@@ -9,6 +9,7 @@ ZODEX_ASSET_URL="${ZODEX_ASSET_URL:-}"
 ZODEX_SOURCE_REF="${ZODEX_SOURCE_REF:-main}"
 ZODEX_BINARY_SOURCE_DIR="${ZODEX_BINARY_SOURCE_DIR:-}"
 ZODEX_INSTALL_DIR="${ZODEX_INSTALL_DIR:-/usr/local/bin}"
+ZODEX_INSTALL_OPERATOR_CLI="${ZODEX_INSTALL_OPERATOR_CLI:-1}"
 ZODEX_CONFIG_PATH="${ZODEX_CONFIG_PATH:-/etc/zodex/config.toml}"
 ZODEX_STATE_DIR="${ZODEX_STATE_DIR:-/var/lib/zodex}"
 ZODEX_TLS_DIR="${ZODEX_TLS_DIR:-${ZODEX_STATE_DIR}/tls}"
@@ -275,20 +276,23 @@ install_binaries_from_dir() {
   local src_dir="$1"
   local cli_src="${src_dir}/zodex"
   local daemon_src="${src_dir}/zodexd"
-  if [[ ! -x "${cli_src}" && -x "${src_dir}/zodex" ]]; then
-    cli_src="${src_dir}/zodex"
-  fi
   if [[ ! -x "${daemon_src}" && -x "${src_dir}/zodexd" ]]; then
     daemon_src="${src_dir}/zodexd"
   fi
 
-  [[ -x "${cli_src}" ]] || die "missing executable ${src_dir}/zodex or ${src_dir}/zodex"
   [[ -x "${src_dir}/zodex-agent" ]] || die "missing executable ${src_dir}/zodex-agent"
   [[ -x "${daemon_src}" ]] || die "missing executable ${src_dir}/zodexd or ${src_dir}/zodexd"
   [[ -x "${src_dir}/zodex-prd" ]] || die "missing executable ${src_dir}/zodex-prd"
+  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
+    [[ -x "${cli_src}" ]] || die "missing executable ${src_dir}/zodex or ${src_dir}/zodex"
+  fi
 
   install -d -m 0755 "${ZODEX_INSTALL_DIR}"
-  install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
+  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
+    install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
+  else
+    rm -f "${ZODEX_INSTALL_DIR}/zodex"
+  fi
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${daemon_src}" "${ZODEX_INSTALL_DIR}/zodexd"
   install -m 0755 "${src_dir}/zodex-prd" "${ZODEX_INSTALL_DIR}/zodex-prd"
@@ -334,10 +338,14 @@ install_binaries_from_source() {
 
   (
     cd "${src_dir}"
-    if cargo build --release --bin zodex --bin zodex-agent --bin zodexd --bin zodex-prd; then
+    local cargo_args=(build --release --bin zodex-agent --bin zodexd --bin zodex-prd)
+    if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
+      cargo_args+=(--bin zodex)
+    fi
+    if cargo "${cargo_args[@]}"; then
       :
     else
-      cargo build --release --bin zodex --bin zodex-agent --bin zodexd --bin zodex-prd
+      cargo "${cargo_args[@]}"
     fi
   )
 
@@ -353,6 +361,7 @@ ensure_dirs_and_config() {
   install -d -m 0750 -o "${ZODEX_PUBLISHER_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/publisher"
   install -d -m 0750 -o "${ZODEX_PUBLISHER_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/publisher/run"
   install -d -m 0750 -o "${ZODEX_PUBLISHER_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/publisher/logs"
+  install -d -m 0750 -o "${ZODEX_AGENT_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/push-grants"
   install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_TLS_DIR}"
   install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_PUBLISHER_KEY_DIR}"
@@ -410,6 +419,12 @@ run_cli_install() {
   local cli="${ZODEX_INSTALL_DIR}/zodex"
   [[ -x "${cli}" ]] || die "zodex not installed at ${cli}"
   "${cli}" --config "${ZODEX_CONFIG_PATH}" install
+}
+
+ensure_runtime_tls() {
+  local daemon="${ZODEX_INSTALL_DIR}/zodexd"
+  [[ -x "${daemon}" ]] || die "zodexd not installed at ${daemon}"
+  "${daemon}" --config "${ZODEX_CONFIG_PATH}" ensure-tls
 }
 
 run_as_agent_user() {
@@ -557,7 +572,11 @@ main() {
   fi
 
   ensure_dirs_and_config
-  run_cli_install
+  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
+    run_cli_install
+  else
+    ensure_runtime_tls
+  fi
   configure_agent_git_identity
   configure_agent_git_reader_helper
   print_next_steps

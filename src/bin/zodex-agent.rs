@@ -56,26 +56,26 @@ enum GithubCommand {
     ListGrants,
 }
 
-fn resolve_operator_binary() -> Result<PathBuf> {
+fn resolve_runtime_binary() -> Result<PathBuf> {
     let current_exe = env::current_exe().context("failed to resolve current executable path")?;
     if let Some(parent) = current_exe.parent() {
-        let sibling = parent.join("zodex");
+        let sibling = parent.join("zodexd");
         if sibling.is_file() {
             return Ok(sibling);
         }
     }
 
-    let fallback = PathBuf::from("/usr/local/bin/zodex");
+    let fallback = PathBuf::from("/usr/local/bin/zodexd");
     if fallback.is_file() {
         return Ok(fallback);
     }
 
-    if command_exists("zodex") {
-        return Ok(PathBuf::from("zodex"));
+    if command_exists("zodexd") {
+        return Ok(PathBuf::from("zodexd"));
     }
 
     bail!(
-        "failed to locate the operator CLI; expected a sibling `zodex` binary or `/usr/local/bin/zodex`"
+        "failed to locate the guest runtime helper; expected a sibling `zodexd` binary or `/usr/local/bin/zodexd`"
     );
 }
 
@@ -86,7 +86,7 @@ fn command_exists(program: &str) -> bool {
     env::split_paths(&paths).any(|dir| Path::new(&dir).join(program).is_file())
 }
 
-fn build_operator_args(cli: Cli) -> Vec<String> {
+fn build_runtime_args(cli: Cli) -> Vec<String> {
     let mut args = vec!["--config".to_string(), cli.config];
     match cli.command {
         Commands::GitCredentialHelper { operation } => {
@@ -146,14 +146,14 @@ fn build_operator_args(cli: Cli) -> Vec<String> {
 
 fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let operator = resolve_operator_binary()?;
-    let status = Command::new(&operator)
-        .args(build_operator_args(cli))
+    let runtime = resolve_runtime_binary()?;
+    let status = Command::new(&runtime)
+        .args(build_runtime_args(cli))
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .with_context(|| format!("failed to execute {}", operator.display()))?;
+        .with_context(|| format!("failed to execute {}", runtime.display()))?;
 
     if let Some(code) = status.code() {
         return Ok(ExitCode::from(code as u8));
@@ -161,7 +161,7 @@ fn run() -> Result<ExitCode> {
 
     Err(anyhow!(
         "{} terminated without an exit code",
-        operator.display()
+        runtime.display()
     ))
 }
 

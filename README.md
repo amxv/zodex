@@ -105,6 +105,7 @@ zodex sprite setup \
 
 For day-to-day push grants, set `publisher_client_id` in `/etc/zodex/config.toml` or export `ZODEX_PUBLISHER_CLIENT_ID` in the environment where you run the command.
 The publisher app key remains available for the internal `zodex-prd` publish flow.
+After setup, the Sprite guest keeps `zodex-agent`, `zodexd`, and `zodex-prd` on-box; the full `zodex` operator CLI remains an operator-machine tool.
 The Sprite agent should use `zodex-agent`, not the full `zodex` operator CLI, for `show-url`, Git credential helper access, and local push auth.
 
 ## Proxy Front Door

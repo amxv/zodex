@@ -8,7 +8,7 @@ For this project's own deployment and release paths, the canonical repository sl
 
 When setup is complete:
 
-- `zodex` is installed on a Sprite
+- the Sprite guest keeps `zodex-agent`, `zodexd`, and `zodex-prd`
 - `zodexd` is running behind Sprite Services
 - the proxy-backed MCP front door is available
 - the runtime has read-only GitHub access through a reader app
@@ -58,8 +58,8 @@ What the setup command does:
 
 1. derives installation IDs for both apps
 2. validates app access locally
-3. uploads the `zodex` runtime binaries to the Sprite
-4. runs the remote Rust install path
+3. uploads operator-built runtime binaries and the installer to the Sprite
+4. installs the guest runtime without leaving the full `zodex` operator CLI on-box
 5. configures the reader helper and agent commit identity
 6. syncs Sprite Services
 7. verifies local health, workspace writeability, and reader-backed Git access
@@ -67,7 +67,7 @@ What the setup command does:
 
 Operator build note:
 
-- `zodex sprite setup` uploads operator-built `zodex` binaries to the Sprite.
+- `zodex sprite setup` uploads operator-built runtime binaries to the Sprite.
 - The uploaded binaries must be runnable on the Sprite target.
 - If you run setup from a non-Linux machine, do not assume the local development build is suitable for the Sprite guest. Use a Linux-compatible build or install from a release artifact instead.
 
