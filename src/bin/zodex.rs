@@ -1508,7 +1508,6 @@ fn verify_sprite_service_logs(sprite: &str, org: Option<&str>) -> Result<()> {
 
 fn verify_local_sprite_health(sprite: &str, org: Option<&str>) -> Result<()> {
     let exec_args = vec![
-        "--".to_string(),
         "sudo".to_string(),
         "bash".to_string(),
         "-lc".to_string(),
