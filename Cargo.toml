@@ -8,6 +8,10 @@ name = "zodex"
 path = "src/bin/zodex.rs"
 
 [[bin]]
+name = "zodex-agent"
+path = "src/bin/zodex-agent.rs"
+
+[[bin]]
 name = "zodex-client"
 path = "src/bin/zodex-client.rs"
 

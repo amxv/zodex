@@ -49,6 +49,7 @@ fn install_script_has_expected_structure() {
         "${ZODEX_STATE_DIR}/publisher/logs",
         "credential.https://github.com.helper",
         "git-credential-helper",
+        "zodex-agent",
         "print_next_steps()",
         "apt-get install -y --no-install-recommends",
         "build-essential pkg-config libssl-dev git",
@@ -67,6 +68,8 @@ fn install_script_has_expected_structure() {
         "curl -k \"https://${public_host}/health\"",
         "MCP URL shape: https://${public_host}/mcp?key=<redacted>",
         "credential.https://github.com.useHttpPath true",
+        "zodex-agent github request-push --repo <owner/repo>",
+        "zodex-agent github revoke-push --repo <owner/repo>",
     ];
 
     for snippet in required_snippets {

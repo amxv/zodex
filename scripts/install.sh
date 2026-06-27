@@ -283,14 +283,17 @@ install_binaries_from_dir() {
   fi
 
   [[ -x "${cli_src}" ]] || die "missing executable ${src_dir}/zodex or ${src_dir}/zodex"
+  [[ -x "${src_dir}/zodex-agent" ]] || die "missing executable ${src_dir}/zodex-agent"
   [[ -x "${daemon_src}" ]] || die "missing executable ${src_dir}/zodexd or ${src_dir}/zodexd"
   [[ -x "${src_dir}/zodex-prd" ]] || die "missing executable ${src_dir}/zodex-prd"
 
   install -d -m 0755 "${ZODEX_INSTALL_DIR}"
   install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
+  install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${daemon_src}" "${ZODEX_INSTALL_DIR}/zodexd"
   install -m 0755 "${src_dir}/zodex-prd" "${ZODEX_INSTALL_DIR}/zodex-prd"
   ln -sf "${ZODEX_INSTALL_DIR}/zodex" "${ZODEX_INSTALL_DIR}/zodex"
+  ln -sf "${ZODEX_INSTALL_DIR}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   ln -sf "${ZODEX_INSTALL_DIR}/zodexd" "${ZODEX_INSTALL_DIR}/zodexd"
 }
 
@@ -334,10 +337,10 @@ install_binaries_from_source() {
 
   (
     cd "${src_dir}"
-    if cargo build --release --bin zodex --bin zodexd --bin zodex-prd; then
+    if cargo build --release --bin zodex --bin zodex-agent --bin zodexd --bin zodex-prd; then
       :
     else
-      cargo build --release --bin zodex --bin zodexd --bin zodex-prd
+      cargo build --release --bin zodex --bin zodex-agent --bin zodexd --bin zodex-prd
     fi
   )
 
@@ -431,7 +434,7 @@ run_as_agent_user() {
 }
 
 configure_agent_git_reader_helper() {
-  local helper_cmd="${ZODEX_INSTALL_DIR}/zodex --config ${ZODEX_CONFIG_PATH} git-credential-helper"
+  local helper_cmd="${ZODEX_INSTALL_DIR}/zodex-agent --config ${ZODEX_CONFIG_PATH} git-credential-helper"
 
   run_as_agent_user \
     git config --global --replace-all credential.https://github.com.helper "${helper_cmd}"
@@ -489,7 +492,7 @@ Next steps:
   4. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
   5. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
   6. zodex start
-  7. zodex show-url --host "${public_host}"
+  7. zodex-agent show-url --host "${public_host}"
 
 Verify:
   - zodex status
@@ -499,7 +502,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - direct pushes prefer GitHub App device flow via publisher_client_id; revoke with: zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+  - agent-facing GitHub auth is restricted to zodex-agent: request push with `zodex-agent github request-push --repo <owner/repo>` and revoke with `zodex-agent github revoke-push --repo <owner/repo>`
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
     return
@@ -521,7 +524,7 @@ Next steps:
   3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
   4. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
   5. zodex start
-  6. zodex show-url --host "${public_host}"
+  6. zodex-agent show-url --host "${public_host}"
 
 Verify:
   - zodex status
@@ -531,7 +534,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - direct pushes prefer GitHub App device flow via publisher_client_id; revoke with: zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+  - agent-facing GitHub auth is restricted to zodex-agent: request push with `zodex-agent github request-push --repo <owner/repo>` and revoke with `zodex-agent github revoke-push --repo <owner/repo>`
   - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
 EOF
 }

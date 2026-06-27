@@ -45,7 +45,7 @@ That is enough for the normal coding loop:
 5. When the agent is ready to push on the Sprite, run:
 
 ```bash
-zodex github request-push --repo <owner/repo>
+zodex-agent github request-push --repo <owner/repo>
 ```
 
 The default active grant TTL is `30m`.
@@ -55,7 +55,7 @@ Disable the TTL with `--no-ttl`, change it with `--ttl 2h`, and opt into refresh
 7. Revoke the local grant on the Sprite:
 
 ```bash
-zodex github revoke-push --repo <owner/repo>
+zodex-agent github revoke-push --repo <owner/repo>
 ```
 
 When an operator wants to activate a grant remotely from their own machine instead, run:
@@ -80,7 +80,7 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 ```
 
 That temporary repo-scoped grant flow is the supported write path.
-`request-push` and `grant-push` both use the GitHub App device-flow path.
+`zodex-agent github request-push` and `zodex github grant-push` both use the GitHub App device-flow path.
 By default, `request-push` does not persist refresh-token state and writes a repo-scoped local grant that expires after `30m`.
 Expired grants stop working in the credential-helper path even if a stale grant file still exists.
 By default, `revoke-push` removes the active repo grant and keeps the local device-flow refresh state so the remote operator path usually avoids a full reauth on the next grant.
@@ -105,6 +105,7 @@ zodex sprite setup \
 
 For day-to-day push grants, set `publisher_client_id` in `/etc/zodex/config.toml` or export `ZODEX_PUBLISHER_CLIENT_ID` in the environment where you run the command.
 The publisher app key remains available for the internal `zodex-prd` publish flow.
+The Sprite agent should use `zodex-agent`, not the full `zodex` operator CLI, for `show-url`, Git credential helper access, and local push auth.
 
 ## Proxy Front Door
 
@@ -127,17 +128,18 @@ zodex sprite status --sprite <sprite>
 zodex sprite logs --sprite <sprite> --service zodexd --lines 100
 zodex sprite sync --sprite <sprite> --force-recreate
 zodex sprite upgrade --sprite <sprite>
-zodex github request-push --repo <owner/repo>
+zodex-agent github request-push --repo <owner/repo>
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
-zodex github list-grants
-zodex github revoke-push --repo <owner/repo>
+zodex-agent github list-grants
+zodex-agent github revoke-push --repo <owner/repo>
+zodex-agent show-url --host <public-host>
 ```
 
 ## Access Model
 
 - Read access comes from the reader GitHub App.
 - Write access is temporary, explicit, and repo-scoped.
-- The preferred write grant path is `zodex github request-push`, which uses GitHub App device flow directly on the Sprite with a repo-scoped local grant and a default `30m` TTL.
+- The preferred write grant path is `zodex-agent github request-push`, which uses GitHub App device flow directly on the Sprite with a repo-scoped local grant and a default `30m` TTL.
 - The remote operator path `zodex github grant-push --sprite ...` remains supported and keeps local refresh-token cache behavior unless explicitly forgotten.
 - The agent should not run as root.
-- The operator or agent should treat `request-push` or `grant-push`, followed by `revoke-push`, as part of every push.
+- The operator or agent should treat `zodex-agent github request-push` or `zodex github grant-push`, followed by revoke, as part of every push.

@@ -98,25 +98,25 @@ The proxy normalizes `/mcp`, warms cold Sprites, retries transient edge failures
 The supported write path is:
 
 ```bash
-zodex github request-push --repo <owner/repo>
+zodex-agent github request-push --repo <owner/repo>
 # agent pushes normally with git push
-zodex github revoke-push --repo <owner/repo>
+zodex-agent github revoke-push --repo <owner/repo>
 # remote operator alternative
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
 # optional full local logout for this repo
-zodex github revoke-push --repo <owner/repo> --forget-local-auth
+zodex-agent github revoke-push --repo <owner/repo> --forget-local-auth
 ```
 
 Read access stays on. Write access is temporary and repo-scoped.
 This is temporary repo-scoped direct push access, not a long-lived write credential.
-By default, `request-push` runs GitHub App device flow on the Sprite, requests a user access token for the target repo, and writes only the repo-scoped temporary token locally.
+By default, `zodex-agent github request-push` runs GitHub App device flow on the Sprite, requests a user access token for the target repo, and writes only the repo-scoped temporary token locally.
 It starts as a single blocking flow: show the device code, try to open the verification URL, best-effort copy the code, poll until approval completes, and then activate the grant automatically.
 The default active grant TTL is `30m`. Change it with `--ttl <duration>` or disable TTL enforcement with `--no-ttl`.
-By default, `request-push` does not persist refresh-token state. Add `--cache-refresh-token` only when you explicitly want local refresh reuse on the Sprite.
+By default, `zodex-agent github request-push` does not persist refresh-token state. Add `--cache-refresh-token` only when you explicitly want local refresh reuse on the Sprite.
 Expired grants stop working in the credential-helper path even if the grant file is still present.
 `grant-push` remains available as the operator-machine alternative and still places only the temporary token on the Sprite.
 When practical, it also opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable.
-By default, `revoke-push` removes the active repo grant and retains any local device-flow refresh state so repeated grants are faster when that cache exists. Use `--forget-local-auth` when you want a full local logout for that repo too.
+By default, `zodex-agent github revoke-push` removes the active repo grant and retains any local device-flow refresh state so repeated grants are faster when that cache exists. Use `--forget-local-auth` when you want a full local logout for that repo too.
 
 ## Migration Notes
 
@@ -136,7 +136,7 @@ zodex sprite status --sprite <sprite>
 zodex sprite logs --sprite <sprite> --service zodexd --lines 100
 zodex sprite sync --sprite <sprite> --force-recreate
 zodex sprite upgrade --sprite <sprite>
-zodex github list-grants --sprite <sprite>
+zodex-agent github list-grants
 ```
 
 ## Verification Checklist
