@@ -1760,7 +1760,7 @@ fn sprite_upgrade(
         &[(script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH)],
     )?;
 
-    sync_sprite_services(sprite, org, remote_config, true, false)?;
+    sync_sprite_services(sprite, org, remote_config, false, false)?;
     verify_sprite_service_logs(sprite, org)?;
     verify_local_sprite_health(sprite, org)?;
     verify_agent_git_identity(sprite, org)?;
