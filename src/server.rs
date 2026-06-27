@@ -73,9 +73,9 @@ impl ZodexMcpService {
         name = "exec_command",
         description = "Run a shell command",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = true
         )
     )]
     async fn exec_command(
@@ -93,9 +93,9 @@ impl ZodexMcpService {
         name = "write_stdin",
         description = "Write to or poll a running session",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = true
         )
     )]
     async fn write_stdin(
@@ -110,9 +110,9 @@ impl ZodexMcpService {
         name = "apply_patch",
         description = "Apply a Codex-style patch to files",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
+            read_only_hint = false,
+            destructive_hint = true,
+            open_world_hint = true
         )
     )]
     async fn apply_patch(
@@ -429,19 +429,19 @@ mod tests {
         };
 
         let exec = by_name("exec_command");
-        assert_eq!(exec.read_only_hint, Some(true));
-        assert_eq!(exec.destructive_hint, Some(false));
-        assert_eq!(exec.open_world_hint, Some(false));
+        assert_eq!(exec.read_only_hint, Some(false));
+        assert_eq!(exec.destructive_hint, Some(true));
+        assert_eq!(exec.open_world_hint, Some(true));
 
         let write = by_name("write_stdin");
-        assert_eq!(write.read_only_hint, Some(true));
-        assert_eq!(write.destructive_hint, Some(false));
-        assert_eq!(write.open_world_hint, Some(false));
+        assert_eq!(write.read_only_hint, Some(false));
+        assert_eq!(write.destructive_hint, Some(true));
+        assert_eq!(write.open_world_hint, Some(true));
 
         let patch = by_name("apply_patch");
-        assert_eq!(patch.read_only_hint, Some(true));
-        assert_eq!(patch.destructive_hint, Some(false));
-        assert_eq!(patch.open_world_hint, Some(false));
+        assert_eq!(patch.read_only_hint, Some(false));
+        assert_eq!(patch.destructive_hint, Some(true));
+        assert_eq!(patch.open_world_hint, Some(true));
     }
 
     #[tokio::test]
