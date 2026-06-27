@@ -1737,7 +1737,6 @@ fn sprite_upgrade(
     url_auth: Option<&str>,
     remote_config: &Path,
 ) -> Result<()> {
-    let local_binaries = resolve_local_operator_binaries()?;
     if let Some(url_auth) = url_auth {
         validate_sprite_url_auth(url_auth)?;
     }
@@ -1758,19 +1757,7 @@ fn sprite_upgrade(
         sprite,
         org,
         &exec_args,
-        &[
-            (script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH),
-            (&local_binaries.cli, SPRITE_REMOTE_UPLOAD_CLI_PATH),
-            (
-                &local_binaries.agent_cli,
-                SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
-            ),
-            (&local_binaries.daemon, SPRITE_REMOTE_UPLOAD_DAEMON_PATH),
-            (
-                &local_binaries.publisher,
-                SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
-            ),
-        ],
+        &[(script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH)],
     )?;
 
     sync_sprite_services(sprite, org, remote_config, true, false)?;
@@ -1950,6 +1937,10 @@ set -euo pipefail
 CFG={cfg}
 VERSION={version}
 TARGET_REPO={repo}
+INSTALLER_REF="$VERSION"
+if [[ "$VERSION" == "latest" ]]; then
+  INSTALLER_REF="main"
+fi
 
 if [[ ! -f "$CFG" ]]; then
   echo "missing $CFG" >&2
@@ -1961,13 +1952,23 @@ if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y --no-install-recommends git curl ca-certificates
 fi
 
-sudo install -d -m 0755 /usr/local/bin
-sudo install -m 0755 {cli_upload} /usr/local/bin/zodex
-sudo install -m 0755 {agent_cli_upload} /usr/local/bin/zodex-agent
-sudo install -m 0755 {daemon_upload} /usr/local/bin/zodexd
-sudo install -m 0755 {publisher_upload} /usr/local/bin/zodex-prd
+HTTP_BIND_PORT="$(sudo awk -F'= ' '/^http_bind_port = / {{ print $2; exit }}' "$CFG" 2>/dev/null || true)"
+REPO_FOR_INSTALL="amxv/zodex"
+if [[ -n "$TARGET_REPO" ]]; then
+  REPO_FOR_INSTALL="$TARGET_REPO"
+fi
 
-sudo /usr/local/bin/zodex --config "$CFG" install
+INSTALLER_URL="https://raw.githubusercontent.com/${{REPO_FOR_INSTALL}}/${{INSTALLER_REF}}/scripts/install.sh"
+TMP_INSTALLER="$(mktemp)"
+curl -fsSL "$INSTALLER_URL" -o "$TMP_INSTALLER"
+sudo env \
+  ZODEX_REPO="$REPO_FOR_INSTALL" \
+  ZODEX_VERSION="$VERSION" \
+  ZODEX_SOURCE_REF="$VERSION" \
+  ZODEX_CONFIG_PATH="$CFG" \
+  ZODEX_HTTP_BIND_PORT="$HTTP_BIND_PORT" \
+  bash "$TMP_INSTALLER"
+rm -f "$TMP_INSTALLER"
 
 if [[ -z "$TARGET_REPO" ]]; then
   TARGET_REPO="$(sudo awk -F'"' '/^\[\[publisher_targets\]\]/ {{ in_targets=1; next }} in_targets && /^repo = "/ {{ print $2; exit }}' "$CFG" 2>/dev/null || true)"
@@ -1986,16 +1987,12 @@ if [[ -z "$current_email" ]]; then
   sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 fi
 
-rm -f {upgrade_script} {cli_upload} {agent_cli_upload} {daemon_upload} {publisher_upload}
+rm -f {upgrade_script}
 "#,
         cfg = shell_escape_single_quotes(&remote_config.display().to_string()),
         version = shell_escape_single_quotes(version),
         repo = shell_escape_single_quotes(repo),
-        upgrade_script = SPRITE_UPGRADE_REMOTE_SCRIPT_PATH,
-        cli_upload = SPRITE_REMOTE_UPLOAD_CLI_PATH,
-        agent_cli_upload = SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
-        daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
-        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH
+        upgrade_script = SPRITE_UPGRADE_REMOTE_SCRIPT_PATH
     )
 }
 
