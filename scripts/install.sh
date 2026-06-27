@@ -292,9 +292,6 @@ install_binaries_from_dir() {
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${daemon_src}" "${ZODEX_INSTALL_DIR}/zodexd"
   install -m 0755 "${src_dir}/zodex-prd" "${ZODEX_INSTALL_DIR}/zodex-prd"
-  ln -sf "${ZODEX_INSTALL_DIR}/zodex" "${ZODEX_INSTALL_DIR}/zodex"
-  ln -sf "${ZODEX_INSTALL_DIR}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
-  ln -sf "${ZODEX_INSTALL_DIR}/zodexd" "${ZODEX_INSTALL_DIR}/zodexd"
 }
 
 install_binaries_from_release() {
