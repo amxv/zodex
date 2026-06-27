@@ -83,6 +83,20 @@ enum GithubCommand {
         forget_local_auth: bool,
     },
     ListGrants,
+    CreatePr {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        head: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "main")]
+        base: String,
+        #[arg(long, default_value = "")]
+        body: String,
+        #[arg(long, default_value_t = false)]
+        draft: bool,
+    },
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -216,6 +230,16 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
                 }
                 GithubCommand::ListGrants => {
                     list_push_grants()?;
+                }
+                GithubCommand::CreatePr {
+                    repo,
+                    head,
+                    title,
+                    base,
+                    body,
+                    draft,
+                } => {
+                    create_pr_with_push_grant(&repo, &head, &title, &base, &body, draft).await?;
                 }
             }
         }
@@ -1072,6 +1096,57 @@ fn list_push_grants() -> Result<()> {
     Ok(())
 }
 
+/// Resolve the active push grant for a repo, erroring with agent-friendly guidance
+/// when no usable grant exists. Reuses the exact same grant store and expiry
+/// semantics as the git credential helper, so a revoked or expired grant yields
+/// no usable auth here either.
+fn resolve_active_push_grant(repo: &str, grants_dir: &Path) -> Result<PushGrantRecord> {
+    load_push_grant_from_dir(repo, grants_dir)?.ok_or_else(|| {
+        anyhow!(
+            "no active push grant for {repo}; run `github request-push --repo {repo}` first (a grant may have expired or been revoked)"
+        )
+    })
+}
+
+async fn create_pr_with_push_grant(
+    repo: &str,
+    head: &str,
+    title: &str,
+    base: &str,
+    body: &str,
+    draft: bool,
+) -> Result<()> {
+    let repo =
+        normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
+    if title.trim().is_empty() {
+        bail!("PR title cannot be empty");
+    }
+    if head.trim().is_empty() {
+        bail!("PR head branch cannot be empty");
+    }
+    if base.trim().is_empty() {
+        bail!("PR base branch cannot be empty");
+    }
+
+    let grant = resolve_active_push_grant(&repo, Path::new(PUSH_GRANTS_DIR))?;
+    let pr =
+        zodex::publisher::create_pull_request(&grant.token, &repo, base, head, title, body, draft)
+            .await?;
+
+    println!("pull-request: created");
+    println!("repo: {repo}");
+    println!("pr-url: {}", pr.pr_url);
+    println!("pr-number: {}", pr.pull_number);
+    println!("head: {head}");
+    println!("base: {base}");
+    println!("draft: {draft}");
+    println!("auth-source: push-grant");
+    if let Some(expires_at) = grant.expires_at.as_deref() {
+        println!("grant-expires-at: {expires_at}");
+    }
+    Ok(())
+}
+
 fn resolve_publisher_client_id(
     config: &Config,
     publisher_client_id: Option<&str>,
@@ -1192,8 +1267,10 @@ fn generate_self_signed_certificate(config: &Config, ip: std::net::IpAddr) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::Args;
+    use super::{Args, PushGrantRecord, resolve_active_push_grant};
     use clap::CommandFactory;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn clap_help_uses_zodexd_name() {
@@ -1202,5 +1279,55 @@ mod tests {
         assert!(help.contains("remote execution"));
         assert!(!help.contains("git-credential-helper"));
         assert!(!help.contains("ensure-tls"));
+    }
+
+    #[test]
+    fn create_pr_requires_an_active_push_grant() {
+        let grants_dir = tempdir().expect("grants dir");
+        let err = resolve_active_push_grant("owner/repo", grants_dir.path())
+            .expect_err("missing grant should error");
+        let message = err.to_string();
+        assert!(message.contains("no active push grant"));
+        assert!(message.contains("request-push"));
+    }
+
+    #[test]
+    fn create_pr_reuses_the_active_push_grant_token() {
+        let grants_dir = tempdir().expect("grants dir");
+        let grant = PushGrantRecord {
+            repo: "owner/repo".to_string(),
+            token: "ghu_example_token".to_string(),
+            expires_at: None,
+            expires_at_epoch_seconds: None,
+            token_source: Some("github-app-user-token".to_string()),
+        };
+        fs::write(
+            grants_dir.path().join("owner__repo.json"),
+            serde_json::to_vec(&grant).expect("encode grant"),
+        )
+        .expect("write grant");
+
+        let resolved = resolve_active_push_grant("owner/repo", grants_dir.path())
+            .expect("grant should resolve");
+        assert_eq!(resolved.token, "ghu_example_token");
+    }
+
+    #[test]
+    fn create_pr_rejects_expired_push_grant() {
+        let grants_dir = tempdir().expect("grants dir");
+        let grant = PushGrantRecord {
+            repo: "owner/repo".to_string(),
+            token: "ghu_expired".to_string(),
+            expires_at: Some("1970-01-01T00:00:01Z".to_string()),
+            expires_at_epoch_seconds: Some(1),
+            token_source: Some("github-app-user-token".to_string()),
+        };
+        let path = grants_dir.path().join("owner__repo.json");
+        fs::write(&path, serde_json::to_vec(&grant).expect("encode grant")).expect("write grant");
+
+        let err = resolve_active_push_grant("owner/repo", grants_dir.path())
+            .expect_err("expired grant should error");
+        assert!(err.to_string().contains("no active push grant"));
+        assert!(!path.exists(), "expired grant file should be pruned");
     }
 }

@@ -100,6 +100,8 @@ The supported write path is:
 ```bash
 zodex-agent github request-push --repo <owner/repo>
 # agent pushes normally with git push
+# optionally open a PR within the same grant window (no gh required)
+zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title" --base main
 zodex-agent github revoke-push --repo <owner/repo>
 # remote operator alternative
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
@@ -117,6 +119,8 @@ Expired grants stop working in the credential-helper path even if the grant file
 `grant-push` remains available as the operator-machine alternative and still places only the temporary token on the Sprite.
 When practical, it also opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable.
 By default, `zodex-agent github revoke-push` removes the active repo grant and retains any local device-flow refresh state so repeated grants are faster when that cache exists. Use `--forget-local-auth` when you want a full local logout for that repo too.
+
+`zodex-agent github create-pr` reuses that same temporary repo-scoped grant. It loads the active grant token written by `request-push` (the push-grant app already carries `Pull requests: Read & write`) and calls the GitHub REST API `POST /repos/{repo}/pulls` directly, never shelling out to `gh` or relying on `gh auth`. It stores no additional auth state of its own, so once the grant expires or is revoked the credential-helper path and `create-pr` both lose usable auth together. The agent must push the head branch first (for example with `git push`) before opening the PR.
 
 ## Migration Notes
 
@@ -137,6 +141,7 @@ zodex sprite logs --sprite <sprite> --service zodexd --lines 100
 zodex sprite sync --sprite <sprite> --force-recreate
 zodex sprite upgrade --sprite <sprite>
 zodex-agent github list-grants
+zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title"
 ```
 
 ## Verification Checklist

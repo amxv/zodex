@@ -52,7 +52,20 @@ The default active grant TTL is `30m`.
 Disable the TTL with `--no-ttl`, change it with `--ttl 2h`, and opt into refresh-token caching with `--cache-refresh-token`.
 
 6. The agent pushes normally with `git push`.
-7. Revoke the local grant on the Sprite:
+7. While the same grant window is active, the agent can open a PR without `gh`:
+
+```bash
+zodex-agent github create-pr \
+  --repo <owner/repo> \
+  --head <pushed-branch> \
+  --title "Title" \
+  --base main \
+  --body "Optional description"
+```
+
+`create-pr` reuses the exact temporary repo-scoped push grant (the same token written by `request-push`) and calls the GitHub REST API directly. Once the grant expires or is revoked, `create-pr` has no usable auth and fails.
+
+8. Revoke the local grant on the Sprite:
 
 ```bash
 zodex-agent github revoke-push --repo <owner/repo>
@@ -132,6 +145,7 @@ zodex sprite upgrade --sprite <sprite>
 zodex-agent github request-push --repo <owner/repo>
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
 zodex-agent github list-grants
+zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title"
 zodex-agent github revoke-push --repo <owner/repo>
 zodex-agent show-url --host <public-host>
 ```

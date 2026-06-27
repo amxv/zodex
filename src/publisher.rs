@@ -752,7 +752,13 @@ impl TokenPermissionProfile {
     }
 }
 
-async fn create_pull_request(
+/// Create a GitHub pull request via the REST API using an already-resolved token.
+///
+/// This is shared between the internal `zodex-prd` publish flow (App installation
+/// token) and the agent-safe `github create-pr` flow (temporary device-flow push
+/// grant token). It performs a single `POST /repos/{repo}/pulls` call and never
+/// shells out to `gh`.
+pub async fn create_pull_request(
     token: &str,
     repo: &str,
     base: &str,
