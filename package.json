@@ -17,6 +17,6 @@
     "astro": "^7.0.3",
     "typescript": "^5.9.2",
     "wrangler": "^4.105.0",
-    "@amxv/zuedocs": "github:amxv/zuedocs#b1c46b8"
+    "zuedocs": "^0.1.0"
   }
 }
