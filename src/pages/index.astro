@@ -1,0 +1,159 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+import { siteConfig } from "../data/docs";
+
+const docs = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
+
+const proofPoints = [
+  {
+    title: "Real remote Linux workspaces",
+    body: "Run commands, interact with long-lived sessions, and apply patches inside a Sprite-backed environment instead of a simulated sandbox."
+  },
+  {
+    title: "Read by default, write by approval",
+    body: "Agents can clone and inspect repos through a reader GitHub App, while push access stays temporary, repo-scoped, and explicit."
+  },
+  {
+    title: "Three focused MCP tools",
+    body: "The remote coding surface is intentionally small: exec_command, write_stdin, and apply_patch."
+  },
+  {
+    title: "Operator-controlled deployment",
+    body: "Set up Sprites, inspect services, verify the proxy front door, grant pushes, revoke access, and upgrade the runtime from the operator CLI."
+  }
+];
+
+const workflows = [
+  "Give an agent a real machine for clone-edit-test-commit loops without handing it permanent GitHub write credentials.",
+  "Expose a Sprite-backed MCP endpoint through a proxy that normalizes /mcp and preserves streaming responses.",
+  "Request push access only when a commit is ready, then revoke the repo-scoped grant after push or PR creation.",
+  "Operate the runtime with explicit status, logs, sync, upgrade, proxy verification, and grant-management commands."
+];
+---
+
+<BaseLayout
+  title={`${siteConfig.name} | ${siteConfig.strapline}`}
+  description={siteConfig.description}
+>
+  <section class="hero shell">
+    <div class="hero__copy">
+      <p class="section-label">Sprite-first remote coding runtime</p>
+      <h1>
+        Let coding agents work on a real remote machine without giving them standing GitHub write access.
+      </h1>
+      <p class="hero__lede">
+        zodex runs a focused MCP coding runtime on Sprites.dev. Agents get terminal execution,
+        session interaction, and patch application, while GitHub write access stays off until
+        an operator or agent activates a temporary repo-scoped push grant.
+      </p>
+      <p class="hero__annotation">
+        The model is simple: read access is always available through a reader app, edits and tests
+        happen on the Sprite, pushes require an explicit grant, and revoke is part of the workflow.
+      </p>
+      <div class="hero__actions">
+        <a class="button button--solid" href="/docs/quickstart">Start with the quickstart</a>
+        <a class="button button--ghost" href="/docs">Browse the docs</a>
+      </div>
+    </div>
+    <aside class="hero__panel">
+      <p class="hero__panel-label">Agent tool surface</p>
+      <ul class="hero__signal-list">
+        <li>Run shell commands in the Sprite workspace.</li>
+        <li>Continue interactive sessions with stdin writes.</li>
+        <li>Apply targeted patches without broad file rewrites.</li>
+      </ul>
+      <div class="hero__terminal">
+        <span>$ zodex sprite status --sprite dev</span>
+        <span>$ zodex proxy verify-origin --sprite dev</span>
+        <span>$ zodex-agent github request-push --repo amxv/zodex</span>
+        <span>$ zodex-agent github revoke-push --repo amxv/zodex</span>
+      </div>
+    </aside>
+  </section>
+
+  <section class="shell section-grid">
+    <div class="section-heading">
+      <p class="section-label">Why it exists</p>
+      <h2>A remote coding runtime with a sharper permission boundary.</h2>
+      <p>
+        Agentic coding needs a real machine, real Git history, and real tests. It does not need
+        permanent write credentials. zodex separates the productive coding environment from the
+        moment when writes are intentionally authorized.
+      </p>
+    </div>
+    <div class="proof-grid">
+      {proofPoints.map((item) => (
+        <article class="proof-card">
+          <h3>{item.title}</h3>
+          <p>{item.body}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+
+  <section class="shell split-section">
+    <div>
+      <p class="section-label">Built for</p>
+      <h2>Operators who want agents to code freely and push deliberately.</h2>
+    </div>
+    <div class="stack-list">
+      {workflows.map((item) => (
+        <article class="stack-list__item">
+          <p>{item}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+
+  <section class="shell capability-band">
+    <div class="capability-band__intro">
+      <p class="section-label">Runtime pieces</p>
+      <h2>Operator CLI, Sprite services, MCP daemon, and agent-side GitHub helper.</h2>
+    </div>
+    <div class="capability-band__grid">
+      <div>
+        <p class="capability-title">zodex</p>
+        <p>Operator CLI for Sprite setup, status, logs, sync, upgrades, proxy checks, and remote grants.</p>
+      </div>
+      <div>
+        <p class="capability-title">zodexd</p>
+        <p>Sprite-side MCP daemon that exposes command execution, stdin writes, and patch application.</p>
+      </div>
+      <div>
+        <p class="capability-title">zodex-agent</p>
+        <p>Guest-side helper for push grants, PR creation, grant listing, revocation, and MCP URL hints.</p>
+      </div>
+      <div>
+        <p class="capability-title">GitHub Apps</p>
+        <p>Reader app for default clone/fetch access and push-grant app for temporary repo-scoped writes.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="shell docs-teaser">
+    <div class="section-heading">
+      <p class="section-label">Docs map</p>
+      <h2>Start with the runtime model, then wire setup, grants, proxy, and operations.</h2>
+      <p>
+        The docs follow the way zodex is operated: install the Sprite runtime, understand the access
+        boundary, expose the MCP front door, grant writes only when needed, and keep the services healthy.
+      </p>
+    </div>
+    <div class="docs-teaser__grid">
+      {docs.map((entry) => (
+        <a class="docs-teaser__card" href={`/docs/${entry.id}`}>
+          <span>{entry.data.category}</span>
+          <h3>{entry.data.title}</h3>
+          <p>{entry.data.summary ?? entry.data.description}</p>
+        </a>
+      ))}
+    </div>
+  </section>
+  <section class="shell closing-note">
+    <p>
+      Use zodex when an agent should have the power of a remote machine, the safety of read-first GitHub access,
+      and a push path that stays explicit every time.
+    </p>
+  </section>
+</BaseLayout>

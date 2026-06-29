@@ -99,6 +99,27 @@ Expired grants stop working in the credential-helper path even if a stale grant 
 By default, `revoke-push` removes the active repo grant and keeps the local device-flow refresh state so the remote operator path usually avoids a full reauth on the next grant.
 If you want to fully forget the local cached auth state too, add `--forget-local-auth`.
 
+
+## Documentation Site
+
+This repository includes an Astro documentation site for zodex. It covers the Sprite runtime architecture, GitHub App access model, setup flow, temporary push grants, proxy and MCP front door, direct HTTP API, command reference, troubleshooting, and docs maintenance.
+
+Run it locally with:
+
+```bash
+bun install
+bun run dev
+```
+
+Validate the docs site with:
+
+```bash
+bun run check
+bun run build
+```
+
+The Astro docs content lives in `src/content/docs`, with site-wide navigation and metadata in `src/data/docs.ts`.
+
 ## Setup
 
 The one canonical setup document is [docs/setup.md](docs/setup.md).

@@ -1,3 +1,8 @@
 tmp/
 target/
 .DS_Store
+
+# Astro docs
+node_modules/
+.astro/
+dist/
