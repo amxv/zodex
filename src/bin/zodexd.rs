@@ -88,8 +88,8 @@ enum GithubCommand {
         repo: String,
         #[arg(long)]
         title: String,
-        #[arg(long, default_value = "main")]
-        base: String,
+        #[arg(long)]
+        base: Option<String>,
         #[arg(long, default_value = "")]
         body: String,
         #[arg(long, default_value_t = false)]
@@ -236,7 +236,7 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
                     body,
                     draft,
                 } => {
-                    publish_pr(&config, &repo, &title, &base, &body, draft).await?;
+                    publish_pr(&config, &repo, &title, base.as_deref(), &body, draft).await?;
                 }
             }
         }
@@ -1108,7 +1108,7 @@ async fn publish_pr(
     config: &Config,
     repo: &str,
     title: &str,
-    base: &str,
+    base: Option<&str>,
     body: &str,
     draft: bool,
 ) -> Result<()> {
@@ -1117,7 +1117,7 @@ async fn publish_pr(
     if title.trim().is_empty() {
         bail!("PR title cannot be empty");
     }
-    if base.trim().is_empty() {
+    if base.is_some_and(|value| value.trim().is_empty()) {
         bail!("PR base branch cannot be empty");
     }
 
@@ -1126,7 +1126,7 @@ async fn publish_pr(
     let request = build_publish_request(
         config,
         repo.clone(),
-        Some(base.to_string()),
+        base.map(ToString::to_string),
         title.to_string(),
         body.to_string(),
         draft,
@@ -1140,7 +1140,7 @@ async fn publish_pr(
     println!("url: {}", response.pr_url);
     println!("number: {}", response.pull_number);
     println!("branch: {}", response.branch);
-    println!("base: {base}");
+    println!("base: {}", base.unwrap_or("<default>"));
     println!("draft: {draft}");
     println!("auth-source: publisher-app");
     Ok(())

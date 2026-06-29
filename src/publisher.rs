@@ -187,6 +187,7 @@ pub fn build_publish_request(
     repo_root: &Path,
 ) -> Result<PublishPrRequest> {
     ensure_clean_worktree(repo_root)?;
+    ensure_repo_root_matches_target(repo_root, &repo_id)?;
     if title.trim().is_empty() {
         bail!("PR title cannot be empty");
     }
@@ -210,6 +211,16 @@ pub fn build_publish_request(
     })
 }
 
+fn ensure_repo_root_matches_target(repo_root: &Path, repo_id: &str) -> Result<()> {
+    let checkout_repo = detect_checkout_github_repo(repo_root)?;
+    if checkout_repo != repo_id {
+        bail!(
+            "current checkout is for {checkout_repo}, but publish-pr targeted {repo_id}; switch to the matching repo before publishing"
+        );
+    }
+    Ok(())
+}
+
 pub fn detect_repo_root(start_dir: &Path) -> Result<PathBuf> {
     let output = Command::new("git")
         .arg("rev-parse")
@@ -227,6 +238,94 @@ pub fn detect_repo_root(start_dir: &Path) -> Result<PathBuf> {
 
     let root = String::from_utf8(output.stdout).context("git repo root was not valid UTF-8")?;
     Ok(PathBuf::from(root.trim()))
+}
+
+fn detect_checkout_github_repo(repo_root: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .current_dir(repo_root)
+        .output()
+        .context("failed to run git remote get-url origin")?;
+
+    if !output.status.success() {
+        bail!(
+            "git remote get-url origin failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let remote_url =
+        String::from_utf8(output.stdout).context("git remote origin URL was not valid UTF-8")?;
+    parse_github_remote_repo(&remote_url).ok_or_else(|| {
+        anyhow!(
+            "git remote origin does not point to a supported GitHub repo URL: {}",
+            remote_url.trim()
+        )
+    })
+}
+
+fn parse_github_remote_repo(remote_url: &str) -> Option<String> {
+    let trimmed = remote_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some((_, rest)) = trimmed.split_once("://") {
+        let (authority, path) = rest.split_once('/')?;
+        if !github_remote_authority_is_supported(authority) {
+            return None;
+        }
+        return normalize_github_repo_path(path);
+    }
+
+    if let Some((authority, path)) = trimmed.split_once(':')
+        && authority.contains('@')
+    {
+        let host = authority
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(authority);
+        if !github_remote_host_is_supported(host) {
+            return None;
+        }
+        return normalize_github_repo_path(path);
+    }
+
+    let (authority, path) = trimmed.split_once('/')?;
+    if !github_remote_authority_is_supported(authority) {
+        return None;
+    }
+    normalize_github_repo_path(path)
+}
+
+fn github_remote_authority_is_supported(authority: &str) -> bool {
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or(authority);
+    github_remote_host_is_supported(host)
+}
+
+fn github_remote_host_is_supported(host: &str) -> bool {
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    normalized == "github.com" || normalized == "www.github.com"
+}
+
+fn normalize_github_repo_path(path: &str) -> Option<String> {
+    let trimmed = path.trim_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 pub fn create_head_bundle(repo_root: &Path) -> Result<Vec<u8>> {
@@ -822,8 +921,8 @@ mod tests {
 
     use super::{
         PublishPrRequest, SOCKET_DIR_MODE, TokenPermissionProfile, build_publish_branch_name,
-        create_head_bundle, ensure_clean_worktree, ensure_publisher_socket_parent_dir,
-        validate_publish_request,
+        build_publish_request, create_head_bundle, ensure_clean_worktree,
+        ensure_publisher_socket_parent_dir, parse_github_remote_repo, validate_publish_request,
     };
     use crate::config::{Config, PublishTarget};
     use tempfile::tempdir;
@@ -944,6 +1043,83 @@ mod tests {
             .expect("list bundle heads");
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("HEAD"));
+    }
+
+    #[test]
+    fn parse_github_remote_repo_supports_common_remote_shapes() {
+        assert_eq!(
+            parse_github_remote_repo("https://github.com/amxv/zodex.git"),
+            Some("amxv/zodex".to_string())
+        );
+        assert_eq!(
+            parse_github_remote_repo("ssh://git@github.com/amxv/zodex.git"),
+            Some("amxv/zodex".to_string())
+        );
+        assert_eq!(
+            parse_github_remote_repo("git@github.com:amxv/zodex.git"),
+            Some("amxv/zodex".to_string())
+        );
+    }
+
+    #[test]
+    fn build_publish_request_rejects_checkout_repo_mismatch() {
+        let tempdir = tempdir().expect("tempdir");
+        let repo = tempdir.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+
+        let init_status = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["init", "-q"])
+            .status()
+            .expect("git init");
+        assert!(init_status.success(), "git init should succeed");
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["config", "user.email", "test@example.com"])
+            .status()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["config", "user.name", "Test"])
+            .status()
+            .expect("git config name");
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/amxv/other.git",
+            ])
+            .status()
+            .expect("git remote add origin");
+        std::fs::write(repo.join("a.txt"), "hello\n").expect("write file");
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["add", "a.txt"])
+            .status()
+            .expect("git add");
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["commit", "-qm", "init"])
+            .status()
+            .expect("git commit");
+
+        let err = build_publish_request(
+            &Config::default(),
+            "amxv/zodex".to_string(),
+            None,
+            "Title".to_string(),
+            String::new(),
+            false,
+            &repo,
+        )
+        .expect_err("mismatched checkout should fail");
+
+        assert!(
+            err.to_string()
+                .contains("current checkout is for amxv/other")
+        );
     }
 
     #[test]

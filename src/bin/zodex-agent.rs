@@ -59,8 +59,8 @@ enum GithubCommand {
         repo: String,
         #[arg(long)]
         title: String,
-        #[arg(long, default_value = "main")]
-        base: String,
+        #[arg(long)]
+        base: Option<String>,
         #[arg(long, default_value = "")]
         body: String,
         #[arg(long, default_value_t = false)]
@@ -162,8 +162,10 @@ fn build_runtime_args(cli: Cli) -> Vec<String> {
                     args.push(repo);
                     args.push("--title".to_string());
                     args.push(title);
-                    args.push("--base".to_string());
-                    args.push(base);
+                    if let Some(base) = base {
+                        args.push("--base".to_string());
+                        args.push(base);
+                    }
                     args.push("--body".to_string());
                     args.push(body);
                     if draft {
