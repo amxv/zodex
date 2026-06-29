@@ -15,14 +15,19 @@ export default {
         {
           ok: true,
           component: "zodex-cloudflare-worker",
-          routes: ["/health", "/mcp", "/mcp/"],
+          routes: ["/", "/health", "/mcp", "/mcp/"],
           spriteOrigin: env.SPRITE_ORIGIN,
+          docsOrigin: env.DOCS_ORIGIN ?? null,
         },
         200,
       );
     }
 
     const preparedRequest = await prepareRequest(request);
+
+    if (route.kind === "docs") {
+      return proxyDocs(preparedRequest, env, route.upstreamPath);
+    }
 
     await warmSprite(env);
     return proxyWithRetry(preparedRequest, env, route.upstreamPath);
@@ -42,7 +47,7 @@ function resolveRoute(pathname) {
     return { kind: "mcp", upstreamPath: pathname };
   }
 
-  return null;
+  return { kind: "docs", upstreamPath: pathname };
 }
 
 async function prepareRequest(request) {
@@ -155,6 +160,22 @@ async function proxyRequest(preparedRequest, env, upstreamPath) {
   return relayResponse(response, env);
 }
 
+async function proxyDocs(preparedRequest, env, upstreamPath) {
+  const upstreamUrl = buildDocsUrl(env, upstreamPath, preparedRequest.search);
+  const response = await fetchWithTimeout(
+    upstreamUrl,
+    {
+      method: preparedRequest.method,
+      headers: preparedRequest.headers,
+      body: buildRequestBody(preparedRequest.bodyBuffer),
+      redirect: "manual",
+    },
+    UPSTREAM_RESPONSE_TIMEOUT_MS,
+  );
+
+  return relayDocsResponse(response, env);
+}
+
 function buildRequestBody(bodyBuffer) {
   if (!bodyBuffer) {
     return undefined;
@@ -175,6 +196,17 @@ function relayResponse(response, env) {
   });
 }
 
+function relayDocsResponse(response, env) {
+  const headers = new Headers(response.headers);
+  headers.set("x-proxy-upstream", docsHost(env));
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function buildUpstreamUrl(env, pathname, search = "") {
   const origin = env.SPRITE_ORIGIN;
   if (!origin) {
@@ -186,9 +218,28 @@ function buildUpstreamUrl(env, pathname, search = "") {
   return url;
 }
 
+function buildDocsUrl(env, pathname, search = "") {
+  const origin = env.DOCS_ORIGIN;
+  if (!origin) {
+    throw new Error("DOCS_ORIGIN is not configured");
+  }
+
+  const url = new URL(pathname, ensureTrailingSlash(origin));
+  url.search = search;
+  return url;
+}
+
 function upstreamHost(env) {
   try {
     return new URL(env.SPRITE_ORIGIN).host;
+  } catch {
+    return "unknown";
+  }
+}
+
+function docsHost(env) {
+  try {
+    return new URL(env.DOCS_ORIGIN).host;
   } catch {
     return "unknown";
   }

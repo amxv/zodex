@@ -8,12 +8,14 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "deploy:docs": "astro build && wrangler deploy -c wrangler.docs.jsonc"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "@types/node": "^24.0.13",
     "astro": "^7.0.3",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "wrangler": "^4.105.0"
   }
 }

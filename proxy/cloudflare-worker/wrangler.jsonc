@@ -6,6 +6,7 @@
   "keep_vars": true,
   "workers_dev": true,
   "vars": {
-    "SPRITE_ORIGIN": "__SPRITE_ORIGIN__"
+    "SPRITE_ORIGIN": "__SPRITE_ORIGIN__",
+    "DOCS_ORIGIN": "__DOCS_ORIGIN__"
   }
 }

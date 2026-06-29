@@ -118,6 +118,14 @@ bun run check
 bun run build
 ```
 
+Deploy the docs worker with:
+
+```bash
+bun run deploy:docs
+```
+
+Production routing keeps `zodex.ashray.xyz` on the existing Cloudflare proxy worker. That worker forwards `/mcp`, `/mcp/*`, and `/health` to the live Sprite and sends all other paths to the `zodex-docs` worker origin.
+
 The Astro docs content lives in `src/content/docs`, with site-wide navigation and metadata in `src/data/docs.ts`.
 
 ## Setup
