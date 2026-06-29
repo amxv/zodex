@@ -5,7 +5,7 @@
     {
       "matchPackageNames": ["zuedocs"],
       "groupName": "zuedocs shared docs template",
-      "matchUpdateTypes": ["minor", "patch"],
+      "allowedVersions": "<0.2.0",
       "rangeStrategy": "bump",
       "automerge": true
     }
