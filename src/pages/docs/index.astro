@@ -1,8 +1,7 @@
 ---
 import { getCollection } from "astro:content";
-import BaseLayout from "../../layouts/BaseLayout.astro";
-import { docCategories } from "../../data/docs";
-import { siteConfig } from "../../data/docs";
+import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
+import { docCategories, primaryNav, siteConfig } from "../../data/docs";
 
 const entries = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
 const grouped = docCategories.map((category) => ({
@@ -14,6 +13,8 @@ const grouped = docCategories.map((category) => ({
 <BaseLayout
   title={`${siteConfig.name} Docs`}
   description="Read zodex guides for Sprite setup, MCP runtime architecture, GitHub App access, temporary push grants, proxy operations, service health, and command reference."
+  siteConfig={siteConfig}
+  primaryNav={primaryNav}
 >
   <section class="shell docs-index-hero">
     <p class="section-label">Documentation</p>

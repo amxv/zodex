@@ -1,9 +1,8 @@
 ---
 import { getCollection, render } from "astro:content";
-import BaseLayout from "../../layouts/BaseLayout.astro";
-import DocsPageLayout from "../../layouts/DocsPageLayout.astro";
-import { docCategories } from "../../data/docs";
-import { siteConfig } from "../../data/docs";
+import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
+import DocsPageLayout from "zuedocs/layouts/DocsPageLayout.astro";
+import { docCategories, primaryNav, siteConfig } from "../../data/docs";
 
 const docs = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
 
@@ -26,7 +25,12 @@ const grouped = docCategories
   .filter((group) => group.entries.length > 0);
 ---
 
-<BaseLayout title={`${entry.data.title} | ${siteConfig.name} Docs`} description={entry.data.description}>
+<BaseLayout
+  title={`${entry.data.title} | ${siteConfig.name} Docs`}
+  description={entry.data.description}
+  siteConfig={siteConfig}
+  primaryNav={primaryNav}
+>
   <section class="shell docs-shell">
     <aside class="docs-sidebar">
       <p class="docs-sidebar__eyebrow">Docs map</p>
