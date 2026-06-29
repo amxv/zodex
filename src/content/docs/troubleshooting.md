@@ -59,7 +59,7 @@ Use `zodex-client` when debugging request shapes.
 
 Check reader app setup:
 
-- reader app has `Contents: Read-only`
+- reader app has only `Contents: Read-only`
 - reader app is installed on the repository
 - `reader_app_id` and `reader_installation_id` are correct
 - `reader_private_key_path` points to the installed PEM
@@ -97,14 +97,14 @@ zodex-agent github request-push --repo amxv/zodex
 
 ## PR creation fails
 
-`create-pr` needs the same active grant as push and the branch must already exist on GitHub:
+`publish-pr` does not need a push grant. It creates a generated branch from the current committed `HEAD` through the publisher daemon:
 
 ```bash
-git push origin docs-runtime-guide
-zodex-agent github create-pr --repo amxv/zodex --head docs-runtime-guide --title "Improve docs" --base main
+git status
+zodex-agent github publish-pr --repo amxv/zodex --title "Improve docs" --base main
 ```
 
-Also verify the push-grant app has `Pull requests: Read & write`.
+Also verify the publisher app has `Contents: Read & write` and `Pull requests: Read & write`, the publisher daemon is running, and the repo is listed in `publisher_targets`.
 
 ## Runtime service cannot start
 
@@ -132,7 +132,7 @@ Check:
 
 Stop and fix the environment before continuing when:
 
-- reader app has write permissions
+- reader app has permissions beyond `Contents: Read-only`
 - push-grant app is installed too broadly
 - push-grant app has broader permissions than `Contents` and `Pull requests`
 - `zodexd` cannot bind after setup

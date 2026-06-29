@@ -22,7 +22,7 @@ The MCP server instructions are:
 zodex remote execution tools
 ```
 
-No publisher or PR tool is exposed directly over MCP. GitHub write actions are intentionally routed through `zodex-agent` commands and active grants.
+No publisher or PR tool is exposed directly over MCP. GitHub push actions are intentionally routed through `zodex-agent` commands and active grants; `publish-pr` is exposed through `zodex-agent github publish-pr`; it routes branch publication and PR creation through the local publisher daemon without exposing a write token to MCP tools.
 
 ## Tool annotations
 

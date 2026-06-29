@@ -86,7 +86,7 @@ reader_installation_id = 11111111
 reader_private_key_path = "/etc/zodex/reader/private-key.pem"
 ```
 
-The reader app should have `Contents: Read-only` and be installed on only the repositories the runtime may read.
+The reader app should have only `Contents: Read-only`, and be installed on repositories the runtime may read. Clone/fetch tokens request only `Contents: read`. `publish-pr` is handled by the publisher daemon, not the reader app.
 
 ## Push-grant GitHub App
 
@@ -102,7 +102,7 @@ publisher_max_title_chars = 240
 publisher_max_body_chars = 16000
 ```
 
-The push-grant app should have `Contents: Read & write`, `Pull requests: Read & write`, Device Flow enabled, and user access token expiration enabled.
+The publisher / push-grant app should have `Contents: Read & write`, `Pull requests: Read & write`, Device Flow enabled, and user access token expiration enabled. Agent-side `publish-pr` sends a local HEAD bundle to the publisher daemon, which uses the publisher app to push a generated branch and open the PR while keeping credentials inside the daemon.
 
 ## Publish targets
 

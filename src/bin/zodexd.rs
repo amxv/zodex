@@ -17,7 +17,9 @@ use time::format_description::well_known::Rfc3339;
 use tracing::warn;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
-use zodex::publisher::mint_reader_installation_token;
+use zodex::publisher::{
+    build_publish_request, detect_repo_root, mint_reader_installation_token, submit_publish_request,
+};
 use zodex::redaction::redact_api_key_query_params;
 use zodex::server::run_server;
 
@@ -45,9 +47,7 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Commands {
     #[command(hide = true)]
-    GitCredentialHelper {
-        operation: String,
-    },
+    GitCredentialHelper { operation: String },
     #[command(hide = true)]
     ShowUrl {
         #[arg(long, default_value = "127.0.0.1")]
@@ -83,11 +83,9 @@ enum GithubCommand {
         forget_local_auth: bool,
     },
     ListGrants,
-    CreatePr {
+    PublishPr {
         #[arg(long)]
         repo: String,
-        #[arg(long)]
-        head: String,
         #[arg(long)]
         title: String,
         #[arg(long, default_value = "main")]
@@ -231,15 +229,14 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
                 GithubCommand::ListGrants => {
                     list_push_grants()?;
                 }
-                GithubCommand::CreatePr {
+                GithubCommand::PublishPr {
                     repo,
-                    head,
                     title,
                     base,
                     body,
                     draft,
                 } => {
-                    create_pr_with_push_grant(&repo, &head, &title, &base, &body, draft).await?;
+                    publish_pr(&config, &repo, &title, &base, &body, draft).await?;
                 }
             }
         }
@@ -871,8 +868,7 @@ async fn mint_device_flow_push_grant(
                 let access_token = response
                     .access_token
                     .ok_or_else(|| anyhow!("GitHub refresh completed without an access token"))?;
-                if persist_refresh_token
-                    && let Some(refresh_token) = response.refresh_token.clone()
+                if persist_refresh_token && let Some(refresh_token) = response.refresh_token.clone()
                 {
                     save_cached_device_flow_grant(
                         repo,
@@ -885,8 +881,7 @@ async fn mint_device_flow_push_grant(
                 }
                 let (expires_at, expires_at_epoch_seconds) = match active_ttl {
                     Some(active_ttl) => {
-                        let (formatted, epoch_seconds) =
-                            expires_at_from_now(active_ttl.as_secs())?;
+                        let (formatted, epoch_seconds) = expires_at_from_now(active_ttl.as_secs())?;
                         (Some(formatted), Some(epoch_seconds))
                     }
                     None => grant_expiration_from_expires_in(response.expires_in)?,
@@ -1050,8 +1045,8 @@ fn list_push_grants() -> Result<()> {
         String::new()
     } else {
         let mut blobs = Vec::new();
-        for entry in
-            fs::read_dir(grants_dir).with_context(|| format!("failed to read {}", grants_dir.display()))?
+        for entry in fs::read_dir(grants_dir)
+            .with_context(|| format!("failed to read {}", grants_dir.display()))?
         {
             let entry =
                 entry.with_context(|| format!("failed to read {}", grants_dir.display()))?;
@@ -1100,6 +1095,7 @@ fn list_push_grants() -> Result<()> {
 /// when no usable grant exists. Reuses the exact same grant store and expiry
 /// semantics as the git credential helper, so a revoked or expired grant yields
 /// no usable auth here either.
+#[cfg(test)]
 fn resolve_active_push_grant(repo: &str, grants_dir: &Path) -> Result<PushGrantRecord> {
     load_push_grant_from_dir(repo, grants_dir)?.ok_or_else(|| {
         anyhow!(
@@ -1108,9 +1104,9 @@ fn resolve_active_push_grant(repo: &str, grants_dir: &Path) -> Result<PushGrantR
     })
 }
 
-async fn create_pr_with_push_grant(
+async fn publish_pr(
+    config: &Config,
     repo: &str,
-    head: &str,
     title: &str,
     base: &str,
     body: &str,
@@ -1121,29 +1117,32 @@ async fn create_pr_with_push_grant(
     if title.trim().is_empty() {
         bail!("PR title cannot be empty");
     }
-    if head.trim().is_empty() {
-        bail!("PR head branch cannot be empty");
-    }
     if base.trim().is_empty() {
         bail!("PR base branch cannot be empty");
     }
 
-    let grant = resolve_active_push_grant(&repo, Path::new(PUSH_GRANTS_DIR))?;
-    let pr =
-        zodex::publisher::create_pull_request(&grant.token, &repo, base, head, title, body, draft)
-            .await?;
+    let current_dir = env::current_dir().context("failed to resolve current directory")?;
+    let repo_root = detect_repo_root(&current_dir)?;
+    let request = build_publish_request(
+        config,
+        repo.clone(),
+        Some(base.to_string()),
+        title.to_string(),
+        body.to_string(),
+        draft,
+        &repo_root,
+    )?;
+    let response =
+        submit_publish_request(Path::new(&config.publisher_socket_path), &request).await?;
 
-    println!("pull-request: created");
+    println!("publish-pr: created");
     println!("repo: {repo}");
-    println!("pr-url: {}", pr.pr_url);
-    println!("pr-number: {}", pr.pull_number);
-    println!("head: {head}");
+    println!("url: {}", response.pr_url);
+    println!("number: {}", response.pull_number);
+    println!("branch: {}", response.branch);
     println!("base: {base}");
     println!("draft: {draft}");
-    println!("auth-source: push-grant");
-    if let Some(expires_at) = grant.expires_at.as_deref() {
-        println!("grant-expires-at: {expires_at}");
-    }
+    println!("auth-source: publisher-app");
     Ok(())
 }
 
@@ -1217,7 +1216,9 @@ fn tls_artifacts_exist(config: &Config) -> bool {
 }
 
 fn select_tls_san_ip(bind_host: &str) -> std::net::IpAddr {
-    if let Ok(ip) = bind_host.parse::<std::net::IpAddr>() && !ip.is_unspecified() {
+    if let Ok(ip) = bind_host.parse::<std::net::IpAddr>()
+        && !ip.is_unspecified()
+    {
         return ip;
     }
     std::net::IpAddr::from([127, 0, 0, 1])
@@ -1282,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn create_pr_requires_an_active_push_grant() {
+    fn push_grant_resolver_requires_an_active_push_grant() {
         let grants_dir = tempdir().expect("grants dir");
         let err = resolve_active_push_grant("owner/repo", grants_dir.path())
             .expect_err("missing grant should error");
@@ -1292,7 +1293,7 @@ mod tests {
     }
 
     #[test]
-    fn create_pr_reuses_the_active_push_grant_token() {
+    fn push_grant_resolver_reuses_the_active_push_grant_token() {
         let grants_dir = tempdir().expect("grants dir");
         let grant = PushGrantRecord {
             repo: "owner/repo".to_string(),
@@ -1313,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn create_pr_rejects_expired_push_grant() {
+    fn push_grant_resolver_rejects_expired_push_grant() {
         let grants_dir = tempdir().expect("grants dir");
         let grant = PushGrantRecord {
             repo: "owner/repo".to_string(),

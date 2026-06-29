@@ -3,14 +3,14 @@ title: GitHub Apps setup
 description: Create the reader and push-grant GitHub Apps with the narrow permissions zodex expects.
 order: 5
 category: GitHub Access
-summary: The one-time GitHub App checklist for read-only access, device-flow push grants, PEM files, app IDs, client IDs, and installation scope.
+summary: The one-time GitHub App checklist for read access, PR creation, device-flow push grants, PEM files, app IDs, client IDs, and installation scope.
 ---
 
 ## Why there are two apps
 
-zodex uses two GitHub Apps because read access and write access have different risk profiles.
+zodex uses two GitHub Apps because read access and push access have different risk profiles.
 
-The reader app stays available to the runtime so agents can clone and fetch. The push-grant app is used only when an operator or agent intentionally starts a grant flow.
+The reader app stays available so agents can clone and fetch. The publisher / push-grant app is used inside the publisher daemon for `publish-pr`, and also supports explicit device-flow grants when an operator allows direct `git push`.
 
 ## Reader app checklist
 
@@ -25,7 +25,7 @@ Private key:
   download PEM and store it on the operator machine for setup
 ```
 
-Record the app ID and install the app on the repositories agents are allowed to read.
+Record the app ID and install the app on the repositories agents are allowed to read against.
 
 ## Push-grant app checklist
 
@@ -49,7 +49,7 @@ Record both the app ID and the client ID. The app ID is used during setup. The c
 
 ## Install on selected repositories
 
-Install both apps on the same target repositories unless you intentionally want different read and write scopes. For this repository, the supported slug is:
+Install both apps on the same target repositories unless you intentionally want different read and publisher scopes.
 
 ```text
 amxv/zodex

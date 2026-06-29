@@ -38,38 +38,30 @@ That is enough for the normal coding loop:
 
 1. Set up the two GitHub Apps once:
    - a read-only reader app
-   - a temporary push-grant app with device flow enabled
+   - a publisher / push-grant app with `Contents: write`, PR write, and device flow enabled
 2. Install `zodex` on a Sprite.
 3. Point MCP clients at the proxy-backed public URL.
 4. Let the agent clone, inspect, edit, test, and commit.
-5. When the agent is ready to push on the Sprite, run:
+5. After committing locally, publish a generated branch and open a PR without `gh` or a direct push grant:
 
 ```bash
-zodex-agent github request-push --repo <owner/repo>
-```
-
-The default active grant TTL is `30m`.
-Disable the TTL with `--no-ttl`, change it with `--ttl 2h`, and opt into refresh-token caching with `--cache-refresh-token`.
-
-6. The agent pushes normally with `git push`.
-7. While the same grant window is active, the agent can open a PR without `gh`:
-
-```bash
-zodex-agent github create-pr \
+zodex-agent github publish-pr \
   --repo <owner/repo> \
-  --head <pushed-branch> \
   --title "Title" \
   --base main \
   --body "Optional description"
 ```
 
-`create-pr` reuses the exact temporary repo-scoped push grant (the same token written by `request-push`) and calls the GitHub REST API directly. Once the grant expires or is revoked, `create-pr` has no usable auth and fails.
+`publish-pr` bundles the current committed `HEAD`, sends it to the local publisher daemon, and lets that daemon mint a short-lived publisher-app token. The daemon pushes only a generated branch using the configured branch prefix, opens the PR, and never exposes the write token to the agent shell.
 
-8. Revoke the local grant on the Sprite:
+Direct `git push` remains available only when an operator intentionally starts a temporary repo-scoped grant:
 
 ```bash
+zodex-agent github request-push --repo <owner/repo>
 zodex-agent github revoke-push --repo <owner/repo>
 ```
+
+The default active grant TTL is `30m`. Disable the TTL with `--no-ttl`, change it with `--ttl 2h`, and opt into refresh-token caching with `--cache-refresh-token`.
 
 When an operator wants to activate a grant remotely from their own machine instead, run:
 
@@ -174,7 +166,7 @@ zodex sprite upgrade --sprite <sprite>
 zodex-agent github request-push --repo <owner/repo>
 zodex github grant-push --sprite <sprite> --repo <owner/repo>
 zodex-agent github list-grants
-zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title"
+zodex-agent github publish-pr --repo <owner/repo> --title "Title"
 zodex-agent github revoke-push --repo <owner/repo>
 zodex-agent show-url --host <public-host>
 ```

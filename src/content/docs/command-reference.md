@@ -79,8 +79,8 @@ zodex-agent github request-push --repo amxv/zodex --ttl 2h
 zodex-agent github request-push --repo amxv/zodex --no-ttl
 zodex-agent github request-push --repo amxv/zodex --cache-refresh-token
 zodex-agent github list-grants
-zodex-agent github create-pr --repo amxv/zodex --head docs-runtime-guide --title "Improve zodex runtime docs" --base main --body "Adds comprehensive docs."
-zodex-agent github create-pr --repo amxv/zodex --head docs-runtime-guide --title "Improve zodex runtime docs" --draft
+zodex-agent github publish-pr --repo amxv/zodex --title "Improve zodex runtime docs" --base main --body "Adds comprehensive docs."
+zodex-agent github publish-pr --repo amxv/zodex --title "Improve zodex runtime docs" --draft
 zodex-agent github revoke-push --repo amxv/zodex
 zodex-agent github revoke-push --repo amxv/zodex --forget-local-auth
 ```

@@ -15,22 +15,22 @@ The default state is:
 - Git clone and fetch work through the reader GitHub App.
 - Shell execution, patching, tests, and local commits work in the Sprite workspace.
 - Git push fails until a repo-scoped grant is active.
-- PR creation through `zodex-agent github create-pr` requires the same active grant.
-- Revocation removes the write path while read access remains available.
+- PR creation through `zodex-agent github publish-pr` works without a push grant by sending a bundle of the current committed `HEAD` to the publisher daemon, which pushes a generated branch and opens the PR.
+- Revocation removes the direct-push path while read access and `publish-pr` remain available.
 
 ## Reader app permissions
 
-The reader app should have only:
+The reader app should have:
 
 ```text
 Contents: Read-only
 ```
 
-Install it on `Only select repositories`. If the reader app has write permission, stop and fix it before installing the runtime.
+zodex still mints separate installation tokens for separate jobs: clone and fetch request only `Contents: read`; `publish-pr` uses the publisher daemon, whose app has `Contents: write` and `Pull requests: write`, while the token stays inside that daemon. Install the app on `Only select repositories`.
 
-## Push-grant app permissions
+## Publisher / push-grant app permissions
 
-The push-grant app should have:
+The publisher / push-grant app should have:
 
 ```text
 Contents: Read & write
@@ -39,7 +39,7 @@ Device Flow enabled
 User access token expiration enabled
 ```
 
-It should also be installed on `Only select repositories`. The device-flow user authorization is what lets an operator approve a temporary push grant without putting a permanent write token into the agent environment.
+It should also be installed on `Only select repositories`. The publisher daemon uses this app installation to push generated PR branches and open PRs without exposing a write token to the agent shell. The device-flow user authorization is used only when an operator approves a temporary direct-push grant.
 
 ## Local work before remote writes
 
@@ -53,7 +53,7 @@ git add src/content/docs
 git commit -m "Improve zodex docs"
 ```
 
-Only the network write step needs `request-push` or `grant-push`.
+`publish-pr` publishes a generated branch through the publisher daemon. Direct `git push` still needs `request-push` or `grant-push`.
 
 ## Grant storage and expiration
 

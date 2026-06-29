@@ -71,19 +71,19 @@ Use this before assuming a push failure is caused by code, branch protection, or
 
 ## Open a pull request
 
-Within the same grant window, the agent can open a PR without `gh`:
+After committing locally, the agent can publish a generated branch and open a PR without `gh` or a direct push grant:
 
 ```bash
-zodex-agent github create-pr   --repo amxv/zodex   --head docs-runtime-guide   --title "Improve zodex runtime docs"   --base main   --body "Adds detailed runtime, grant, and operations documentation."
+zodex-agent github publish-pr   --repo amxv/zodex     --title "Improve zodex runtime docs"   --base main   --body "Adds detailed runtime, grant, and operations documentation."
 ```
 
 For a draft PR:
 
 ```bash
-zodex-agent github create-pr   --repo amxv/zodex   --head docs-runtime-guide   --title "Improve zodex runtime docs"   --base main   --draft
+zodex-agent github publish-pr   --repo amxv/zodex     --title "Improve zodex runtime docs"   --base main   --draft
 ```
 
-`create-pr` reuses the same temporary repo-scoped grant and calls the GitHub REST API directly. It does not shell out to `gh` and does not store its own credentials.
+`publish-pr` sends a bundle of the current committed `HEAD` to the publisher daemon. The daemon mints short-lived publisher-app credentials, pushes a generated branch, opens the PR, and keeps credentials inside the daemon.
 
 ## Revoke when finished
 

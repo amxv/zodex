@@ -70,7 +70,7 @@ git status
 git commit -m "Improve runtime docs"
 ```
 
-The reader app keeps clone and fetch access available. Pushing still fails until a push grant is active.
+The reader app keeps clone and fetch access available. `publish-pr` can publish a generated branch through the publisher daemon without a direct push grant; plain `git push` still fails until a push grant is active.
 
 ## First push grant
 

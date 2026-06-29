@@ -754,10 +754,9 @@ impl TokenPermissionProfile {
 
 /// Create a GitHub pull request via the REST API using an already-resolved token.
 ///
-/// This is shared between the internal `zodex-prd` publish flow (App installation
-/// token) and the agent-safe `github create-pr` flow (temporary device-flow push
-/// grant token). It performs a single `POST /repos/{repo}/pulls` call and never
-/// shells out to `gh`.
+/// This is shared by the controlled publisher flow after it pushes a generated
+/// branch. It performs a single `POST /repos/{repo}/pulls` call and never shells
+/// out to `gh`.
 pub async fn create_pull_request(
     token: &str,
     repo: &str,
@@ -822,8 +821,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        PublishPrRequest, SOCKET_DIR_MODE, build_publish_branch_name, create_head_bundle,
-        ensure_clean_worktree, ensure_publisher_socket_parent_dir, validate_publish_request,
+        PublishPrRequest, SOCKET_DIR_MODE, TokenPermissionProfile, build_publish_branch_name,
+        create_head_bundle, ensure_clean_worktree, ensure_publisher_socket_parent_dir,
+        validate_publish_request,
     };
     use crate::config::{Config, PublishTarget};
     use tempfile::tempdir;
@@ -852,6 +852,21 @@ mod tests {
         .expect_err("request should be rejected");
 
         assert!(err.to_string().contains("repo id not allowed"));
+    }
+
+    #[test]
+    fn token_permission_profiles_keep_reader_and_publisher_separate() {
+        assert_eq!(
+            TokenPermissionProfile::Reader.github_permissions(),
+            serde_json::json!({ "contents": "read" })
+        );
+        assert_eq!(
+            TokenPermissionProfile::Publisher.github_permissions(),
+            serde_json::json!({
+                "contents": "write",
+                "pull_requests": "write"
+            })
+        );
     }
 
     #[test]

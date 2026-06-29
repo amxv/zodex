@@ -51,12 +51,12 @@ It also contains local service commands such as `install`, `start`, `stop`, `res
 ```bash
 zodex-agent show-url --host dev-sprite.example.net
 zodex-agent github request-push --repo amxv/zodex
-zodex-agent github create-pr --repo amxv/zodex --head docs-site --title "Improve docs"
+zodex-agent github publish-pr --repo amxv/zodex --title "Improve docs"
 zodex-agent github list-grants
 zodex-agent github revoke-push --repo amxv/zodex
 ```
 
-The agent helper can request and revoke grants, open PRs within an active grant window, print connection URLs, and serve as the Git credential helper.
+The agent helper can request and revoke direct-push grants, publish PRs through the publisher daemon, print connection URLs, and serve as the Git credential helper.
 
 ## Service flow
 

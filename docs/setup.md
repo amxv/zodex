@@ -12,7 +12,8 @@ When setup is complete:
 - `zodexd` is running behind Sprite Services
 - the proxy-backed MCP front door is available
 - the runtime has read-only GitHub access through a reader app
-- the operator can grant and revoke temporary repo-scoped push access
+- the agent can publish PRs through the publisher daemon without a direct push grant
+- the operator can grant and revoke temporary repo-scoped direct push access
 
 ## One-Time Inputs
 
@@ -30,9 +31,9 @@ Both apps must be installed on `Only select repositories`.
 Permissions:
 
 - reader app: `Contents: Read-only`
-- push-grant app: `Contents: Read & write`, `Pull requests: Read & write`
+- publisher / push-grant app: `Contents: Read & write`, `Pull requests: Read & write`
 
-The push-grant app should keep user access token expiration enabled and have **Device Flow** enabled in the GitHub App settings.
+The publisher / push-grant app should keep user access token expiration enabled and have **Device Flow** enabled in the GitHub App settings. `publish-pr` uses the app installation side of this app; `request-push` uses the device-flow side only when direct `git push` is explicitly approved.
 
 ## Install
 
@@ -95,32 +96,26 @@ The proxy normalizes `/mcp`, warms cold Sprites, retries transient edge failures
 
 ## Write Flow
 
-The supported write path is:
+The supported PR path is:
+
+```bash
+# after committing locally
+zodex-agent github publish-pr --repo <owner/repo> --title "Title" --base main
+```
+
+`publish-pr` sends a bundle of the current committed `HEAD` to the local publisher daemon. The daemon mints short-lived app credentials, pushes only a generated branch using `publisher_branch_prefix`, opens the PR, and keeps those credentials inside the daemon. The worktree must be clean, so commit changes first.
+
+Direct push remains a separate, temporary grant path. This is temporary repo-scoped direct push access. Use `request-push` only when the agent needs a normal `git push`; otherwise prefer `publish-pr`.
 
 ```bash
 zodex-agent github request-push --repo <owner/repo>
 # agent pushes normally with git push
-# optionally open a PR within the same grant window (no gh required)
-zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title" --base main
 zodex-agent github revoke-push --repo <owner/repo>
-# remote operator alternative
-zodex github grant-push --sprite <sprite> --repo <owner/repo>
-# optional full local logout for this repo
 zodex-agent github revoke-push --repo <owner/repo> --forget-local-auth
+zodex github grant-push --sprite <sprite> --repo <owner/repo>
 ```
 
-Read access stays on. Write access is temporary and repo-scoped.
-This is temporary repo-scoped direct push access, not a long-lived write credential.
-By default, `zodex-agent github request-push` runs GitHub App device flow on the Sprite, requests a user access token for the target repo, and writes only the repo-scoped temporary token locally.
-It starts as a single blocking flow: show the device code, try to open the verification URL, best-effort copy the code, poll until approval completes, and then activate the grant automatically.
-The default active grant TTL is `30m`. Change it with `--ttl <duration>` or disable TTL enforcement with `--no-ttl`.
-By default, `zodex-agent github request-push` does not persist refresh-token state. Add `--cache-refresh-token` only when you explicitly want local refresh reuse on the Sprite.
-Expired grants stop working in the credential-helper path even if the grant file is still present.
-`grant-push` remains available as the operator-machine alternative and still places only the temporary token on the Sprite.
-When practical, it also opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable.
-By default, `zodex-agent github revoke-push` removes the active repo grant and retains any local device-flow refresh state so repeated grants are faster when that cache exists. Use `--forget-local-auth` when you want a full local logout for that repo too.
-
-`zodex-agent github create-pr` reuses that same temporary repo-scoped grant. It loads the active grant token written by `request-push` (the push-grant app already carries `Pull requests: Read & write`) and calls the GitHub REST API `POST /repos/{repo}/pulls` directly, never shelling out to `gh` or relying on `gh auth`. It stores no additional auth state of its own, so once the grant expires or is revoked the credential-helper path and `create-pr` both lose usable auth together. The agent must push the head branch first (for example with `git push`) before opening the PR.
+When practical, the device-flow helper opens the GitHub verification URL automatically and copies the device code to the clipboard, with manual fallback output if either integration is unavailable. The default active grant TTL is `30m`. Change it with `--ttl <duration>` or disable TTL enforcement with `--no-ttl`. By default, Sprite-side request-push does not persist refresh-token state. Add `--cache-refresh-token` only when you explicitly want local refresh reuse on the Sprite. Expired grants stop working in the credential-helper path and are pruned on use.
 
 ## Migration Notes
 
@@ -141,7 +136,7 @@ zodex sprite logs --sprite <sprite> --service zodexd --lines 100
 zodex sprite sync --sprite <sprite> --force-recreate
 zodex sprite upgrade --sprite <sprite>
 zodex-agent github list-grants
-zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title"
+zodex-agent github publish-pr --repo <owner/repo> --title "Title"
 ```
 
 ## Verification Checklist
@@ -151,15 +146,16 @@ zodex-agent github create-pr --repo <owner/repo> --head <branch> --title "Title"
 - the agent can create a commit in `/workspace`
 - plain `git clone https://github.com/amxv/zodex.git` works for installed private repos without a manual prompt
 - the agent can `git clone` and `git fetch` private repos without a manual prompt
-- an active grant enables `git push` for the granted repo only
+- `zodex-agent github publish-pr` creates a generated branch and opens a PR without exposing a write token to the shell
+- an active grant enables direct `git push` for the granted repo only
 - `grant-push` shows a GitHub device code, tries to open the verification URL, and succeeds after browser authorization
 
 ## Stop Conditions
 
 Stop and ask before continuing if:
 
-- the reader app has any write permission
-- the push-grant app has broader permissions than intended
+- the reader app has permissions beyond `Contents: Read-only`
+- the publisher / push-grant app has permissions beyond `Contents: Read & write` and `Pull requests: Read & write`
 - the app installation scope is broader than intended
 - `zodexd` cannot bind after setup
 - token minting validation fails

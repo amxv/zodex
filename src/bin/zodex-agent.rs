@@ -54,11 +54,9 @@ enum GithubCommand {
         forget_local_auth: bool,
     },
     ListGrants,
-    CreatePr {
+    PublishPr {
         #[arg(long)]
         repo: String,
-        #[arg(long)]
-        head: String,
         #[arg(long)]
         title: String,
         #[arg(long, default_value = "main")]
@@ -152,19 +150,16 @@ fn build_runtime_args(cli: Cli) -> Vec<String> {
                 GithubCommand::ListGrants => {
                     args.push("list-grants".to_string());
                 }
-                GithubCommand::CreatePr {
+                GithubCommand::PublishPr {
                     repo,
-                    head,
                     title,
                     base,
                     body,
                     draft,
                 } => {
-                    args.push("create-pr".to_string());
+                    args.push("publish-pr".to_string());
                     args.push("--repo".to_string());
                     args.push(repo);
-                    args.push("--head".to_string());
-                    args.push(head);
                     args.push("--title".to_string());
                     args.push(title);
                     args.push("--base".to_string());

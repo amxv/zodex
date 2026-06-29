@@ -22,7 +22,7 @@ cargo run --quiet --bin zodex -- sprite --help
 cargo run --quiet --bin zodex -- proxy --help
 cargo run --quiet --bin zodex -- github --help
 cargo run --quiet --bin zodex-agent -- --help
-cargo run --quiet --bin zodex-agent -- github create-pr --help
+cargo run --quiet --bin zodex-agent -- github publish-pr --help
 ```
 
 The tests cover binary manifests, CLI parity, GitHub App scripts, install script behavior, Sprite scripts, zodex-agent CLI forwarding, MCP tool registration, HTTP API parity, session handling, redaction, and patch application.
