@@ -89,7 +89,7 @@ zodex sprite upgrade --sprite dev-sprite --version latest
 To upgrade while also updating repo or URL auth behavior:
 
 ```bash
-zodex sprite upgrade   --sprite dev-sprite   --version v0.2.9   --repo amxv/zodex   --url-auth sprite
+zodex sprite upgrade   --sprite dev-sprite   --version v0.2.10   --repo amxv/zodex   --url-auth sprite
 ```
 
 After an upgrade, verify service status, logs, proxy origin, reader-backed clone, and one short command execution through MCP.

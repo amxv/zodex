@@ -79,6 +79,6 @@ cargo test --quiet --test sprite_scripts
 
 ## Release awareness
 
-The crate version is defined in `Cargo.toml`. The repository uses tagged releases; at the time this docs site was added, the latest checked-out tag was `v0.2.9`.
+The crate version is defined in `Cargo.toml`. The repository uses tagged releases; at the time this docs site was added, the latest checked-out tag was `v0.2.10`.
 
 When a release changes CLI arguments, binary names, setup behavior, or service layout, update the docs site in the same change.
