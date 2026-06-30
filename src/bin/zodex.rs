@@ -84,6 +84,7 @@ const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
 const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
 const SPRITE_REMOTE_INSTALLER_PATH: &str = "/tmp/zodex-install.sh";
 const SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH: &str = "/tmp/zodex-agent";
+const SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH: &str = "/tmp/git-remote-zodex";
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
 const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
@@ -472,6 +473,7 @@ struct SpriteSetupOptions<'a> {
 #[derive(Debug, Clone)]
 struct LocalOperatorBinaries {
     agent_cli: PathBuf,
+    git_remote_helper: PathBuf,
     daemon: PathBuf,
     publisher: PathBuf,
 }
@@ -1205,6 +1207,11 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
         manifest_dir().join("target/release/zodex-agent"),
         PathBuf::from("/usr/local/bin/zodex-agent"),
     ];
+    let git_remote_helper_candidates = [
+        manifest_dir().join("target/debug/git-remote-zodex"),
+        manifest_dir().join("target/release/git-remote-zodex"),
+        PathBuf::from("/usr/local/bin/git-remote-zodex"),
+    ];
     let daemon_candidates = [
         manifest_dir().join("target/debug/zodexd"),
         manifest_dir().join("target/release/zodexd"),
@@ -1220,24 +1227,30 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
     ];
 
     let mut agent_cli = first_existing_executable(&agent_cli_candidates);
+    let mut git_remote_helper = first_existing_executable(&git_remote_helper_candidates);
     let mut daemon = first_existing_executable(&daemon_candidates);
     let mut publisher = first_existing_executable(&publisher_candidates);
 
-    if agent_cli.is_none() || daemon.is_none() || publisher.is_none() {
+    if agent_cli.is_none() || git_remote_helper.is_none() || daemon.is_none() || publisher.is_none()
+    {
         build_local_operator_binaries()?;
         agent_cli = first_existing_executable(&agent_cli_candidates);
+        git_remote_helper = first_existing_executable(&git_remote_helper_candidates);
         daemon = first_existing_executable(&daemon_candidates);
         publisher = first_existing_executable(&publisher_candidates);
     }
 
-    match (agent_cli, daemon, publisher) {
-        (Some(agent_cli), Some(daemon), Some(publisher)) => Ok(LocalOperatorBinaries {
-            agent_cli,
-            daemon,
-            publisher,
-        }),
+    match (agent_cli, git_remote_helper, daemon, publisher) {
+        (Some(agent_cli), Some(git_remote_helper), Some(daemon), Some(publisher)) => {
+            Ok(LocalOperatorBinaries {
+                agent_cli,
+                git_remote_helper,
+                daemon,
+                publisher,
+            })
+        }
         _ => bail!(
-            "failed to locate local zodex runtime binaries; expected zodex-agent, zodexd, and zodex-prd"
+            "failed to locate local zodex runtime binaries; expected zodex-agent, git-remote-zodex, zodexd, and zodex-prd"
         ),
     }
 }
@@ -1251,6 +1264,8 @@ fn build_local_operator_binaries() -> Result<()> {
         "build".to_string(),
         "--bin".to_string(),
         "zodex-agent".to_string(),
+        "--bin".to_string(),
+        "git-remote-zodex".to_string(),
         "--bin".to_string(),
         "zodexd".to_string(),
         "--bin".to_string(),
@@ -1940,6 +1955,10 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
                 &local_binaries.agent_cli,
                 SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
             ),
+            (
+                &local_binaries.git_remote_helper,
+                SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH,
+            ),
             (&local_binaries.daemon, SPRITE_REMOTE_UPLOAD_DAEMON_PATH),
             (
                 &local_binaries.publisher,
@@ -2122,6 +2141,7 @@ sudo chmod 0640 "$CFG"
 helper_cmd="/usr/local/bin/zodex-agent --config $CFG git-credential-helper"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Zodex Agent"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 
@@ -2154,7 +2174,7 @@ if sudo -u zodex-agent env HOME=/home/zodex-agent \
 fi
 
 sudo bash -lc 'pkill -f -- "/usr/local/bin/zodexd --config $1" || true; pkill -f -- "/usr/local/bin/zodex-prd --config $1" || true' -- "$CFG"
-rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_script} {agent_cli_upload} {daemon_upload} {publisher_upload}
+rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_script} {agent_cli_upload} {git_remote_helper_upload} {daemon_upload} {publisher_upload}
 "#,
         repo = shell_escape_single_quotes(repo),
         repo_plain = repo,
@@ -2167,6 +2187,7 @@ rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_s
         setup_script = SPRITE_SETUP_REMOTE_SCRIPT_PATH,
         installer_script = SPRITE_REMOTE_INSTALLER_PATH,
         agent_cli_upload = SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
+        git_remote_helper_upload = SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH,
         daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
         publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
         repo_account = repo.split('/').next().unwrap_or(repo)
@@ -2222,6 +2243,7 @@ fi
 helper_cmd="/usr/local/bin/zodex-agent --config $CFG git-credential-helper"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
+sudo -u zodex-agent env HOME=/home/zodex-agent git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 
 current_name="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.name || true)"
 current_email="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.email || true)"
@@ -3090,7 +3112,7 @@ fn enable_github_yolo_mode(
         println!("expires-at: {expires_at}");
     }
     println!("token-exposure: none");
-    println!("note: direct git push still requires the token-isolated push proxy integration");
+    println!("direct-git-push: enabled-via-zodex-remote-helper");
     Ok(())
 }
 
@@ -3126,6 +3148,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
     }
     if raw.trim().is_empty() {
         println!("github-mode: default");
+        println!("direct-git-push: disabled");
         println!("push-grants: separate");
         return Ok(());
     }
@@ -3135,6 +3158,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
     if record.mode != "yolo" {
         println!("github-mode: default");
         println!("mode-state: {}", record.mode);
+        println!("direct-git-push: disabled");
         println!("push-grants: separate");
         return Ok(());
     }
@@ -3144,6 +3168,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         if let Some(expires_at) = record.expires_at.as_deref() {
             println!("expired-at: {expires_at}");
         }
+        println!("direct-git-push: disabled");
         println!("push-grants: separate");
         return Ok(());
     }
@@ -3163,6 +3188,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         println!("expires-at: none");
     }
     println!("token-exposure: none");
+    println!("direct-git-push: enabled-via-zodex-remote-helper");
     println!("push-grants: separate");
     Ok(())
 }
@@ -3798,8 +3824,10 @@ fn ensure_publisher_ready_for_start(config: &Config) -> Result<()> {
             config.publisher_private_key_path
         );
     }
-    if config.publisher_targets.is_empty() {
-        bail!("publisher_targets must contain at least one allowed repo target");
+    if config.publisher_targets.is_empty() && config.publisher_installations.is_empty() {
+        bail!(
+            "publisher_targets or publisher_installations must contain at least one allowed repo scope"
+        );
     }
 
     for target in &config.publisher_targets {
@@ -3808,6 +3836,17 @@ fn ensure_publisher_ready_for_start(config: &Config) -> Result<()> {
         }
         if target.installation_id == 0 {
             bail!("publisher target {} must define installation_id", target.id);
+        }
+    }
+    for installation in &config.publisher_installations {
+        if installation.account.trim().is_empty() {
+            bail!("publisher installation entries require account");
+        }
+        if installation.installation_id == 0 {
+            bail!(
+                "publisher installation {} must define installation_id",
+                installation.account
+            );
         }
     }
 
@@ -4885,6 +4924,10 @@ fn build_publisher_status_lines(
         ),
         format!("publisher-key: {}", config.publisher_private_key_path),
         format!("allowed-repos: {}", config.publisher_targets.len()),
+        format!(
+            "allowed-installation-accounts: {}",
+            config.publisher_installations.len()
+        ),
     ];
 
     if !matches!(state, ProcessModeState::Running(_)) {
@@ -4896,8 +4939,11 @@ fn build_publisher_status_lines(
     if !Path::new(&config.publisher_private_key_path).exists() {
         lines.push("hint: place the publisher private key at the configured path".to_string());
     }
-    if config.publisher_targets.is_empty() {
-        lines.push("hint: add at least one `publisher_targets` entry to config".to_string());
+    if config.publisher_targets.is_empty() && config.publisher_installations.is_empty() {
+        lines.push(
+            "hint: add at least one `publisher_targets` or `publisher_installations` entry to config"
+                .to_string(),
+        );
     }
     lines.extend(sprite_runtime_note_lines());
 
@@ -6404,6 +6450,10 @@ mod tests {
 
         assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
         assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
+        assert!(setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(!setup_script.contains(".insteadOf https://github.com/"));
+        assert!(!upgrade_script.contains(".insteadOf https://github.com/"));
         let disabled_setting = ["credential.https://github.com.useHttpPath ", "false"].concat();
         assert!(!setup_script.contains(&disabled_setting));
         assert!(!upgrade_script.contains(&disabled_setting));

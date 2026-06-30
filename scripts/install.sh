@@ -281,6 +281,7 @@ install_binaries_from_dir() {
   fi
 
   [[ -x "${src_dir}/zodex-agent" ]] || die "missing executable ${src_dir}/zodex-agent"
+  [[ -x "${src_dir}/git-remote-zodex" ]] || die "missing executable ${src_dir}/git-remote-zodex"
   [[ -x "${daemon_src}" ]] || die "missing executable ${src_dir}/zodexd or ${src_dir}/zodexd"
   [[ -x "${src_dir}/zodex-prd" ]] || die "missing executable ${src_dir}/zodex-prd"
   if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
@@ -294,6 +295,7 @@ install_binaries_from_dir() {
     rm -f "${ZODEX_INSTALL_DIR}/zodex"
   fi
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
+  install -m 0755 "${src_dir}/git-remote-zodex" "${ZODEX_INSTALL_DIR}/git-remote-zodex"
   install -m 0755 "${daemon_src}" "${ZODEX_INSTALL_DIR}/zodexd"
   install -m 0755 "${src_dir}/zodex-prd" "${ZODEX_INSTALL_DIR}/zodex-prd"
 }
@@ -338,7 +340,7 @@ install_binaries_from_source() {
 
   (
     cd "${src_dir}"
-    local cargo_args=(build --release --bin zodex-agent --bin zodexd --bin zodex-prd)
+    local cargo_args=(build --release --bin zodex-agent --bin git-remote-zodex --bin zodexd --bin zodex-prd)
     if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
       cargo_args+=(--bin zodex)
     fi
@@ -455,6 +457,8 @@ configure_agent_git_reader_helper() {
     git config --global --replace-all credential.https://github.com.helper "${helper_cmd}"
   run_as_agent_user \
     git config --global credential.https://github.com.useHttpPath true
+  run_as_agent_user \
+    git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 }
 
 configure_agent_git_identity() {

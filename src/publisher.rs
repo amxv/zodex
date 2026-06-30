@@ -27,6 +27,8 @@ const MAX_SOCKET_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
 const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";
+const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
+const DIRECT_PUSH_IMPORTED_REF: &str = "refs/heads/__zodex_direct_push";
 
 fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
@@ -56,6 +58,23 @@ pub struct PublishPrRequest {
     pub bundle_base64: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectPushRequest {
+    pub repo: String,
+    pub src: String,
+    pub dst: String,
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub bundle_base64: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirectPushResponse {
+    pub repo: String,
+    pub dst: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublishPrResponse {
     pub pr_url: String,
@@ -66,6 +85,31 @@ pub struct PublishPrResponse {
 #[derive(Debug, Serialize, Deserialize)]
 struct PublishPrError {
     error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PublisherRequest {
+    PublishPr(PublishPrRequest),
+    DirectPush(DirectPushRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PublisherResponse {
+    PublishPr(PublishPrResponse),
+    DirectPush(DirectPushResponse),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GithubModeRecord {
+    mode: String,
+    #[serde(default)]
+    all_installed: bool,
+    #[serde(default)]
+    repos: Vec<String>,
+    #[serde(default)]
+    expires_at_epoch_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,9 +185,37 @@ pub async fn submit_publish_request(
     socket_path: &Path,
     request: &PublishPrRequest,
 ) -> Result<PublishPrResponse> {
-    let payload = serde_json::to_vec(request).context("failed to serialize publish request")?;
+    let payload = serde_json::to_vec(&PublisherRequest::PublishPr(request.clone()))
+        .context("failed to serialize publish request")?;
+    let response = submit_publisher_payload(socket_path, &payload).await?;
+    match serde_json::from_slice::<PublisherResponse>(&response) {
+        Ok(PublisherResponse::PublishPr(response)) => Ok(response),
+        Ok(PublisherResponse::DirectPush(_)) => {
+            bail!("publisher returned unexpected response type")
+        }
+        Err(_) => serde_json::from_slice(&response).context("failed to decode publish response"),
+    }
+}
+
+pub async fn submit_direct_push_request(
+    socket_path: &Path,
+    request: &DirectPushRequest,
+) -> Result<DirectPushResponse> {
+    let payload = serde_json::to_vec(&PublisherRequest::DirectPush(request.clone()))
+        .context("failed to serialize direct push request")?;
+    let response = submit_publisher_payload(socket_path, &payload).await?;
+    match serde_json::from_slice::<PublisherResponse>(&response) {
+        Ok(PublisherResponse::DirectPush(response)) => Ok(response),
+        Ok(PublisherResponse::PublishPr(_)) => bail!("publisher returned unexpected response type"),
+        Err(_) => {
+            serde_json::from_slice(&response).context("failed to decode direct push response")
+        }
+    }
+}
+
+async fn submit_publisher_payload(socket_path: &Path, payload: &[u8]) -> Result<Vec<u8>> {
     if payload.len() > MAX_SOCKET_REQUEST_BYTES {
-        bail!("publish request exceeds local socket limit");
+        bail!("publisher request exceeds local socket limit");
     }
 
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
@@ -153,7 +225,7 @@ pub async fn submit_publish_request(
         )
     })?;
     stream
-        .write_all(&payload)
+        .write_all(payload)
         .await
         .context("failed to write publish request")?;
     stream
@@ -174,7 +246,7 @@ pub async fn submit_publish_request(
         bail!(error.error);
     }
 
-    serde_json::from_slice(&response_buf).context("failed to decode publish response")
+    Ok(response_buf)
 }
 
 pub fn build_publish_request(
@@ -463,24 +535,40 @@ async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()>
         .await
         .context("failed to read publisher request")?;
 
-    let response = match decode_request(&request_bytes).and_then(|request| {
-        validate_publish_request(&config, &request).map(|validated| (request, validated))
-    }) {
-        Ok((request, (target, bundle_bytes))) => {
-            match handle_publish_request(&config, request, &target, &bundle_bytes).await {
-                Ok(response) => {
-                    serde_json::to_vec(&response).context("failed to encode publish response")?
+    let response = match decode_request(&request_bytes) {
+        Ok(PublisherRequest::PublishPr(request)) => {
+            match validate_publish_request(&config, &request).map(|validated| (request, validated))
+            {
+                Ok((request, (target, bundle_bytes))) => {
+                    match handle_publish_request(&config, request, &target, &bundle_bytes).await {
+                        Ok(response) => serde_json::to_vec(&PublisherResponse::PublishPr(response))
+                            .context("failed to encode publish response")?,
+                        Err(err) => serde_json::to_vec(&PublishPrError {
+                            error: err.to_string(),
+                        })
+                        .context("failed to encode publish error")?,
+                    }
                 }
                 Err(err) => serde_json::to_vec(&PublishPrError {
                     error: err.to_string(),
                 })
-                .context("failed to encode publish error")?,
+                .context("failed to encode publish validation error")?,
+            }
+        }
+        Ok(PublisherRequest::DirectPush(request)) => {
+            match handle_direct_push_request(&config, request).await {
+                Ok(response) => serde_json::to_vec(&PublisherResponse::DirectPush(response))
+                    .context("failed to encode direct push response")?,
+                Err(err) => serde_json::to_vec(&PublishPrError {
+                    error: err.to_string(),
+                })
+                .context("failed to encode direct push error")?,
             }
         }
         Err(err) => serde_json::to_vec(&PublishPrError {
             error: err.to_string(),
         })
-        .context("failed to encode publish validation error")?,
+        .context("failed to encode publisher validation error")?,
     };
 
     stream
@@ -494,7 +582,7 @@ async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()>
     Ok(())
 }
 
-fn decode_request(request_bytes: &[u8]) -> Result<PublishPrRequest> {
+fn decode_request(request_bytes: &[u8]) -> Result<PublisherRequest> {
     if request_bytes.is_empty() {
         bail!("publisher request body was empty");
     }
@@ -502,7 +590,93 @@ fn decode_request(request_bytes: &[u8]) -> Result<PublishPrRequest> {
         bail!("publisher request exceeds socket size limit");
     }
 
-    serde_json::from_slice(request_bytes).context("failed to decode publish request")
+    if let Ok(request) = serde_json::from_slice::<PublisherRequest>(request_bytes) {
+        return Ok(request);
+    }
+
+    let legacy: PublishPrRequest =
+        serde_json::from_slice(request_bytes).context("failed to decode publisher request")?;
+    Ok(PublisherRequest::PublishPr(legacy))
+}
+
+async fn handle_direct_push_request(
+    config: &Config,
+    request: DirectPushRequest,
+) -> Result<DirectPushResponse> {
+    let target = validate_direct_push_request(config, &request)?;
+    let token = mint_publisher_installation_token(
+        config
+            .publisher_app_id
+            .ok_or_else(|| anyhow!("publisher_app_id is not configured"))?,
+        Path::new(&config.publisher_private_key_path),
+        target.installation_id,
+    )
+    .await?;
+
+    let tempdir = tempdir().context("failed to create publisher tempdir")?;
+    let askpass_path = write_askpass_script(tempdir.path())?;
+    let repo_dir = tempdir.path().join("repo");
+    fs::create_dir(&repo_dir)
+        .with_context(|| format!("failed to create {}", repo_dir.display()))?;
+    git_plain(&repo_dir, &["init", "--quiet"])?;
+
+    if request.src.is_empty() {
+        git_with_token(
+            &repo_dir,
+            &token,
+            &askpass_path,
+            &[
+                "push",
+                &github_repo_https_url(&target.repo),
+                &format!(":{}", request.dst),
+            ],
+        )?;
+    } else {
+        let bundle_base64 = request
+            .bundle_base64
+            .as_deref()
+            .ok_or_else(|| anyhow!("direct push bundle is required for non-delete pushes"))?;
+        let bundle_bytes = BASE64
+            .decode(bundle_base64.as_bytes())
+            .context("direct push bundle was not valid base64")?;
+        if bundle_bytes.is_empty() {
+            bail!("direct push bundle cannot be empty");
+        }
+        if bundle_bytes.len() > config.publisher_max_bundle_bytes {
+            bail!(
+                "direct push bundle exceeds limit ({} bytes > {} bytes)",
+                bundle_bytes.len(),
+                config.publisher_max_bundle_bytes
+            );
+        }
+        let bundle_path = tempdir.path().join("direct-push.bundle");
+        fs::write(&bundle_path, bundle_bytes)
+            .with_context(|| format!("failed to write {}", bundle_path.display()))?;
+        git_plain(
+            &repo_dir,
+            &[
+                "fetch",
+                bundle_path.to_str().unwrap(),
+                &format!("{}:{DIRECT_PUSH_IMPORTED_REF}", request.src),
+            ],
+        )?;
+        let refspec = if request.force {
+            format!("+{DIRECT_PUSH_IMPORTED_REF}:{}", request.dst)
+        } else {
+            format!("{DIRECT_PUSH_IMPORTED_REF}:{}", request.dst)
+        };
+        git_with_token(
+            &repo_dir,
+            &token,
+            &askpass_path,
+            &["push", &github_repo_https_url(&target.repo), &refspec],
+        )?;
+    }
+
+    Ok(DirectPushResponse {
+        repo: target.repo,
+        dst: request.dst,
+    })
 }
 
 async fn handle_publish_request(
@@ -587,8 +761,10 @@ fn validate_publisher_config(config: &Config) -> Result<()> {
             config.publisher_private_key_path
         );
     }
-    if config.publisher_targets.is_empty() {
-        bail!("publisher_targets must contain at least one allowed repo target");
+    if config.publisher_targets.is_empty() && config.publisher_installations.is_empty() {
+        bail!(
+            "publisher_targets or publisher_installations must contain at least one allowed repo scope"
+        );
     }
     for target in &config.publisher_targets {
         if target.id.trim().is_empty() || target.repo.trim().is_empty() {
@@ -598,7 +774,113 @@ fn validate_publisher_config(config: &Config) -> Result<()> {
             bail!("publisher target {} must define installation_id", target.id);
         }
     }
+    for installation in &config.publisher_installations {
+        if installation.account.trim().is_empty() {
+            bail!("publisher installation entries require account");
+        }
+        if installation.installation_id == 0 {
+            bail!(
+                "publisher installation {} must define installation_id",
+                installation.account
+            );
+        }
+    }
     Ok(())
+}
+
+fn validate_direct_push_request(
+    config: &Config,
+    request: &DirectPushRequest,
+) -> Result<PublishTarget> {
+    let repo = normalize_github_repo(&request.repo)
+        .ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
+    if repo != request.repo {
+        bail!("direct push repo must be normalized as owner/repo");
+    }
+    if request.dst.trim().is_empty() || !request.dst.starts_with("refs/") {
+        bail!("direct push destination must be a full refs/ name");
+    }
+    if request.dst.contains("..") || request.dst.contains('\\') || request.dst.ends_with('/') {
+        bail!("direct push destination ref is invalid");
+    }
+    if !request.src.is_empty()
+        && (request.src.contains("..") || request.src.contains('\\') || request.src.ends_with('/'))
+    {
+        bail!("direct push source ref is invalid");
+    }
+
+    let mode = load_active_github_yolo_mode(Path::new(GITHUB_MODE_STATE_PATH))?;
+    if !github_mode_allows_repo(&mode, &repo) {
+        bail!("YOLO mode is not active for repo {repo}");
+    }
+
+    resolve_direct_push_target(config, &repo)
+        .ok_or_else(|| anyhow!("repo {repo} is not covered by publisher installation config"))
+}
+
+fn load_active_github_yolo_mode(path: &Path) -> Result<GithubModeRecord> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read GitHub mode state at {}", path.display()))?;
+    let record: GithubModeRecord =
+        serde_json::from_str(&raw).context("failed to parse GitHub mode state")?;
+    if record.mode != "yolo" {
+        bail!("GitHub YOLO mode is not active");
+    }
+    if github_mode_expired(&record, current_epoch_seconds()?) {
+        bail!("GitHub YOLO mode has expired");
+    }
+    Ok(record)
+}
+
+fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    matches!(
+        record.expires_at_epoch_seconds,
+        Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+    )
+}
+
+fn github_mode_allows_repo(record: &GithubModeRecord, repo: &str) -> bool {
+    record.all_installed || record.repos.iter().any(|allowed| allowed == repo)
+}
+
+fn resolve_direct_push_target(config: &Config, repo: &str) -> Option<PublishTarget> {
+    if let Some(target) = config
+        .publisher_targets
+        .iter()
+        .find(|target| target.repo == repo && target.installation_id != 0)
+    {
+        return Some(target.clone());
+    }
+
+    let account = repo.split_once('/')?.0;
+    let installation = config.publisher_installations.iter().find(|installation| {
+        installation.account == account && installation.installation_id != 0
+    })?;
+    Some(PublishTarget {
+        id: repo.to_string(),
+        repo: repo.to_string(),
+        default_base: installation.default_base.clone(),
+        installation_id: installation.installation_id,
+    })
+}
+
+fn normalize_github_repo(path: &str) -> Option<String> {
+    let trimmed = path.trim_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    let mut parts = trimmed.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn current_epoch_seconds() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs())
 }
 
 fn github_repo_https_url(repo: &str) -> String {
@@ -920,11 +1202,13 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        PublishPrRequest, SOCKET_DIR_MODE, TokenPermissionProfile, build_publish_branch_name,
-        build_publish_request, create_head_bundle, ensure_clean_worktree,
-        ensure_publisher_socket_parent_dir, parse_github_remote_repo, validate_publish_request,
+        GithubModeRecord, PublishPrRequest, SOCKET_DIR_MODE, TokenPermissionProfile,
+        build_publish_branch_name, build_publish_request, create_head_bundle,
+        ensure_clean_worktree, ensure_publisher_socket_parent_dir, github_mode_allows_repo,
+        github_mode_expired, parse_github_remote_repo, resolve_direct_push_target,
+        validate_publish_request,
     };
-    use crate::config::{Config, PublishTarget};
+    use crate::config::{Config, PublishTarget, PublisherInstallation};
     use tempfile::tempdir;
 
     #[test]
@@ -951,6 +1235,55 @@ mod tests {
         .expect_err("request should be rejected");
 
         assert!(err.to_string().contains("repo id not allowed"));
+    }
+
+    #[test]
+    fn github_yolo_mode_scope_checks_repo_allowlist_and_expiry() {
+        let record = GithubModeRecord {
+            mode: "yolo".to_string(),
+            all_installed: false,
+            repos: vec!["owner/repo".to_string()],
+            expires_at_epoch_seconds: Some(1_000),
+        };
+        assert!(github_mode_allows_repo(&record, "owner/repo"));
+        assert!(!github_mode_allows_repo(&record, "owner/other"));
+        assert!(!github_mode_expired(&record, 999));
+        assert!(github_mode_expired(&record, 1_000));
+
+        let all_installed = GithubModeRecord {
+            all_installed: true,
+            repos: Vec::new(),
+            ..record
+        };
+        assert!(github_mode_allows_repo(&all_installed, "owner/other"));
+    }
+
+    #[test]
+    fn direct_push_target_resolves_exact_target_before_account_installation() {
+        let cfg = Config {
+            publisher_installations: vec![PublisherInstallation {
+                account: "owner".to_string(),
+                installation_id: 11,
+                default_base: "main".to_string(),
+            }],
+            publisher_targets: vec![PublishTarget {
+                id: "custom".to_string(),
+                repo: "owner/repo".to_string(),
+                default_base: "trunk".to_string(),
+                installation_id: 22,
+            }],
+            ..Config::default()
+        };
+
+        let exact = resolve_direct_push_target(&cfg, "owner/repo").expect("exact target");
+        assert_eq!(exact.installation_id, 22);
+        assert_eq!(exact.default_base, "trunk");
+
+        let account = resolve_direct_push_target(&cfg, "owner/other").expect("account target");
+        assert_eq!(account.repo, "owner/other");
+        assert_eq!(account.installation_id, 11);
+
+        assert!(resolve_direct_push_target(&cfg, "other/repo").is_none());
     }
 
     #[test]

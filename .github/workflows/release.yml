@@ -38,6 +38,7 @@ jobs:
             --bin zodex-client \
             --bin zodex \
             --bin zodex-agent \
+            --bin git-remote-zodex \
             --bin zodexd \
             --bin zodex-prd
 
@@ -47,6 +48,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/zodex-client" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex-agent" "dist/${{ matrix.archive_name }}/"
+          cp "target/${{ matrix.target }}/release/git-remote-zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodexd" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex-prd" "dist/${{ matrix.archive_name }}/"
           tar -C dist -czf "dist/${{ matrix.archive_name }}.tar.gz" "${{ matrix.archive_name }}"

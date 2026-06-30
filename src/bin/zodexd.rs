@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, Subcommand};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
@@ -18,7 +20,8 @@ use tracing::warn;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
 use zodex::publisher::{
-    build_publish_request, detect_repo_root, mint_reader_installation_token, submit_publish_request,
+    DirectPushRequest, build_publish_request, detect_repo_root, mint_reader_installation_token,
+    submit_direct_push_request, submit_publish_request,
 };
 use zodex::redaction::redact_api_key_query_params;
 use zodex::server::run_server;
@@ -48,6 +51,8 @@ struct Args {
 enum Commands {
     #[command(hide = true)]
     GitCredentialHelper { operation: String },
+    #[command(hide = true)]
+    GitRemoteZodex { remote: String, url: String },
     #[command(hide = true)]
     ShowUrl {
         #[arg(long, default_value = "127.0.0.1")]
@@ -186,6 +191,10 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
             let config = Config::load(Some(config_path))?;
             handle_git_credential_helper(&config, &operation).await?;
         }
+        Commands::GitRemoteZodex { remote: _, url } => {
+            let config = Config::load(Some(config_path))?;
+            handle_git_remote_zodex(&config, &url).await?;
+        }
         Commands::ShowUrl { host } => {
             let config = Config::load(Some(config_path))?;
             let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
@@ -274,6 +283,176 @@ async fn handle_git_credential_helper(config: &Config, operation: &str) -> Resul
     println!("password={token}");
     println!();
     Ok(())
+}
+
+async fn handle_git_remote_zodex(config: &Config, url: &str) -> Result<()> {
+    let repo = git_remote_zodex_repo(url).ok_or_else(|| {
+        anyhow!("zodex remote helper only supports GitHub owner/repo URLs: {url}")
+    })?;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut lines = stdin.lock().lines();
+
+    while let Some(line) = lines.next() {
+        let line = line.context("failed to read git remote-helper command")?;
+        if line.is_empty() {
+            break;
+        }
+
+        if line == "capabilities" {
+            writeln!(stdout, "push")?;
+            writeln!(stdout)?;
+            stdout.flush()?;
+            continue;
+        }
+
+        if line == "list for-push" || line == "list" {
+            for remote_ref in git_remote_zodex_list_refs(url)? {
+                writeln!(stdout, "{remote_ref}")?;
+            }
+            writeln!(stdout)?;
+            stdout.flush()?;
+            continue;
+        }
+
+        if let Some(first_spec) = line.strip_prefix("push ") {
+            let mut specs = vec![first_spec.to_string()];
+            for batch_line in lines.by_ref() {
+                let batch_line = batch_line.context("failed to read git push batch")?;
+                if batch_line.is_empty() {
+                    break;
+                }
+                if let Some(spec) = batch_line.strip_prefix("push ") {
+                    specs.push(spec.to_string());
+                }
+            }
+
+            for spec in specs {
+                match handle_git_remote_zodex_push(config, &repo, &spec).await {
+                    Ok(dst) => writeln!(stdout, "ok {dst}")?,
+                    Err(err) => {
+                        let dst = git_remote_zodex_push_dst(&spec)
+                            .unwrap_or_else(|| "refs/heads/unknown".to_string());
+                        writeln!(stdout, "error {dst} {}", sanitize_remote_helper_error(&err))?;
+                    }
+                }
+            }
+            writeln!(stdout)?;
+            stdout.flush()?;
+            continue;
+        }
+
+        bail!("unsupported git remote-helper command: {line}");
+    }
+
+    Ok(())
+}
+
+fn git_remote_zodex_repo(url: &str) -> Option<String> {
+    let url = git_remote_zodex_inner_url(url);
+    match (credential_url_protocol(url), credential_url_host(url)) {
+        (Some(protocol), Some(host))
+            if protocol.eq_ignore_ascii_case("https") && credential_host_is_github(host) =>
+        {
+            credential_url_path(url).and_then(normalize_github_repo)
+        }
+        (None, None) => normalize_github_repo(url),
+        _ => None,
+    }
+}
+
+fn git_remote_zodex_inner_url(url: &str) -> &str {
+    url.strip_prefix("zodex::").unwrap_or(url)
+}
+
+fn git_remote_zodex_list_refs(url: &str) -> Result<Vec<String>> {
+    let url = git_remote_zodex_inner_url(url);
+    let output = Command::new("git")
+        .args(["ls-remote", "--heads", "--tags", url])
+        .output()
+        .context("failed to run git ls-remote for zodex remote helper")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git ls-remote failed: {}", stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (oid, name) = line.split_once('\t')?;
+            if name.ends_with("^{}") {
+                None
+            } else {
+                Some(format!("{oid} {name}"))
+            }
+        })
+        .collect())
+}
+
+async fn handle_git_remote_zodex_push(
+    config: &Config,
+    repo: &str,
+    raw_spec: &str,
+) -> Result<String> {
+    let (force, spec) = raw_spec
+        .strip_prefix('+')
+        .map_or((false, raw_spec), |stripped| (true, stripped));
+    let (src, dst) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("unsupported push refspec: {raw_spec}"))?;
+    if dst.trim().is_empty() {
+        bail!("push destination ref cannot be empty");
+    }
+
+    let bundle_base64 = if src.is_empty() {
+        None
+    } else {
+        Some(create_direct_push_bundle_base64(src)?)
+    };
+    let request = DirectPushRequest {
+        repo: repo.to_string(),
+        src: src.to_string(),
+        dst: dst.to_string(),
+        force,
+        bundle_base64,
+    };
+    let response = submit_direct_push_request(Path::new(&config.publisher_socket_path), &request)
+        .await
+        .with_context(|| format!("zodex direct push failed for {repo} {raw_spec}"))?;
+    Ok(response.dst)
+}
+
+fn git_remote_zodex_push_dst(raw_spec: &str) -> Option<String> {
+    let spec = raw_spec.strip_prefix('+').unwrap_or(raw_spec);
+    let (_, dst) = spec.split_once(':')?;
+    if dst.is_empty() {
+        None
+    } else {
+        Some(dst.to_string())
+    }
+}
+
+fn create_direct_push_bundle_base64(src: &str) -> Result<String> {
+    let tempdir = tempfile::tempdir().context("failed to create direct push bundle tempdir")?;
+    let bundle_path = tempdir.path().join("direct-push.bundle");
+    let output = Command::new("git")
+        .args(["bundle", "create", bundle_path.to_str().unwrap(), src])
+        .output()
+        .context("failed to run git bundle create for direct push")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git bundle create failed: {}", stderr.trim());
+    }
+    let bundle = fs::read(&bundle_path)
+        .with_context(|| format!("failed to read {}", bundle_path.display()))?;
+    Ok(BASE64.encode(bundle))
+}
+
+fn sanitize_remote_helper_error(err: &anyhow::Error) -> String {
+    err.to_string()
+        .replace(['\n', '\r', '\t'], " ")
+        .trim()
+        .to_string()
 }
 
 fn read_git_credential_request() -> Result<GitCredentialRequest> {
@@ -1273,7 +1452,10 @@ fn generate_self_signed_certificate(config: &Config, ip: std::net::IpAddr) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, PushGrantRecord, parse_push_grants, resolve_active_push_grant};
+    use super::{
+        Args, PushGrantRecord, git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
+        resolve_active_push_grant, sanitize_remote_helper_error,
+    };
     use clap::CommandFactory;
     use std::fs;
     use tempfile::tempdir;
@@ -1316,6 +1498,34 @@ mod tests {
         let resolved = resolve_active_push_grant("owner/repo", grants_dir.path())
             .expect("grant should resolve");
         assert_eq!(resolved.token, "ghu_example_token");
+    }
+
+    #[test]
+    fn zodex_remote_helper_extracts_github_repo_without_credentials() {
+        assert_eq!(
+            git_remote_zodex_repo("https://github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+        assert_eq!(
+            git_remote_zodex_repo("https://token@github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+        assert_eq!(
+            git_remote_zodex_repo("zodex::https://github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn zodex_remote_helper_parses_push_destination_and_sanitizes_errors() {
+        assert_eq!(
+            git_remote_zodex_push_dst("+refs/heads/main:refs/heads/main"),
+            Some("refs/heads/main".to_string())
+        );
+        assert_eq!(
+            sanitize_remote_helper_error(&anyhow::anyhow!("first line\nsecond line")),
+            "first line second line"
+        );
     }
 
     #[test]

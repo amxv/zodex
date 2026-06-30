@@ -23,6 +23,11 @@ enum Commands {
     GitCredentialHelper {
         operation: String,
     },
+    #[command(hide = true)]
+    GitRemoteZodex {
+        remote: String,
+        url: String,
+    },
     ShowUrl {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -104,6 +109,11 @@ fn build_runtime_args(cli: Cli) -> Vec<String> {
         Commands::GitCredentialHelper { operation } => {
             args.push("git-credential-helper".to_string());
             args.push(operation);
+        }
+        Commands::GitRemoteZodex { remote, url } => {
+            args.push("git-remote-zodex".to_string());
+            args.push(remote);
+            args.push(url);
         }
         Commands::ShowUrl { host } => {
             args.push("show-url".to_string());

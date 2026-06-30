@@ -12,6 +12,10 @@ name = "zodex-agent"
 path = "src/bin/zodex-agent.rs"
 
 [[bin]]
+name = "git-remote-zodex"
+path = "src/bin/git-remote-zodex.rs"
+
+[[bin]]
 name = "zodex-client"
 path = "src/bin/zodex-client.rs"
 
