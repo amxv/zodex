@@ -23,7 +23,7 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 const SOCKET_DIR_MODE: u32 = 0o750;
 const SOCKET_MODE: u32 = 0o660;
 const ASKPASS_MODE: u32 = 0o700;
-const MAX_SOCKET_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOCKET_REQUEST_BYTES: usize = 48 * 1024 * 1024;
 const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
 const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";
@@ -1247,11 +1247,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        DirectPushRequest, GithubModeRecord, PublishPrRequest, PublisherRequest, SOCKET_DIR_MODE,
-        TokenPermissionProfile, build_publish_branch_name, build_publish_request,
-        create_head_bundle, decode_request, encode_direct_push_wire_request, ensure_clean_worktree,
-        ensure_publisher_socket_parent_dir, github_mode_allows_repo, github_mode_expired,
-        parse_github_remote_repo, resolve_direct_push_target, validate_publish_request,
+        DirectPushRequest, GithubModeRecord, MAX_SOCKET_REQUEST_BYTES, PublishPrRequest,
+        PublisherRequest, SOCKET_DIR_MODE, TokenPermissionProfile, build_publish_branch_name,
+        build_publish_request, create_head_bundle, decode_request, encode_direct_push_wire_request,
+        ensure_clean_worktree, ensure_publisher_socket_parent_dir, github_mode_allows_repo,
+        github_mode_expired, parse_github_remote_repo, resolve_direct_push_target,
+        validate_publish_request,
     };
     use crate::config::{Config, PublishTarget, PublisherInstallation};
     use tempfile::tempdir;
@@ -1385,6 +1386,11 @@ mod tests {
                 "workflows": "write"
             })
         );
+    }
+
+    #[test]
+    fn publisher_socket_request_limit_has_base64_bundle_headroom() {
+        assert_eq!(MAX_SOCKET_REQUEST_BYTES, 48 * 1024 * 1024);
     }
 
     #[test]

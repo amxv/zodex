@@ -97,7 +97,7 @@ publisher_app_id = 987654
 publisher_client_id = "Iv1.real-device-flow-client-id"
 publisher_private_key_path = "/etc/zodex/publisher/private-key.pem"
 publisher_branch_prefix = "agent"
-publisher_max_bundle_bytes = 8388608
+publisher_max_bundle_bytes = 33554432
 publisher_max_title_chars = 240
 publisher_max_body_chars = 16000
 ```

@@ -9,6 +9,7 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/zodex/config.toml";
 const MIN_YIELD_MS: u64 = 50;
 const MAX_YIELD_MS: u64 = 60_000;
 const MIN_EXEC_TIMEOUT_MS: u64 = 1_000;
+pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -113,7 +114,7 @@ impl Default for Config {
             publisher_user: "zodex-publisher".to_string(),
             service_group: "zodex".to_string(),
             publisher_branch_prefix: "agent".to_string(),
-            publisher_max_bundle_bytes: 8 * 1024 * 1024,
+            publisher_max_bundle_bytes: DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES,
             publisher_max_title_chars: 240,
             publisher_max_body_chars: 16_000,
             publisher_installations: Vec::new(),
@@ -170,7 +171,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, PublishTarget, PublisherInstallation};
+    use super::{Config, DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES, PublishTarget, PublisherInstallation};
 
     #[test]
     fn clamp_yields_and_timeout() {
@@ -202,7 +203,10 @@ mod tests {
         assert_eq!(cfg.publisher_user, "zodex-publisher");
         assert_eq!(cfg.service_group, "zodex");
         assert_eq!(cfg.publisher_branch_prefix, "agent");
-        assert_eq!(cfg.publisher_max_bundle_bytes, 8 * 1024 * 1024);
+        assert_eq!(
+            cfg.publisher_max_bundle_bytes,
+            DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES
+        );
         assert!(cfg.publisher_installations.is_empty());
         assert!(cfg.publisher_targets.is_empty());
     }
