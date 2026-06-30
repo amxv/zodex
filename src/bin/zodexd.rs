@@ -433,10 +433,20 @@ fn git_remote_zodex_push_dst(raw_spec: &str) -> Option<String> {
 }
 
 fn create_direct_push_bundle_base64(src: &str) -> Result<String> {
+    create_direct_push_bundle_base64_from_dir(Path::new("."), src)
+}
+
+fn create_direct_push_bundle_base64_from_dir(repo_dir: &Path, src: &str) -> Result<String> {
     let tempdir = tempfile::tempdir().context("failed to create direct push bundle tempdir")?;
     let bundle_path = tempdir.path().join("direct-push.bundle");
+    let mut args = vec!["bundle", "create", bundle_path.to_str().unwrap(), src];
+    if repository_has_refs(repo_dir, "refs/remotes")? || repository_has_refs(repo_dir, "refs/tags")?
+    {
+        args.extend(["--not", "--remotes", "--tags"]);
+    }
     let output = Command::new("git")
-        .args(["bundle", "create", bundle_path.to_str().unwrap(), src])
+        .current_dir(repo_dir)
+        .args(&args)
         .output()
         .context("failed to run git bundle create for direct push")?;
     if !output.status.success() {
@@ -448,11 +458,36 @@ fn create_direct_push_bundle_base64(src: &str) -> Result<String> {
     Ok(BASE64.encode(bundle))
 }
 
+fn repository_has_refs(repo_dir: &Path, ref_namespace: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .current_dir(repo_dir)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            "--count=1",
+            ref_namespace,
+        ])
+        .output()
+        .with_context(|| format!("failed to inspect git refs under {ref_namespace}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git for-each-ref failed: {}", stderr.trim());
+    }
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
 fn sanitize_remote_helper_error(err: &anyhow::Error) -> String {
-    err.to_string()
+    error_chain_string(err)
         .replace(['\n', '\r', '\t'], " ")
         .trim()
         .to_string()
+}
+
+fn error_chain_string(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 fn read_git_credential_request() -> Result<GitCredentialRequest> {
@@ -1452,13 +1487,26 @@ fn generate_self_signed_certificate(config: &Config, ip: std::net::IpAddr) -> Re
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+
     use super::{
-        Args, PushGrantRecord, git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
+        Args, PushGrantRecord, create_direct_push_bundle_base64_from_dir,
+        git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
         resolve_active_push_grant, sanitize_remote_helper_error,
     };
     use clap::CommandFactory;
     use std::fs;
+    use std::process::Command;
     use tempfile::tempdir;
+
+    fn git_test_status(command: &mut Command) -> bool {
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("run git")
+            .success()
+    }
 
     #[test]
     fn clap_help_uses_zodexd_name() {
@@ -1526,6 +1574,94 @@ mod tests {
             sanitize_remote_helper_error(&anyhow::anyhow!("first line\nsecond line")),
             "first line second line"
         );
+    }
+
+    #[test]
+    fn direct_push_bundle_imports_into_clone_with_remote_prerequisites() {
+        let tempdir = tempdir().expect("tempdir");
+        let origin = tempdir.path().join("origin.git");
+        let repo = tempdir.path().join("repo");
+        let publisher_clone = tempdir.path().join("publisher-clone");
+        let bundle_path = tempdir.path().join("direct-push.bundle");
+
+        assert!(git_test_status(Command::new("git").args([
+            "init",
+            "-q",
+            "--bare",
+            origin.to_str().unwrap()
+        ])));
+        assert!(git_test_status(Command::new("git").args([
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            repo.to_str().unwrap()
+        ])));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["config", "user.name", "Test"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "config",
+                "user.email",
+                "test@example.com"
+            ])
+        ));
+        fs::write(repo.join("a.txt"), "base\n").expect("write base");
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["add", "a.txt"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["commit", "-q", "-m", "base"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["push", "-q", "origin", "HEAD:main"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["checkout", "-q", "-b", "smoke"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "commit",
+                "--allow-empty",
+                "-q",
+                "-m",
+                "smoke"
+            ])
+        ));
+
+        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/heads/smoke")
+            .expect("create bundle");
+        fs::write(
+            &bundle_path,
+            base64::engine::general_purpose::STANDARD
+                .decode(bundle_base64)
+                .expect("decode bundle"),
+        )
+        .expect("write bundle");
+
+        assert!(git_test_status(Command::new("git").args([
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            publisher_clone.to_str().unwrap()
+        ])));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&publisher_clone).args([
+                "fetch",
+                bundle_path.to_str().unwrap(),
+                "refs/heads/smoke:refs/heads/__zodex_direct_push",
+            ])
+        ));
     }
 
     #[test]

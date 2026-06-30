@@ -543,32 +543,20 @@ async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()>
                     match handle_publish_request(&config, request, &target, &bundle_bytes).await {
                         Ok(response) => serde_json::to_vec(&PublisherResponse::PublishPr(response))
                             .context("failed to encode publish response")?,
-                        Err(err) => serde_json::to_vec(&PublishPrError {
-                            error: err.to_string(),
-                        })
-                        .context("failed to encode publish error")?,
+                        Err(err) => encode_publisher_error("publish-pr", &err)?,
                     }
                 }
-                Err(err) => serde_json::to_vec(&PublishPrError {
-                    error: err.to_string(),
-                })
-                .context("failed to encode publish validation error")?,
+                Err(err) => encode_publisher_error("publish-pr validation", &err)?,
             }
         }
         Ok(PublisherRequest::DirectPush(request)) => {
             match handle_direct_push_request(&config, request).await {
                 Ok(response) => serde_json::to_vec(&PublisherResponse::DirectPush(response))
                     .context("failed to encode direct push response")?,
-                Err(err) => serde_json::to_vec(&PublishPrError {
-                    error: err.to_string(),
-                })
-                .context("failed to encode direct push error")?,
+                Err(err) => encode_publisher_error("direct push", &err)?,
             }
         }
-        Err(err) => serde_json::to_vec(&PublishPrError {
-            error: err.to_string(),
-        })
-        .context("failed to encode publisher validation error")?,
+        Err(err) => encode_publisher_error("publisher request decode", &err)?,
     };
 
     stream
@@ -580,6 +568,20 @@ async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()>
         .await
         .context("failed to close publisher response stream")?;
     Ok(())
+}
+
+fn encode_publisher_error(operation: &str, err: &anyhow::Error) -> Result<Vec<u8>> {
+    let error = error_chain_string(err);
+    tracing::error!(operation, error = %error, "publisher operation failed");
+    serde_json::to_vec(&PublishPrError { error })
+        .context("failed to encode publisher error response")
+}
+
+fn error_chain_string(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 fn decode_request(request_bytes: &[u8]) -> Result<PublisherRequest> {
@@ -615,10 +617,7 @@ async fn handle_direct_push_request(
 
     let tempdir = tempdir().context("failed to create publisher tempdir")?;
     let askpass_path = write_askpass_script(tempdir.path())?;
-    let repo_dir = tempdir.path().join("repo");
-    fs::create_dir(&repo_dir)
-        .with_context(|| format!("failed to create {}", repo_dir.display()))?;
-    git_plain(&repo_dir, &["init", "--quiet"])?;
+    let repo_dir = clone_repo_with_token(tempdir.path(), &token, &askpass_path, &target.repo)?;
 
     if request.src.is_empty() {
         git_with_token(
@@ -885,6 +884,28 @@ fn current_epoch_seconds() -> Result<u64> {
 
 fn github_repo_https_url(repo: &str) -> String {
     format!("https://github.com/{repo}.git")
+}
+
+fn clone_repo_with_token(
+    parent_dir: &Path,
+    token: &str,
+    askpass_path: &Path,
+    repo: &str,
+) -> Result<PathBuf> {
+    let repo_dir = parent_dir.join("repo");
+    git_with_token(
+        parent_dir,
+        token,
+        askpass_path,
+        &[
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            &github_repo_https_url(repo),
+            repo_dir.to_str().unwrap(),
+        ],
+    )?;
+    Ok(repo_dir)
 }
 
 fn write_askpass_script(dir: &Path) -> Result<PathBuf> {
