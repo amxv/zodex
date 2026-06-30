@@ -1177,6 +1177,13 @@ fn load_matching_push_grant(
     load_push_grant_from_dir(&repo, grants_dir)
 }
 
+fn parse_push_grants(raw: &str) -> Result<Vec<PushGrantRecord>> {
+    serde_json::Deserializer::from_str(raw)
+        .into_iter::<PushGrantRecord>()
+        .map(|grant| grant.context("failed to parse push grant"))
+        .collect()
+}
+
 fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -2952,9 +2959,7 @@ fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
         }
     };
     let mut grants = Vec::new();
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let grant =
-            serde_json::from_str::<PushGrantRecord>(line).context("failed to parse push grant")?;
+    for grant in parse_push_grants(&raw)? {
         if push_grant_expired(&grant, current_epoch_seconds()?) {
             continue;
         }
@@ -5351,11 +5356,11 @@ mod tests {
         git_credential_request_targets_github, github_mode_expired, load_matching_push_grant,
         load_push_grant_from_dir, normalize_github_repo, normalize_github_repos,
         normalize_proxy_origin, operator_sprites_registry_path_from_home,
-        parse_git_credential_request, parse_push_grant_ttl, parse_systemctl_show, process_log_path,
-        process_pid_path, proxy_mcp_status_looks_healthy, push_grant_expired, read_tail_lines,
-        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
-        resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, sprite_service_logs_api_path,
+        parse_git_credential_request, parse_push_grant_ttl, parse_push_grants,
+        parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
+        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
+        resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
+        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
@@ -6289,6 +6294,33 @@ mod tests {
 
         assert!(grant.is_none());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn parse_push_grants_accepts_pretty_printed_grant_stream() {
+        let first = PushGrantRecord {
+            repo: "amxv/zodex".to_string(),
+            token: "first-push-token".to_string(),
+            expires_at: Some("2026-06-30T00:00:00Z".to_string()),
+            expires_at_epoch_seconds: Some(1_782_777_600),
+            token_source: Some("github-app-user-token".to_string()),
+        };
+        let second = PushGrantRecord {
+            repo: "amxv/webctx".to_string(),
+            token: "second-push-token".to_string(),
+            expires_at: None,
+            expires_at_epoch_seconds: None,
+            token_source: Some("github-app-user-token".to_string()),
+        };
+        let raw = format!(
+            "{}\n{}\n",
+            serde_json::to_string_pretty(&first).expect("encode first grant"),
+            serde_json::to_string_pretty(&second).expect("encode second grant")
+        );
+
+        let grants = parse_push_grants(&raw).expect("pretty grant stream should parse");
+
+        assert_eq!(grants, vec![first, second]);
     }
 
     #[test]
