@@ -591,10 +591,11 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         );
     }
 
-    let truncation_cmd = "python3 -c 'print(\"x\" * 200)'";
+    let long_output = "x".repeat(200);
+    let truncation_cmd = format!("printf '%s\\n' '{long_output}'");
     let direct_truncated = direct_service
         .exec_command(ExecCommandInput {
-            cmd: truncation_cmd.to_string(),
+            cmd: truncation_cmd.clone(),
             yield_time_ms: Some(5_000),
             workdir: None,
             timeout_ms: None,
@@ -617,7 +618,7 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         "--key".to_string(),
         api_key.to_string(),
         "exec-command".to_string(),
-        truncation_cmd.to_string(),
+        truncation_cmd,
         "--yield-time-ms".to_string(),
         "5000".to_string(),
     ])
