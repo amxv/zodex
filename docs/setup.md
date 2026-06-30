@@ -229,19 +229,21 @@ A typical workspace loop:
 
 ```bash
 cd /workspace
-git clone https://github.com/owner/repo.git
-cd repo
+git clone https://github.com/amxv/zodex.git
+cd zodex
 # inspect, edit, test
 git status
 git add .
 git commit -m "Describe the change"
 ```
 
+This verifies plain `git clone https://github.com/amxv/zodex.git` works through the reader app before any write path is used.
+
 Preferred PR path after committing locally:
 
 ```bash
 zodex-agent github publish-pr \
-  --repo owner/repo \
+  --repo amxv/zodex \
   --title "Describe the change" \
   --base main \
   --body "Summary and tests."
@@ -256,7 +258,9 @@ zodex-agent github revoke-push --repo owner/repo
 zodex-agent github revoke-push --repo owner/repo --forget-local-auth
 ```
 
-The default active grant TTL is `30m`. Change it with `--ttl <duration>`, disable it with `--no-ttl`, and opt into refresh-token caching with `--cache-refresh-token` only when intended. Expired grants stop working in the credential-helper path even if a stale grant file remains.
+`request-push` opens the GitHub verification URL automatically for interactive approval.
+
+The default active grant TTL is `30m`. Change it with `--ttl <duration>`, disable it with `--no-ttl`, and opt into refresh-token caching with `--cache-refresh-token` only when intended. By default, `request-push` does not persist refresh-token state. Expired grants stop working in the credential-helper path even if a stale grant file remains.
 
 Remote operator grant alternative:
 
