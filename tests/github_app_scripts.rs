@@ -57,9 +57,9 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("does not persist refresh-token state"));
     assert!(docs.contains("Expired grants stop working in the credential-helper path"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
-    assert!(
-        mint_script.contains(r#"permissions_json='{"contents":"write","pull_requests":"write"}'"#)
-    );
+    assert!(mint_script.contains(
+        r#"permissions_json='{"contents":"write","pull_requests":"write","workflows":"write"}'"#
+    ));
     assert!(mint_script.contains("access_tokens"));
     assert!(protect_script.contains("Upgrade to GitHub Pro or make this repository public"));
 }

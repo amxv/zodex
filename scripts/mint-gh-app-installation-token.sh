@@ -13,7 +13,7 @@ Environment:
   GITHUB_APP_ID
   GITHUB_APP_INSTALLATION_ID
   GITHUB_APP_PRIVATE_KEY_PATH
-  GITHUB_APP_PERMISSIONS_JSON      Optional. Default: {"contents":"write","pull_requests":"write"}
+  GITHUB_APP_PERMISSIONS_JSON      Optional. Default: {"contents":"write","pull_requests":"write","workflows":"write"}
   GITHUB_API_URL                   Optional. Default: https://api.github.com
 
 Output:
@@ -65,7 +65,7 @@ fi
 github_api_url="${GITHUB_API_URL:-https://api.github.com}"
 permissions_json="${GITHUB_APP_PERMISSIONS_JSON:-}"
 if [[ -z "${permissions_json}" ]]; then
-  permissions_json='{"contents":"write","pull_requests":"write"}'
+  permissions_json='{"contents":"write","pull_requests":"write","workflows":"write"}'
 fi
 
 printf '%s' "${permissions_json}" | jq -e . >/dev/null \

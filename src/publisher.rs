@@ -1171,7 +1171,8 @@ impl TokenPermissionProfile {
             }),
             Self::Publisher => serde_json::json!({
                 "contents": "write",
-                "pull_requests": "write"
+                "pull_requests": "write",
+                "workflows": "write"
             }),
         }
     }
@@ -1380,7 +1381,8 @@ mod tests {
             TokenPermissionProfile::Publisher.github_permissions(),
             serde_json::json!({
                 "contents": "write",
-                "pull_requests": "write"
+                "pull_requests": "write",
+                "workflows": "write"
             })
         );
     }
