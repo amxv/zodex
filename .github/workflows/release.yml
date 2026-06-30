@@ -23,7 +23,7 @@ jobs:
             archive_name: zodex-aarch64-unknown-linux-gnu
             os: ubuntu-22.04
             linker: aarch64-linux-gnu-gcc
-            apt_packages: gcc-aarch64-linux-gnu
+            apt_packages: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           - target: aarch64-apple-darwin
             archive_name: zodex-aarch64-apple-darwin
             os: macos-latest
