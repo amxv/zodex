@@ -1,6 +1,7 @@
 ---
 import { getCollection } from "astro:content";
 import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
+import DocsPageActions from "zuedocs/components/DocsPageActions.astro";
 import { docCategories, primaryNav, siteConfig } from "../../data/docs";
 
 const entries = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
@@ -17,8 +18,13 @@ const grouped = docCategories.map((category) => ({
   primaryNav={primaryNav}
 >
   <section class="shell docs-index-hero">
-    <p class="section-label">Documentation</p>
-    <h1>Operate a remote coding runtime where reads are default and writes are granted on purpose.</h1>
+    <div class="docs-index-hero__head">
+      <div>
+        <p class="section-label">Documentation</p>
+        <h1>Operate a remote coding runtime where reads are default and writes are granted on purpose.</h1>
+      </div>
+      <DocsPageActions />
+    </div>
     <p>
       These guides explain the zodex runtime from the operator and agent perspectives:
       Sprite setup, MCP exposure, GitHub App boundaries, request-push flows, PR creation,
@@ -44,3 +50,8 @@ const grouped = docCategories.map((category) => ({
     ))}
   </section>
 </BaseLayout>
+
+
+<script>
+  import "zuedocs/docsEnhancements";
+</script>
