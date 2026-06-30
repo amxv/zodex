@@ -14,6 +14,13 @@ fn install_script_has_expected_structure() {
     let required_snippets = [
         "set -euo pipefail",
         "ZODEX_VERSION",
+        "ZODEX_INSTALL_MODE",
+        "detect_operator_platform()",
+        "run_operator_install()",
+        "run_runtime_install()",
+        "sha256_verify()",
+        "resolve_release_checksum_url()",
+        "zodex operator CLI installed.",
         "ZODEX_ASSET_URL",
         "ZODEX_BINARY_SOURCE_DIR",
         "ZODEX_INSTALL_DIR",

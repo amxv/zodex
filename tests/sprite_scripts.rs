@@ -10,6 +10,14 @@ fn setup_doc_describes_sprite_first_zodex_flow() {
         std::fs::read_to_string(repo_root().join("docs").join("setup.md")).expect("read setup doc");
 
     assert!(setup.contains("zodex sprite setup"));
+    assert!(setup.contains("curl -fsSL https://zodex.ashray.xyz/install.sh | sh"));
+    assert!(setup.contains("curl -fsSL https://sprites.dev/install.sh | sh"));
+    assert!(setup.contains("sprite org auth"));
+    assert!(setup.contains("sprite create zodex-dev"));
+    assert!(setup.contains("sprite url update --auth public"));
+    assert!(setup.contains("choose **No authentication**"));
+    assert!(setup.contains("reader_app_id"));
+    assert!(setup.contains("publisher_client_id"));
     assert!(setup.contains("npx wrangler deploy"));
     assert!(setup.contains("vars.SPRITE_ORIGIN"));
     assert!(setup.contains("zodex-agent github request-push"));

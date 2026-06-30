@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.15"
+SCRIPT_VERSION="0.2.0"
 
 ZODEX_VERSION="${ZODEX_VERSION:-latest}"
+ZODEX_INSTALL_MODE="${ZODEX_INSTALL_MODE:-auto}"
 ZODEX_REPO="${ZODEX_REPO:-amxv/zodex}"
 ZODEX_ASSET_URL="${ZODEX_ASSET_URL:-}"
 ZODEX_SOURCE_REF="${ZODEX_SOURCE_REF:-main}"
@@ -38,6 +39,7 @@ ZODEX_ENABLE_CERTBOT="${ZODEX_ENABLE_CERTBOT:-0}"
 
 DISTRO_ID="unknown"
 DISTRO_LIKE=""
+OS="unknown"
 ARCH="unknown"
 TARGET_TRIPLE="unknown"
 TMP_DIR=""
@@ -61,8 +63,31 @@ cleanup() {
   fi
 }
 
+
+is_root() {
+  [[ "${EUID}" -eq 0 ]]
+}
+
+resolved_install_mode() {
+  case "${ZODEX_INSTALL_MODE}" in
+    auto)
+      if is_root && [[ "$(uname -s)" == "Linux" ]]; then
+        printf 'runtime\n'
+      else
+        printf 'operator\n'
+      fi
+      ;;
+    operator|runtime)
+      printf '%s\n' "${ZODEX_INSTALL_MODE}"
+      ;;
+    *)
+      die "unsupported ZODEX_INSTALL_MODE=${ZODEX_INSTALL_MODE}; expected auto, operator, or runtime"
+      ;;
+  esac
+}
+
 need_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
+  if ! is_root; then
     die "run as root (for example: curl ... | sudo bash)"
   fi
 }
@@ -132,8 +157,132 @@ ensure_service_accounts() {
   fi
 }
 
+
+detect_operator_platform() {
+  OS="$(uname -s)"
+  case "${OS}" in
+    Linux)
+      case "$(uname -m)" in
+        x86_64|amd64)
+          ARCH="x86_64"
+          TARGET_TRIPLE="x86_64-unknown-linux-gnu"
+          ;;
+        aarch64|arm64)
+          ARCH="aarch64"
+          TARGET_TRIPLE="aarch64-unknown-linux-gnu"
+          ;;
+        *)
+          die "unsupported architecture: $(uname -m)"
+          ;;
+      esac
+      ;;
+    Darwin)
+      case "$(uname -m)" in
+        x86_64|amd64)
+          ARCH="x86_64"
+          TARGET_TRIPLE="x86_64-apple-darwin"
+          ;;
+        aarch64|arm64)
+          ARCH="aarch64"
+          TARGET_TRIPLE="aarch64-apple-darwin"
+          ;;
+        *)
+          die "unsupported architecture: $(uname -m)"
+          ;;
+      esac
+      ;;
+    *)
+      die "unsupported operating system for operator install: ${OS}"
+      ;;
+  esac
+
+  log "detected os=${OS} arch=${ARCH} target=${TARGET_TRIPLE}"
+}
+
+sha256_verify() {
+  local expected_file="$1"
+  local archive="$2"
+  local expected
+  local actual=""
+
+  expected="$(awk '{print $1}' "${expected_file}")"
+  [[ -n "${expected}" ]] || die "checksum file is empty: ${expected_file}"
+
+  if command_exists sha256sum; then
+    actual="$(sha256sum "${archive}" | awk '{print $1}')"
+  elif command_exists shasum; then
+    actual="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+  else
+    die "missing sha256sum or shasum for checksum verification"
+  fi
+
+  [[ "${expected}" == "${actual}" ]] || die "checksum mismatch for ${archive}"
+}
+
+resolve_release_checksum_url() {
+  local asset_url="$1"
+  printf '%s.sha256\n' "${asset_url}"
+}
+
+install_operator_binaries_from_dir() {
+  local src_dir="$1"
+  local install_dir="${ZODEX_INSTALL_DIR}"
+
+  if [[ "${install_dir}" == "/usr/local/bin" && ! is_root ]]; then
+    install_dir="${HOME}/.local/bin"
+  fi
+
+  [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"
+  install -d -m 0755 "${install_dir}"
+  install -m 0755 "${src_dir}/zodex" "${install_dir}/zodex"
+  if [[ -x "${src_dir}/zodex-client" ]]; then
+    install -m 0755 "${src_dir}/zodex-client" "${install_dir}/zodex-client"
+  fi
+
+  cat <<EOF
+
+zodex operator CLI installed.
+
+Installed:
+  ${install_dir}/zodex
+
+Verify:
+  zodex --version
+
+If zodex is not found, add this to your shell profile:
+  export PATH="${install_dir}:\$PATH"
+EOF
+}
+
+install_operator_from_release() {
+  local asset_url
+  asset_url="$(resolve_release_asset_url)" || die "failed to resolve zodex release artifact for ${TARGET_TRIPLE}"
+  log "downloading release artifact: ${asset_url}"
+
+  local archive="${TMP_DIR}/release.tar.gz"
+  local checksum="${TMP_DIR}/release.tar.gz.sha256"
+  curl -fL "${asset_url}" -o "${archive}"
+  curl -fL "$(resolve_release_checksum_url "${asset_url}")" -o "${checksum}"
+  sha256_verify "${checksum}" "${archive}"
+  tar -xzf "${archive}" -C "${TMP_DIR}"
+
+  local cli_path
+  cli_path="$(find "${TMP_DIR}" -type f -name zodex -print -quit)"
+  [[ -n "${cli_path}" ]] || die "release artifact did not contain zodex"
+  install_operator_binaries_from_dir "$(dirname "${cli_path}")"
+}
+
+run_operator_install() {
+  detect_operator_platform
+  TMP_DIR="$(mktemp -d)"
+  trap cleanup EXIT
+
+  install_operator_from_release
+}
+
 detect_platform() {
-  [[ "$(uname -s)" == "Linux" ]] || die "Linux only"
+  OS="$(uname -s)"
+  [[ "${OS}" == "Linux" ]] || die "Linux only"
   [[ -f /etc/os-release ]] || die "/etc/os-release not found"
 
   # shellcheck disable=SC1091
@@ -306,7 +455,10 @@ install_binaries_from_release() {
   log "downloading release artifact: ${asset_url}"
 
   local archive="${TMP_DIR}/release.tar.gz"
+  local checksum="${TMP_DIR}/release.tar.gz.sha256"
   curl -fL "${asset_url}" -o "${archive}"
+  curl -fL "$(resolve_release_checksum_url "${asset_url}")" -o "${checksum}"
+  sha256_verify "${checksum}" "${archive}"
   tar -xzf "${archive}" -C "${TMP_DIR}"
 
   local cli_path
@@ -558,7 +710,7 @@ Optional:
 EOF
 }
 
-main() {
+run_runtime_install() {
   need_root
   detect_platform
   install_runtime_prerequisites
@@ -584,6 +736,17 @@ main() {
   configure_agent_git_identity
   configure_agent_git_reader_helper
   print_next_steps
+}
+
+main() {
+  case "$(resolved_install_mode)" in
+    operator)
+      run_operator_install
+      ;;
+    runtime)
+      run_runtime_install
+      ;;
+  esac
 }
 
 main "$@"

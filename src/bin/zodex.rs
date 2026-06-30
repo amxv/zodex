@@ -82,10 +82,15 @@ const GITHUB_OAUTH_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/acce
 const DEFAULT_GITHUB_USER_AGENT: &str = "zodex/0.1";
 const SPRITE_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-setup.sh";
 const SPRITE_UPGRADE_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-sprite-upgrade.sh";
+#[allow(dead_code)]
 const SPRITE_REMOTE_INSTALLER_PATH: &str = "/tmp/zodex-install.sh";
+#[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH: &str = "/tmp/zodex-agent";
+#[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH: &str = "/tmp/git-remote-zodex";
+#[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
+#[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
 const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
 const PROXY_COMPONENT_README: &str = "proxy/cloudflare-worker/README.md";
@@ -470,6 +475,7 @@ struct SpriteSetupOptions<'a> {
     remote_config: &'a Path,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct LocalOperatorBinaries {
     agent_cli: PathBuf,
@@ -490,7 +496,6 @@ async fn main() -> Result<()> {
             install(&config_path)?;
         }
         Commands::Upgrade { version } => {
-            ensure_linux()?;
             upgrade(&config_path, &version)?;
         }
         Commands::Start => {
@@ -1201,6 +1206,7 @@ fn manifest_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
+#[allow(dead_code)]
 fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
     let agent_cli_candidates = [
         manifest_dir().join("target/debug/zodex-agent"),
@@ -1255,10 +1261,12 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
     }
 }
 
+#[allow(dead_code)]
 fn first_existing_executable(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|path| path.is_file()).cloned()
 }
 
+#[allow(dead_code)]
 fn build_local_operator_binaries() -> Result<()> {
     let args = vec![
         "build".to_string(),
@@ -1900,7 +1908,6 @@ fn verify_sprite_health(sprite: &str, org: Option<&str>, url_auth: Option<&str>)
 }
 
 async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
-    let local_binaries = resolve_local_operator_binaries()?;
     validate_sprite_url_auth(options.url_auth)?;
     let reader_installation_id =
         resolve_repo_installation_id(options.reader_app_id, options.reader_pem, options.repo)
@@ -1938,8 +1945,6 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
     script_file
         .write_all(script.as_bytes())
         .context("failed to write setup script")?;
-    let installer_script = manifest_dir().join("scripts/install.sh");
-
     let exec_args = vec![
         "bash".to_string(),
         SPRITE_SETUP_REMOTE_SCRIPT_PATH.to_string(),
@@ -1950,20 +1955,6 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
         &exec_args,
         &[
             (script_file.path(), SPRITE_SETUP_REMOTE_SCRIPT_PATH),
-            (&installer_script, SPRITE_REMOTE_INSTALLER_PATH),
-            (
-                &local_binaries.agent_cli,
-                SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
-            ),
-            (
-                &local_binaries.git_remote_helper,
-                SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH,
-            ),
-            (&local_binaries.daemon, SPRITE_REMOTE_UPLOAD_DAEMON_PATH),
-            (
-                &local_binaries.publisher,
-                SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
-            ),
             (options.reader_pem, "/tmp/zodex-reader.pem"),
             (options.publisher_pem, "/tmp/zodex-publisher.pem"),
         ],
@@ -2058,14 +2049,17 @@ if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y --no-install-recommends git curl ca-certificates
 fi
 
+TMP_INSTALLER="$(mktemp)"
+curl -fsSL https://zodex.ashray.xyz/install.sh -o "$TMP_INSTALLER"
 sudo env \
+  ZODEX_INSTALL_MODE=runtime \
   ZODEX_INSTALL_OPERATOR_CLI=0 \
-  ZODEX_BINARY_SOURCE_DIR=/tmp \
   ZODEX_CONFIG_PATH="$CFG" \
   ZODEX_HTTP_BIND_PORT=8080 \
   ZODEX_AGENT_HOME=/home/zodex-agent \
   ZODEX_DEFAULT_WORKDIR=/workspace \
-  bash {installer_script}
+  bash "$TMP_INSTALLER"
+rm -f "$TMP_INSTALLER"
 
 sudo install -d -m 0750 -o root -g zodex /etc/zodex/reader /etc/zodex/publisher
 sudo install -m 0640 -o root -g zodex /tmp/zodex-reader.pem /etc/zodex/reader/private-key.pem
@@ -2174,7 +2168,7 @@ if sudo -u zodex-agent env HOME=/home/zodex-agent \
 fi
 
 sudo bash -lc 'pkill -f -- "/usr/local/bin/zodexd --config $1" || true; pkill -f -- "/usr/local/bin/zodex-prd --config $1" || true' -- "$CFG"
-rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_script} {agent_cli_upload} {git_remote_helper_upload} {daemon_upload} {publisher_upload}
+rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script}
 "#,
         repo = shell_escape_single_quotes(repo),
         repo_plain = repo,
@@ -2185,11 +2179,6 @@ rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_s
         publisher_installation_id = publisher_installation_id,
         default_base = default_base,
         setup_script = SPRITE_SETUP_REMOTE_SCRIPT_PATH,
-        installer_script = SPRITE_REMOTE_INSTALLER_PATH,
-        agent_cli_upload = SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
-        git_remote_helper_upload = SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH,
-        daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
-        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
         repo_account = repo.split('/').next().unwrap_or(repo)
     )
 }
@@ -3401,43 +3390,70 @@ fn install(config_path: &Path) -> Result<()> {
 }
 
 fn upgrade(config_path: &Path, version: &str) -> Result<()> {
-    let config = Config::load(Some(config_path))?;
+    if should_run_runtime_upgrade() {
+        let config = Config::load(Some(config_path))?;
+        let install_args = build_runtime_upgrade_shell_args(version, &config);
+        run_shell_script(&install_args)?;
+        restart_stack(config_path)?;
+        return Ok(());
+    }
 
-    let install_args = build_upgrade_shell_args(version, &config);
+    let install_args = build_operator_upgrade_shell_args(version);
     run_shell_script(&install_args)?;
-    restart_stack(config_path)?;
     Ok(())
 }
 
-fn build_upgrade_shell_args(version: &str, config: &Config) -> Vec<String> {
+fn should_run_runtime_upgrade() -> bool {
+    cfg!(target_os = "linux") && effective_uid_is_root()
+}
+
+#[cfg(unix)]
+fn effective_uid_is_root() -> bool {
+    Uid::effective().as_raw() == 0
+}
+
+#[cfg(not(unix))]
+fn effective_uid_is_root() -> bool {
+    false
+}
+
+fn build_runtime_upgrade_shell_args(version: &str, config: &Config) -> Vec<String> {
     let mut script = format!(
-        "set -euo pipefail\nexport ZODEX_VERSION={}\n",
+        "set -euo pipefail
+export ZODEX_INSTALL_MODE=runtime
+export ZODEX_VERSION={}
+",
         shell_escape_single_quotes(version)
     );
 
     if version != "latest" {
         script.push_str(&format!(
-            "export ZODEX_SOURCE_REF={}\n",
+            "export ZODEX_SOURCE_REF={}
+",
             shell_escape_single_quotes(version)
         ));
     }
 
     if let Some(port) = config.http_bind_port {
-        script.push_str(&format!("export ZODEX_HTTP_BIND_PORT={port}\n"));
+        script.push_str(&format!(
+            "export ZODEX_HTTP_BIND_PORT={port}
+"
+        ));
     }
 
-    let installer_ref = upgrade_installer_ref(version);
-    let installer_url =
-        format!("https://raw.githubusercontent.com/amxv/zodex/{installer_ref}/scripts/install.sh");
-    script.push_str(&format!(
-        "curl -fsSL {} | bash",
-        shell_escape_single_quotes(&installer_url)
-    ));
+    script.push_str("curl -fsSL 'https://zodex.ashray.xyz/install.sh' | bash");
     vec!["-lc".to_string(), script]
 }
 
-fn upgrade_installer_ref(version: &str) -> &str {
-    if version == "latest" { "main" } else { version }
+fn build_operator_upgrade_shell_args(version: &str) -> Vec<String> {
+    let script = format!(
+        "set -euo pipefail
+export ZODEX_INSTALL_MODE=operator
+export ZODEX_VERSION={}
+curl -fsSL 'https://zodex.ashray.xyz/install.sh' | sh",
+        shell_escape_single_quotes(version)
+    );
+    vec!["-lc".to_string(), script]
 }
 
 fn shell_escape_single_quotes(value: &str) -> String {
@@ -5403,16 +5419,16 @@ mod tests {
         ProcessModeState, PushGrantRecord, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager,
         SpriteServiceState, SpriteServiceStatus, SystemctlAction, browser_open_attempts,
         build_certbot_args, build_github_yolo_mode_record, build_journalctl_args,
-        build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
+        build_operator_upgrade_shell_args, build_process_status_lines,
+        build_publisher_status_lines, build_reader_status_lines, build_runtime_upgrade_shell_args,
         build_sprite_api_args, build_sprite_services_status_lines, build_sprite_setup_script,
         build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
-        build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
-        credential_url_host, credential_url_path, credential_url_protocol,
-        ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
-        generate_self_signed_certificate, git_credential_request_repo,
-        git_credential_request_targets_github, github_mode_expired, load_matching_push_grant,
-        load_push_grant_from_dir, normalize_github_repo, normalize_github_repos,
-        normalize_proxy_origin, operator_sprites_registry_path_from_home,
+        certbot_cert_name, credential_host_is_github, credential_url_host, credential_url_path,
+        credential_url_protocol, ensure_http_listener_ready_for_start,
+        expected_sprite_service_definitions, generate_self_signed_certificate,
+        git_credential_request_repo, git_credential_request_targets_github, github_mode_expired,
+        load_matching_push_grant, load_push_grant_from_dir, normalize_github_repo,
+        normalize_github_repos, normalize_proxy_origin, operator_sprites_registry_path_from_home,
         parse_git_credential_request, parse_push_grant_ttl, parse_push_grants,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
         push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
@@ -5533,36 +5549,37 @@ mod tests {
     }
 
     #[test]
-    fn build_upgrade_shell_args_include_requested_version_and_http_port() {
+    fn build_runtime_upgrade_shell_args_include_requested_version_and_http_port() {
         let config = Config {
             http_bind_port: Some(8080),
             ..Config::default()
         };
 
-        let args = build_upgrade_shell_args("v0.1.5", &config);
+        let args = build_runtime_upgrade_shell_args("v0.1.5", &config);
         assert_eq!(args[0], "-lc");
         assert!(args[1].contains("export ZODEX_VERSION='v0.1.5'"));
         assert!(args[1].contains("export ZODEX_SOURCE_REF='v0.1.5'"));
         assert!(args[1].contains("export ZODEX_HTTP_BIND_PORT=8080"));
-        assert!(
-            args[1].contains(
-                "curl -fsSL 'https://raw.githubusercontent.com/amxv/zodex/v0.1.5/scripts/install.sh' | bash"
-            )
-        );
+        assert!(args[1].contains("curl -fsSL 'https://zodex.ashray.xyz/install.sh' | bash"));
     }
 
     #[test]
-    fn build_upgrade_shell_args_latest_uses_main_installer_ref() {
+    fn build_runtime_upgrade_shell_args_latest_uses_public_installer() {
         let config = Config::default();
 
-        let args = build_upgrade_shell_args("latest", &config);
+        let args = build_runtime_upgrade_shell_args("latest", &config);
         assert!(args[1].contains("export ZODEX_VERSION='latest'"));
         assert!(!args[1].contains("ZODEX_SOURCE_REF"));
-        assert!(
-            args[1].contains(
-                "curl -fsSL 'https://raw.githubusercontent.com/amxv/zodex/main/scripts/install.sh' | bash"
-            )
-        );
+        assert!(args[1].contains("curl -fsSL 'https://zodex.ashray.xyz/install.sh' | bash"));
+    }
+
+    #[test]
+    fn build_operator_upgrade_shell_args_uses_public_installer() {
+        let args = build_operator_upgrade_shell_args("v0.2.0");
+        assert_eq!(args[0], "-lc");
+        assert!(args[1].contains("export ZODEX_INSTALL_MODE=operator"));
+        assert!(args[1].contains("export ZODEX_VERSION='v0.2.0'"));
+        assert!(args[1].contains("curl -fsSL 'https://zodex.ashray.xyz/install.sh' | sh"));
     }
 
     #[test]
