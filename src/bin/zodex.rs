@@ -195,7 +195,7 @@ enum SpriteCommand {
     },
     Upgrade {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long, default_value = "latest")]
@@ -209,7 +209,7 @@ enum SpriteCommand {
     },
     Sync {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
@@ -222,7 +222,7 @@ enum SpriteCommand {
     #[command(alias = "services-status")]
     Status {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
@@ -231,7 +231,7 @@ enum SpriteCommand {
     #[command(alias = "service-logs")]
     Logs {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         service: String,
         #[arg(long)]
@@ -243,7 +243,7 @@ enum SpriteCommand {
     },
     Health {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
@@ -623,9 +623,10 @@ async fn main() -> Result<()> {
                     url_auth,
                     remote_config,
                 } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     sprite_upgrade(
-                        &sprite,
-                        org.as_deref(),
+                        &resolved.name,
+                        resolved.org.as_deref(),
                         &version,
                         repo.as_deref(),
                         url_auth.as_deref(),
@@ -639,9 +640,10 @@ async fn main() -> Result<()> {
                     force_recreate,
                     skip_stop_detached,
                 } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     sync_sprite_services(
-                        &sprite,
-                        org.as_deref(),
+                        &resolved.name,
+                        resolved.org.as_deref(),
                         Path::new(&remote_config),
                         force_recreate,
                         skip_stop_detached,
@@ -652,11 +654,12 @@ async fn main() -> Result<()> {
                     org,
                     remote_config,
                 } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     print_sprite_services_status_summary(
                         &config,
                         Path::new(&remote_config),
-                        &sprite,
-                        org.as_deref(),
+                        &resolved.name,
+                        resolved.org.as_deref(),
                     )?;
                 }
                 SpriteCommand::Logs {
@@ -666,9 +669,10 @@ async fn main() -> Result<()> {
                     lines,
                     duration,
                 } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     print_sprite_service_logs(
-                        &sprite,
-                        org.as_deref(),
+                        &resolved.name,
+                        resolved.org.as_deref(),
                         &service,
                         lines,
                         duration.as_deref(),
@@ -679,7 +683,12 @@ async fn main() -> Result<()> {
                     org,
                     url_auth,
                 } => {
-                    verify_sprite_health(&sprite, org.as_deref(), url_auth.as_deref())?;
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                    verify_sprite_health(
+                        &resolved.name,
+                        resolved.org.as_deref(),
+                        url_auth.as_deref(),
+                    )?;
                 }
             }
         }
@@ -1039,7 +1048,7 @@ fn resolve_remote_sprite_from_registry(
             org: candidate.org.clone(),
         }),
         [] => bail!(
-            "pass `--sprite <name>` or run `zodex sprite setup` once to register a default Sprite"
+            "pass `--sprite <name>`, set `ZODEX_SPRITE`, or run `zodex sprite setup` once to register a default Sprite"
         ),
         many => {
             let names = many
@@ -1050,7 +1059,9 @@ fn resolve_remote_sprite_from_registry(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!("multiple Sprites are configured ({names}); pass `--sprite <name>`")
+            bail!(
+                "multiple Sprites are configured ({names}); pass `--sprite <name>` or set `ZODEX_SPRITE`"
+            )
         }
     }
 }
@@ -5366,7 +5377,7 @@ mod tests {
         write_if_changed,
     };
     use crate::Cli;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
     use std::fs;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::path::{Path, PathBuf};
@@ -5381,6 +5392,41 @@ mod tests {
         assert!(help.contains("Zodex operator CLI"));
         assert!(!help.contains("publish-pr"));
         assert!(!help.contains("\npublisher"));
+    }
+
+    #[test]
+    fn safe_sprite_operations_accept_omitted_sprite_at_parse_time() {
+        for args in [
+            vec!["zodex", "sprite", "upgrade"],
+            vec!["zodex", "sprite", "sync"],
+            vec!["zodex", "sprite", "status"],
+            vec!["zodex", "sprite", "logs", "--service", "zodexd"],
+            vec!["zodex", "sprite", "health"],
+        ] {
+            Cli::try_parse_from(args).expect("safe sprite operation should parse without --sprite");
+        }
+    }
+
+    #[test]
+    fn sprite_setup_keeps_sprite_required_at_parse_time() {
+        let err = Cli::try_parse_from([
+            "zodex",
+            "sprite",
+            "setup",
+            "--repo",
+            "amxv/zodex",
+            "--reader-app-id",
+            "1",
+            "--reader-pem",
+            "/tmp/reader.pem",
+            "--publisher-app-id",
+            "2",
+            "--publisher-pem",
+            "/tmp/publisher.pem",
+        ])
+        .expect_err("setup should still require --sprite");
+
+        assert!(err.to_string().contains("--sprite"));
     }
 
     #[test]
@@ -6151,6 +6197,15 @@ mod tests {
         let inferred = resolve_remote_sprite_from_registry(None, None, None, &registry)
             .expect("single registry sprite should resolve");
         assert_eq!(inferred.name, "dev-sprite");
+        assert_eq!(inferred.org, None);
+
+        let empty = OperatorSpriteRegistry::default();
+        let empty_error = resolve_remote_sprite_from_registry(None, None, None, &empty)
+            .expect_err("empty registry should require explicit sprite");
+        let empty_message = empty_error.to_string();
+        assert!(empty_message.contains("--sprite <name>"));
+        assert!(empty_message.contains("ZODEX_SPRITE"));
+        assert!(empty_message.contains("zodex sprite setup"));
 
         let ambiguous = OperatorSpriteRegistry {
             sprites: vec![
@@ -6168,7 +6223,14 @@ mod tests {
                 },
             ],
         };
-        assert!(resolve_remote_sprite_from_registry(None, None, None, &ambiguous).is_err());
+        let ambiguous_error = resolve_remote_sprite_from_registry(None, None, None, &ambiguous)
+            .expect_err("ambiguous registry should require explicit sprite");
+        let ambiguous_message = ambiguous_error.to_string();
+        assert!(ambiguous_message.contains("multiple Sprites are configured"));
+        assert!(ambiguous_message.contains("one"));
+        assert!(ambiguous_message.contains("two"));
+        assert!(ambiguous_message.contains("--sprite <name>"));
+        assert!(ambiguous_message.contains("ZODEX_SPRITE"));
     }
 
     #[test]
