@@ -45,7 +45,7 @@ fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublishPrRequest {
     pub repo_id: String,
     #[serde(default)]
@@ -58,7 +58,7 @@ pub struct PublishPrRequest {
     pub bundle_base64: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectPushRequest {
     pub repo: String,
     pub src: String,
@@ -87,8 +87,7 @@ struct PublishPrError {
     error: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PublisherRequest {
     PublishPr(PublishPrRequest),
     DirectPush(DirectPushRequest),
@@ -185,8 +184,7 @@ pub async fn submit_publish_request(
     socket_path: &Path,
     request: &PublishPrRequest,
 ) -> Result<PublishPrResponse> {
-    let payload = serde_json::to_vec(&PublisherRequest::PublishPr(request.clone()))
-        .context("failed to serialize publish request")?;
+    let payload = serde_json::to_vec(request).context("failed to serialize publish request")?;
     let response = submit_publisher_payload(socket_path, &payload).await?;
     match serde_json::from_slice::<PublisherResponse>(&response) {
         Ok(PublisherResponse::PublishPr(response)) => Ok(response),
@@ -201,8 +199,7 @@ pub async fn submit_direct_push_request(
     socket_path: &Path,
     request: &DirectPushRequest,
 ) -> Result<DirectPushResponse> {
-    let payload = serde_json::to_vec(&PublisherRequest::DirectPush(request.clone()))
-        .context("failed to serialize direct push request")?;
+    let payload = encode_direct_push_wire_request(request)?;
     let response = submit_publisher_payload(socket_path, &payload).await?;
     match serde_json::from_slice::<PublisherResponse>(&response) {
         Ok(PublisherResponse::DirectPush(response)) => Ok(response),
@@ -211,6 +208,19 @@ pub async fn submit_direct_push_request(
             serde_json::from_slice(&response).context("failed to decode direct push response")
         }
     }
+}
+
+fn encode_direct_push_wire_request(request: &DirectPushRequest) -> Result<Vec<u8>> {
+    let mut value =
+        serde_json::to_value(request).context("failed to encode direct push request")?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("direct push request did not encode as an object"))?;
+    object.insert(
+        "kind".to_string(),
+        serde_json::Value::String("direct_push".to_string()),
+    );
+    serde_json::to_vec(&value).context("failed to serialize direct push request")
 }
 
 async fn submit_publisher_payload(socket_path: &Path, payload: &[u8]) -> Result<Vec<u8>> {
@@ -592,12 +602,25 @@ fn decode_request(request_bytes: &[u8]) -> Result<PublisherRequest> {
         bail!("publisher request exceeds socket size limit");
     }
 
-    if let Ok(request) = serde_json::from_slice::<PublisherRequest>(request_bytes) {
-        return Ok(request);
+    let value: serde_json::Value =
+        serde_json::from_slice(request_bytes).context("publisher request was not valid JSON")?;
+    match value.get("kind").and_then(|kind| kind.as_str()) {
+        Some("direct_push") => {
+            let request: DirectPushRequest =
+                serde_json::from_value(value).context("failed to decode direct push request")?;
+            return Ok(PublisherRequest::DirectPush(request));
+        }
+        Some("publish_pr") => {
+            let request: PublishPrRequest =
+                serde_json::from_value(value).context("failed to decode publish request")?;
+            return Ok(PublisherRequest::PublishPr(request));
+        }
+        Some(kind) => bail!("unsupported publisher request kind: {kind}"),
+        None => {}
     }
 
     let legacy: PublishPrRequest =
-        serde_json::from_slice(request_bytes).context("failed to decode publisher request")?;
+        serde_json::from_value(value).context("failed to decode publish request")?;
     Ok(PublisherRequest::PublishPr(legacy))
 }
 
@@ -1223,11 +1246,11 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        GithubModeRecord, PublishPrRequest, SOCKET_DIR_MODE, TokenPermissionProfile,
-        build_publish_branch_name, build_publish_request, create_head_bundle,
-        ensure_clean_worktree, ensure_publisher_socket_parent_dir, github_mode_allows_repo,
-        github_mode_expired, parse_github_remote_repo, resolve_direct_push_target,
-        validate_publish_request,
+        DirectPushRequest, GithubModeRecord, PublishPrRequest, PublisherRequest, SOCKET_DIR_MODE,
+        TokenPermissionProfile, build_publish_branch_name, build_publish_request,
+        create_head_bundle, decode_request, encode_direct_push_wire_request, ensure_clean_worktree,
+        ensure_publisher_socket_parent_dir, github_mode_allows_repo, github_mode_expired,
+        parse_github_remote_repo, resolve_direct_push_target, validate_publish_request,
     };
     use crate::config::{Config, PublishTarget, PublisherInstallation};
     use tempfile::tempdir;
@@ -1256,6 +1279,46 @@ mod tests {
         .expect_err("request should be rejected");
 
         assert!(err.to_string().contains("repo id not allowed"));
+    }
+
+    #[test]
+    fn direct_push_wire_request_decodes_to_direct_push_variant() {
+        let request = DirectPushRequest {
+            repo: "owner/repo".to_string(),
+            src: "refs/heads/smoke".to_string(),
+            dst: "refs/heads/smoke".to_string(),
+            force: false,
+            bundle_base64: Some("YnVuZGxl".to_string()),
+        };
+
+        let payload = encode_direct_push_wire_request(&request).expect("encode direct push");
+        let value: serde_json::Value = serde_json::from_slice(&payload).expect("json payload");
+        assert_eq!(
+            value.get("kind").and_then(|kind| kind.as_str()),
+            Some("direct_push")
+        );
+        assert_eq!(
+            decode_request(&payload).expect("decode direct push"),
+            PublisherRequest::DirectPush(request)
+        );
+    }
+
+    #[test]
+    fn legacy_publish_request_without_kind_still_decodes() {
+        let request = PublishPrRequest {
+            repo_id: "repo".to_string(),
+            base: None,
+            title: "title".to_string(),
+            body: String::new(),
+            draft: false,
+            bundle_base64: base64::engine::general_purpose::STANDARD.encode(b"hello"),
+        };
+        let payload = serde_json::to_vec(&request).expect("encode publish request");
+
+        assert_eq!(
+            decode_request(&payload).expect("decode legacy publish"),
+            PublisherRequest::PublishPr(request)
+        );
     }
 
     #[test]
