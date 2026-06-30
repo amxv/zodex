@@ -42,7 +42,26 @@ pub struct Config {
     pub publisher_max_bundle_bytes: usize,
     pub publisher_max_title_chars: usize,
     pub publisher_max_body_chars: usize,
+    pub publisher_installations: Vec<PublisherInstallation>,
     pub publisher_targets: Vec<PublishTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PublisherInstallation {
+    pub account: String,
+    pub installation_id: u64,
+    pub default_base: String,
+}
+
+impl Default for PublisherInstallation {
+    fn default() -> Self {
+        Self {
+            account: String::new(),
+            installation_id: 0,
+            default_base: "main".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +116,7 @@ impl Default for Config {
             publisher_max_bundle_bytes: 8 * 1024 * 1024,
             publisher_max_title_chars: 240,
             publisher_max_body_chars: 16_000,
+            publisher_installations: Vec::new(),
             publisher_targets: Vec::new(),
         }
     }
@@ -150,7 +170,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, PublishTarget};
+    use super::{Config, PublishTarget, PublisherInstallation};
 
     #[test]
     fn clamp_yields_and_timeout() {
@@ -183,6 +203,7 @@ mod tests {
         assert_eq!(cfg.service_group, "zodex");
         assert_eq!(cfg.publisher_branch_prefix, "agent");
         assert_eq!(cfg.publisher_max_bundle_bytes, 8 * 1024 * 1024);
+        assert!(cfg.publisher_installations.is_empty());
         assert!(cfg.publisher_targets.is_empty());
     }
 
@@ -222,7 +243,21 @@ max_output_chars = 200000
         assert_eq!(parsed.publisher_user, "zodex-publisher");
         assert_eq!(parsed.service_group, "zodex");
         assert_eq!(parsed.publisher_branch_prefix, "agent");
+        assert!(parsed.publisher_installations.is_empty());
         assert!(parsed.publisher_targets.is_empty());
+    }
+
+    #[test]
+    fn publisher_installation_defaults_to_main_base() {
+        let installation: PublisherInstallation = toml::from_str(
+            r#"
+account = "amxv"
+installation_id = 123
+"#,
+        )
+        .expect("publisher installation should parse");
+
+        assert_eq!(installation.default_base, "main");
     }
 
     #[test]

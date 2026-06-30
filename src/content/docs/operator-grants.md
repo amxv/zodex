@@ -28,6 +28,20 @@ zodex github grant-push   --sprite dev-sprite   --repo amxv/zodex   --publisher-
 
 The command uses the GitHub App device-flow path and places only the temporary repo-scoped token on the Sprite.
 
+## Operator GitHub mode
+
+Use mode commands when the operator wants to control a broader direct-push window from their machine:
+
+```bash
+zodex github mode yolo --sprite dev-sprite
+zodex github mode yolo --sprite dev-sprite --ttl 4h
+zodex github mode yolo --sprite dev-sprite --repo amxv/zodex
+zodex github mode status --sprite dev-sprite
+zodex github mode default --sprite dev-sprite
+```
+
+`mode yolo` defaults to a `2h` TTL and an all-installed-repos scope. Passing `--repo` changes the scope to a repo allowlist. `mode default` disables only YOLO state and leaves explicit push grants alone. The mode state stores no token, and publisher-app tokens must stay inside the publisher daemon or token-isolated push proxy.
+
 ## Revoke remotely
 
 When the write step is finished:

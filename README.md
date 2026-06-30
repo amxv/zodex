@@ -87,6 +87,18 @@ zodex github revoke-push --sprite <sprite> --repo <owner/repo>
 That temporary repo-scoped grant flow is the supported write path.
 `zodex-agent github request-push` and `zodex github grant-push` both use the GitHub App device-flow path.
 By default, `request-push` does not persist refresh-token state and writes a repo-scoped local grant that expires after `30m`.
+
+Operator-controlled GitHub mode is separate from repo-scoped push grants:
+
+```bash
+zodex github mode yolo --sprite <sprite>
+zodex github mode yolo --sprite <sprite> --ttl 4h
+zodex github mode yolo --sprite <sprite> --repo amxv/zodex
+zodex github mode default --sprite <sprite>
+zodex github mode status --sprite <sprite>
+```
+
+`mode yolo` records an operator-only direct-push window on the Sprite with a default `2h` TTL and an all-installed-repos scope unless `--repo` is provided. The mode state contains no GitHub token. `mode default` removes only the YOLO state and leaves explicit push grants unchanged. Direct push through YOLO still requires the token-isolated push proxy integration; zodex intentionally does not expose publisher tokens through the Git credential helper.
 Expired grants stop working in the credential-helper path even if a stale grant file still exists.
 By default, `revoke-push` removes the active repo grant and keeps the local device-flow refresh state so the remote operator path usually avoids a full reauth on the next grant.
 If you want to fully forget the local cached auth state too, add `--forget-local-auth`.

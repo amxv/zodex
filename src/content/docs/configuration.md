@@ -114,6 +114,13 @@ id = "zodex"
 repo = "amxv/zodex"
 default_base = "main"
 installation_id = 22222222
+
+[[publisher_installations]]
+account = "amxv"
+default_base = "main"
+installation_id = 22222222
 ```
+
+`publisher_targets` is the explicit allowlist used by `publish-pr`. `publisher_installations` records account-level installations so operator-only GitHub modes can represent an all-installed-repos scope while still staying inside the GitHub App installation boundary.
 
 The day-to-day `request-push` flow uses the repo argument and active grant state. Publish targets are still useful for internal publisher flows and explicit repo allowlists.
