@@ -107,6 +107,19 @@ zodex-agent github publish-pr --repo <owner/repo> --title "Title" --base main
 
 Direct push remains a separate, temporary grant path. This is temporary repo-scoped direct push access. Use `request-push` only when the agent needs a normal `git push`; otherwise prefer `publish-pr`.
 
+Operator-only GitHub mode commands are also available from the full operator CLI:
+
+```bash
+zodex github mode yolo --sprite <sprite>
+zodex github mode yolo --sprite <sprite> --ttl 4h
+zodex github mode yolo --sprite <sprite> --no-ttl
+zodex github mode yolo --sprite <sprite> --repo <owner/repo>
+zodex github mode status --sprite <sprite>
+zodex github mode default --sprite <sprite>
+```
+
+`mode yolo` writes mode state to the Sprite with a default `2h` TTL and an all-installed-repos scope unless one or more `--repo` flags are provided. The state file stores no token. `mode default` removes YOLO state only; it does not revoke explicit push grants. The agent CLI does not expose `mode`, and the credential helper must not return publisher-app tokens because YOLO is active.
+
 ```bash
 zodex-agent github request-push --repo <owner/repo>
 # agent pushes normally with git push
@@ -147,6 +160,7 @@ zodex-agent github publish-pr --repo <owner/repo> --title "Title"
 - plain `git clone https://github.com/amxv/zodex.git` works for installed private repos without a manual prompt
 - the agent can `git clone` and `git fetch` private repos without a manual prompt
 - `zodex-agent github publish-pr` creates a generated branch and opens a PR without exposing a write token to the shell
+- `zodex github mode yolo` can record an operator-only write window without storing tokens in the mode state
 - an active grant enables direct `git push` for the granted repo only
 - `grant-push` shows a GitHub device code, tries to open the verification URL, and succeeds after browser authorization
 

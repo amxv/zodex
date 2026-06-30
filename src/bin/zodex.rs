@@ -69,6 +69,12 @@ const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
 const GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR: &str = ".config/zodex/github-device-flow";
 const GITHUB_PUSH_GRANT_CLIENT_ID_ENV: &str = "ZODEX_PUBLISHER_CLIENT_ID";
 const DEFAULT_PUSH_GRANT_TTL_SECONDS: u64 = 30 * 60;
+const GITHUB_MODE_DIR: &str = "/var/lib/zodex/mode";
+const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
+const GITHUB_MODE_REMOTE_TMP_PATH: &str = "/tmp/zodex-github-mode.json";
+const DEFAULT_YOLO_TTL_SECONDS: u64 = 2 * 60 * 60;
+const ZODEX_SPRITE_ENV: &str = "ZODEX_SPRITE";
+const OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH: &str = ".config/zodex/sprites.json";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
@@ -292,7 +298,7 @@ enum GithubCommand {
     },
     GrantPush {
         #[arg(long)]
-        sprite: String,
+        sprite: Option<String>,
         #[arg(long)]
         repo: String,
         #[arg(long)]
@@ -311,6 +317,38 @@ enum GithubCommand {
         forget_local_auth: bool,
     },
     ListGrants {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    Mode {
+        #[command(subcommand)]
+        command: GithubModeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GithubModeCommand {
+    Yolo {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long = "repo")]
+        repos: Vec<String>,
+        #[arg(long, default_value = "2h")]
+        ttl: String,
+        #[arg(long, default_value_t = false)]
+        no_ttl: bool,
+    },
+    Default {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    Status {
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
@@ -361,6 +399,41 @@ struct CachedDeviceFlowGrant {
     client_id: String,
     repo: String,
     refresh_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GithubModeRecord {
+    mode: String,
+    all_installed: bool,
+    repos: Vec<String>,
+    created_at: String,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    expires_at_epoch_seconds: Option<u64>,
+    enabled_by: String,
+    token_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+struct OperatorSpriteRegistry {
+    #[serde(default)]
+    sprites: Vec<OperatorSpriteRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct OperatorSpriteRecord {
+    name: String,
+    #[serde(default)]
+    org: Option<String>,
+    remote_config: String,
+    last_setup_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedSprite {
+    name: String,
+    org: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -671,10 +744,11 @@ async fn main() -> Result<()> {
                     org,
                     publisher_client_id,
                 } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     grant_push_access(
                         &config,
-                        &sprite,
-                        org.as_deref(),
+                        &resolved.name,
+                        resolved.org.as_deref(),
                         &repo,
                         publisher_client_id.as_deref(),
                     )
@@ -696,6 +770,33 @@ async fn main() -> Result<()> {
                 GithubCommand::ListGrants { sprite, org } => {
                     list_push_grants(sprite.as_deref(), org.as_deref())?;
                 }
+                GithubCommand::Mode { command } => match command {
+                    GithubModeCommand::Yolo {
+                        sprite,
+                        org,
+                        repos,
+                        ttl,
+                        no_ttl,
+                    } => {
+                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                        let ttl = if no_ttl {
+                            None
+                        } else if ttl == "2h" {
+                            Some(Duration::from_secs(DEFAULT_YOLO_TTL_SECONDS))
+                        } else {
+                            Some(parse_push_grant_ttl(&ttl)?)
+                        };
+                        enable_github_yolo_mode(&resolved, &repos, ttl)?;
+                    }
+                    GithubModeCommand::Default { sprite, org } => {
+                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                        disable_github_yolo_mode(&resolved)?;
+                    }
+                    GithubModeCommand::Status { sprite, org } => {
+                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                        print_github_mode_status(&resolved)?;
+                    }
+                },
             }
         }
     }
@@ -827,6 +928,137 @@ fn normalize_github_repo(path: &str) -> Option<String> {
         return None;
     }
     Some(format!("{owner}/{repo}"))
+}
+
+fn normalize_github_repos(repos: &[String]) -> Result<Vec<String>> {
+    let mut normalized = Vec::new();
+    for repo in repos {
+        let repo = normalize_github_repo(repo)
+            .ok_or_else(|| anyhow!("repo must be in owner/repo form: {repo}"))?;
+        if !normalized.contains(&repo) {
+            normalized.push(repo);
+        }
+    }
+    Ok(normalized)
+}
+
+fn operator_sprites_registry_path_from_home(home: &Path) -> PathBuf {
+    home.join(OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH)
+}
+
+fn operator_sprites_registry_path() -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME must be set to use the zodex Sprite registry")?;
+    Ok(operator_sprites_registry_path_from_home(Path::new(&home)))
+}
+
+fn load_operator_sprite_registry_from_path(path: &Path) -> Result<OperatorSpriteRegistry> {
+    if !path.exists() {
+        return Ok(OperatorSpriteRegistry::default());
+    }
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read Sprite registry at {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse Sprite registry at {}", path.display()))
+}
+
+fn save_operator_sprite_registry_to_path(
+    path: &Path,
+    registry: &OperatorSpriteRegistry,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let raw = serde_json::to_vec_pretty(registry).context("failed to encode Sprite registry")?;
+    fs::write(path, raw).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn upsert_operator_sprite_record(
+    registry: &mut OperatorSpriteRegistry,
+    record: OperatorSpriteRecord,
+) {
+    if let Some(existing) = registry
+        .sprites
+        .iter_mut()
+        .find(|candidate| candidate.name == record.name && candidate.org == record.org)
+    {
+        *existing = record;
+    } else {
+        registry.sprites.push(record);
+    }
+    registry
+        .sprites
+        .sort_by(|a, b| (&a.org, &a.name).cmp(&(&b.org, &b.name)));
+}
+
+fn register_operator_sprite(sprite: &str, org: Option<&str>, remote_config: &Path) -> Result<()> {
+    let path = operator_sprites_registry_path()?;
+    let mut registry = load_operator_sprite_registry_from_path(&path)?;
+    let record = OperatorSpriteRecord {
+        name: sprite.to_string(),
+        org: org.map(str::to_string),
+        remote_config: remote_config.display().to_string(),
+        last_setup_at: format_epoch_seconds_rfc3339(current_epoch_seconds()?)?,
+    };
+    upsert_operator_sprite_record(&mut registry, record);
+    save_operator_sprite_registry_to_path(&path, &registry)
+}
+
+fn resolve_remote_sprite_from_registry(
+    explicit_sprite: Option<&str>,
+    explicit_org: Option<&str>,
+    env_sprite: Option<&str>,
+    registry: &OperatorSpriteRegistry,
+) -> Result<ResolvedSprite> {
+    if let Some(sprite) = explicit_sprite {
+        return Ok(ResolvedSprite {
+            name: sprite.to_string(),
+            org: explicit_org.map(str::to_string),
+        });
+    }
+    if let Some(sprite) = env_sprite.filter(|value| !value.trim().is_empty()) {
+        return Ok(ResolvedSprite {
+            name: sprite.to_string(),
+            org: explicit_org.map(str::to_string),
+        });
+    }
+
+    let candidates: Vec<&OperatorSpriteRecord> = registry
+        .sprites
+        .iter()
+        .filter(|candidate| match explicit_org {
+            Some(org) => candidate.org.as_deref() == Some(org),
+            None => true,
+        })
+        .collect();
+
+    match candidates.as_slice() {
+        [candidate] => Ok(ResolvedSprite {
+            name: candidate.name.clone(),
+            org: candidate.org.clone(),
+        }),
+        [] => bail!(
+            "pass `--sprite <name>` or run `zodex sprite setup` once to register a default Sprite"
+        ),
+        many => {
+            let names = many
+                .iter()
+                .map(|candidate| match candidate.org.as_deref() {
+                    Some(org) => format!("{}/{}", org, candidate.name),
+                    None => candidate.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("multiple Sprites are configured ({names}); pass `--sprite <name>`")
+        }
+    }
+}
+
+fn resolve_remote_sprite(sprite: Option<&str>, org: Option<&str>) -> Result<ResolvedSprite> {
+    let env_sprite = env::var(ZODEX_SPRITE_ENV).ok();
+    let registry = load_operator_sprite_registry_from_path(&operator_sprites_registry_path()?)?;
+    resolve_remote_sprite_from_registry(sprite, org, env_sprite.as_deref(), &registry)
 }
 
 fn push_grant_file_name(repo: &str) -> String {
@@ -986,7 +1218,9 @@ fn resolve_local_operator_binaries() -> Result<LocalOperatorBinaries> {
             daemon,
             publisher,
         }),
-        _ => bail!("failed to locate local zodex runtime binaries; expected zodex-agent, zodexd, and zodex-prd"),
+        _ => bail!(
+            "failed to locate local zodex runtime binaries; expected zodex-agent, zodexd, and zodex-prd"
+        ),
     }
 }
 
@@ -1708,6 +1942,9 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
     verify_publisher_socket_permissions(options.sprite, options.org)?;
     verify_sprite_service_logs(options.sprite, options.org)?;
     verify_sprite_health(options.sprite, options.org, Some(options.url_auth))?;
+    if let Err(err) = register_operator_sprite(options.sprite, options.org, options.remote_config) {
+        eprintln!("warning: failed to update local Sprite registry: {err:#}");
+    }
     println!("sprite-setup: complete");
     Ok(())
 }
@@ -1756,6 +1993,9 @@ fn sprite_upgrade(
     verify_publisher_socket_permissions(sprite, org)?;
     verify_publisher_key_isolation(sprite, org)?;
     verify_sprite_health(sprite, org, url_auth)?;
+    if let Err(err) = register_operator_sprite(sprite, org, remote_config) {
+        eprintln!("warning: failed to update local Sprite registry: {err:#}");
+    }
     println!("sprite-upgrade: complete");
     Ok(())
 }
@@ -1848,6 +2088,11 @@ id = "{repo_plain}"
 repo = "{repo_plain}"
 default_base = "{default_base}"
 installation_id = {publisher_installation_id}
+
+[[publisher_installations]]
+account = "{repo_account}"
+default_base = "{default_base}"
+installation_id = {publisher_installation_id}
 # END ZODEX_GH_APPS_MANAGED
 EOF
 
@@ -1905,7 +2150,8 @@ rm -f /tmp/zodex-reader.pem /tmp/zodex-publisher.pem {setup_script} {installer_s
         installer_script = SPRITE_REMOTE_INSTALLER_PATH,
         agent_cli_upload = SPRITE_REMOTE_UPLOAD_AGENT_CLI_PATH,
         daemon_upload = SPRITE_REMOTE_UPLOAD_DAEMON_PATH,
-        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH
+        publisher_upload = SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH,
+        repo_account = repo.split('/').next().unwrap_or(repo)
     )
 }
 
@@ -2617,9 +2863,15 @@ fn revoke_push_access(
             );
         }
         None => {
-            bail!(
-                "pass `--sprite <name>` to revoke a remote Sprite grant, or run this command on the Sprite to revoke the local grant"
-            );
+            let resolved = resolve_remote_sprite(None, org)?;
+            let exec_args = vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                format!("sudo rm -f {}", push_grant_path(&repo).display()),
+            ];
+            run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+            println!("grant-location: sprite");
+            println!("sprite: {}", resolved.name);
         }
     }
     println!("push-grant: revoked");
@@ -2654,6 +2906,20 @@ fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
             ];
             println!("grant-location: sprite");
             run_sprite_exec(sprite, org, &exec_args, &[])?
+        }
+        None if !sprite_runtime_detected() => {
+            let resolved = resolve_remote_sprite(None, org)?;
+            let exec_args = vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                format!(
+                    "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
+                    dir = PUSH_GRANTS_DIR
+                ),
+            ];
+            println!("grant-location: sprite");
+            println!("sprite: {}", resolved.name);
+            run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?
         }
         None if sprite_runtime_detected() => {
             println!("grant-location: local");
@@ -2711,6 +2977,177 @@ fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
         );
         println!();
     }
+    Ok(())
+}
+
+fn build_github_yolo_mode_record(
+    repos: &[String],
+    active_ttl: Option<Duration>,
+) -> Result<GithubModeRecord> {
+    let repos = normalize_github_repos(repos)?;
+    let created_at_epoch_seconds = current_epoch_seconds()?;
+    let created_at = format_epoch_seconds_rfc3339(created_at_epoch_seconds)?;
+    let (expires_at, expires_at_epoch_seconds) = match active_ttl {
+        Some(active_ttl) => {
+            let expires_at_epoch_seconds = created_at_epoch_seconds
+                .checked_add(active_ttl.as_secs())
+                .ok_or_else(|| anyhow!("YOLO mode expiration overflowed"))?;
+            (
+                Some(format_epoch_seconds_rfc3339(expires_at_epoch_seconds)?),
+                Some(expires_at_epoch_seconds),
+            )
+        }
+        None => (None, None),
+    };
+    Ok(GithubModeRecord {
+        mode: "yolo".to_string(),
+        all_installed: repos.is_empty(),
+        repos,
+        created_at,
+        expires_at,
+        expires_at_epoch_seconds,
+        enabled_by: "operator-cli".to_string(),
+        token_source: "publisher-app-installation-token".to_string(),
+    })
+}
+
+fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    matches!(
+        record.expires_at_epoch_seconds,
+        Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+    )
+}
+
+fn enable_github_yolo_mode(
+    resolved: &ResolvedSprite,
+    repos: &[String],
+    active_ttl: Option<Duration>,
+) -> Result<()> {
+    let record = build_github_yolo_mode_record(repos, active_ttl)?;
+    let raw =
+        serde_json::to_string_pretty(&record).context("failed to encode GitHub mode state")?;
+    let mut mode_file = NamedTempFile::new().context("failed to create GitHub mode temp file")?;
+    use std::io::Write as _;
+    mode_file
+        .write_all(raw.as_bytes())
+        .context("failed to write GitHub mode temp file")?;
+
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "sudo install -d -m 0750 -o zodex-publisher -g zodex {dir} && sudo install -m 0640 -o zodex-publisher -g zodex {tmp} {dest} && rm -f {tmp}",
+            dir = GITHUB_MODE_DIR,
+            tmp = GITHUB_MODE_REMOTE_TMP_PATH,
+            dest = GITHUB_MODE_STATE_PATH
+        ),
+    ];
+    run_sprite_exec(
+        &resolved.name,
+        resolved.org.as_deref(),
+        &exec_args,
+        &[(mode_file.path(), GITHUB_MODE_REMOTE_TMP_PATH)],
+    )?;
+
+    println!("github-mode: yolo");
+    println!("sprite: {}", resolved.name);
+    if let Some(org) = resolved.org.as_deref() {
+        println!("org: {org}");
+    }
+    if record.all_installed {
+        println!("scope: all-installed");
+    } else {
+        println!("scope: repo-allowlist");
+        for repo in &record.repos {
+            println!("repo: {repo}");
+        }
+    }
+    println!(
+        "ttl: {}",
+        if active_ttl.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    if let Some(expires_at) = record.expires_at.as_deref() {
+        println!("expires-at: {expires_at}");
+    }
+    println!("token-exposure: none");
+    println!("note: direct git push still requires the token-isolated push proxy integration");
+    Ok(())
+}
+
+fn disable_github_yolo_mode(resolved: &ResolvedSprite) -> Result<()> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!("sudo rm -f {GITHUB_MODE_STATE_PATH}"),
+    ];
+    run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+    println!("github-mode: default");
+    println!("sprite: {}", resolved.name);
+    if let Some(org) = resolved.org.as_deref() {
+        println!("org: {org}");
+    }
+    println!("yolo-state: removed");
+    println!("push-grants: unchanged");
+    Ok(())
+}
+
+fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
+        ),
+    ];
+    let raw = run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+    println!("sprite: {}", resolved.name);
+    if let Some(org) = resolved.org.as_deref() {
+        println!("org: {org}");
+    }
+    if raw.trim().is_empty() {
+        println!("github-mode: default");
+        println!("push-grants: separate");
+        return Ok(());
+    }
+
+    let record: GithubModeRecord =
+        serde_json::from_str(&raw).context("failed to parse remote GitHub mode state")?;
+    if record.mode != "yolo" {
+        println!("github-mode: default");
+        println!("mode-state: {}", record.mode);
+        println!("push-grants: separate");
+        return Ok(());
+    }
+    if github_mode_expired(&record, current_epoch_seconds()?) {
+        println!("github-mode: default");
+        println!("yolo-state: expired");
+        if let Some(expires_at) = record.expires_at.as_deref() {
+            println!("expired-at: {expires_at}");
+        }
+        println!("push-grants: separate");
+        return Ok(());
+    }
+
+    println!("github-mode: yolo");
+    if record.all_installed {
+        println!("scope: all-installed");
+    } else {
+        println!("scope: repo-allowlist");
+        for repo in &record.repos {
+            println!("repo: {repo}");
+        }
+    }
+    if let Some(expires_at) = record.expires_at.as_deref() {
+        println!("expires-at: {expires_at}");
+    } else {
+        println!("expires-at: none");
+    }
+    println!("token-exposure: none");
+    println!("push-grants: separate");
     Ok(())
 }
 
@@ -4900,25 +5337,28 @@ run `{PRIMARY_OPERATOR_BINARY} --config \"{}\" restart` manually.\n{}",
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_LOG_LINES, PUBLISHER_SERVICE_LABEL, ProcessModeState, PushGrantRecord,
-        SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState,
-        SpriteServiceStatus, SystemctlAction, browser_open_attempts, build_certbot_args,
-        build_journalctl_args, build_process_status_lines, build_publisher_status_lines,
-        build_reader_status_lines, build_sprite_api_args, build_sprite_services_status_lines,
-        build_sprite_setup_script, build_sprite_upgrade_script, build_status_summary_lines,
-        build_systemctl_args, build_upgrade_shell_args, certbot_cert_name,
-        credential_host_is_github, credential_url_host, credential_url_path,
-        credential_url_protocol, ensure_http_listener_ready_for_start,
-        expected_sprite_service_definitions, generate_self_signed_certificate,
-        git_credential_request_repo, git_credential_request_targets_github,
-        load_matching_push_grant, load_push_grant_from_dir, normalize_github_repo,
-        normalize_proxy_origin, parse_git_credential_request, parse_push_grant_ttl,
-        parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
-        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
-        resolve_publisher_client_id, select_tls_san_ip, service_manager_from_pid1,
+        DEFAULT_LOG_LINES, OperatorSpriteRecord, OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL,
+        ProcessModeState, PushGrantRecord, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager,
+        SpriteServiceState, SpriteServiceStatus, SystemctlAction, browser_open_attempts,
+        build_certbot_args, build_github_yolo_mode_record, build_journalctl_args,
+        build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
+        build_sprite_api_args, build_sprite_services_status_lines, build_sprite_setup_script,
+        build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
+        build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
+        credential_url_host, credential_url_path, credential_url_protocol,
+        ensure_http_listener_ready_for_start, expected_sprite_service_definitions,
+        generate_self_signed_certificate, git_credential_request_repo,
+        git_credential_request_targets_github, github_mode_expired, load_matching_push_grant,
+        load_push_grant_from_dir, normalize_github_repo, normalize_github_repos,
+        normalize_proxy_origin, operator_sprites_registry_path_from_home,
+        parse_git_credential_request, parse_push_grant_ttl, parse_systemctl_show, process_log_path,
+        process_pid_path, proxy_mcp_status_looks_healthy, push_grant_expired, read_tail_lines,
+        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
+        resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
         shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
-        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
+        strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
+        write_if_changed,
     };
     use crate::Cli;
     use clap::CommandFactory;
@@ -5331,9 +5771,13 @@ mod tests {
 
     #[test]
     fn sprite_exec_verification_helpers_do_not_prepend_separator() {
-        let source =
-            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("bin").join("zodex.rs"))
-                .expect("read zodex source");
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("bin")
+                .join("zodex.rs"),
+        )
+        .expect("read zodex source");
 
         for fn_name in [
             "derive_remote_target_repo",
@@ -5618,6 +6062,142 @@ mod tests {
             )),
             Some("amxv/zodex".to_string())
         );
+    }
+
+    #[test]
+    fn normalize_github_repos_dedupes_repo_allowlist() {
+        assert_eq!(
+            normalize_github_repos(&[
+                "amxv/zodex".to_string(),
+                "/amxv/zodex.git".to_string(),
+                "amxv/webctx".to_string(),
+            ])
+            .expect("repos should normalize"),
+            vec!["amxv/zodex".to_string(), "amxv/webctx".to_string()]
+        );
+        assert!(normalize_github_repos(&["not-a-repo".to_string()]).is_err());
+    }
+
+    #[test]
+    fn yolo_mode_record_defaults_to_all_installed_with_two_hour_ttl() {
+        let record = build_github_yolo_mode_record(&[], Some(Duration::from_secs(2 * 60 * 60)))
+            .expect("record should build");
+
+        assert_eq!(record.mode, "yolo");
+        assert!(record.all_installed);
+        assert!(record.repos.is_empty());
+        assert_eq!(record.token_source, "publisher-app-installation-token");
+        assert!(record.expires_at.is_some());
+        assert!(record.expires_at_epoch_seconds.is_some());
+    }
+
+    #[test]
+    fn yolo_mode_record_can_disable_ttl_and_scope_to_repos() {
+        let record = build_github_yolo_mode_record(
+            &["amxv/zodex".to_string(), "amxv/webctx.git".to_string()],
+            None,
+        )
+        .expect("record should build");
+
+        assert!(!record.all_installed);
+        assert_eq!(
+            record.repos,
+            vec!["amxv/zodex".to_string(), "amxv/webctx".to_string()]
+        );
+        assert!(record.expires_at.is_none());
+        assert!(record.expires_at_epoch_seconds.is_none());
+    }
+
+    #[test]
+    fn yolo_mode_expiration_is_enforced_by_epoch_cutoff() {
+        let mut record = build_github_yolo_mode_record(&[], None).expect("record should build");
+        record.expires_at_epoch_seconds = Some(1_000);
+
+        assert!(!github_mode_expired(&record, 999));
+        assert!(github_mode_expired(&record, 1_000));
+    }
+
+    #[test]
+    fn sprite_registry_resolves_explicit_env_single_and_ambiguous_cases() {
+        let registry = OperatorSpriteRegistry {
+            sprites: vec![OperatorSpriteRecord {
+                name: "dev-sprite".to_string(),
+                org: None,
+                remote_config: "/etc/zodex/config.toml".to_string(),
+                last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+            }],
+        };
+
+        let explicit = resolve_remote_sprite_from_registry(
+            Some("explicit-sprite"),
+            Some("team"),
+            None,
+            &registry,
+        )
+        .expect("explicit sprite should resolve");
+        assert_eq!(explicit.name, "explicit-sprite");
+        assert_eq!(explicit.org.as_deref(), Some("team"));
+
+        let env_sprite =
+            resolve_remote_sprite_from_registry(None, None, Some("env-sprite"), &registry)
+                .expect("env sprite should resolve");
+        assert_eq!(env_sprite.name, "env-sprite");
+
+        let inferred = resolve_remote_sprite_from_registry(None, None, None, &registry)
+            .expect("single registry sprite should resolve");
+        assert_eq!(inferred.name, "dev-sprite");
+
+        let ambiguous = OperatorSpriteRegistry {
+            sprites: vec![
+                OperatorSpriteRecord {
+                    name: "one".to_string(),
+                    org: None,
+                    remote_config: "/etc/zodex/config.toml".to_string(),
+                    last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                },
+                OperatorSpriteRecord {
+                    name: "two".to_string(),
+                    org: None,
+                    remote_config: "/etc/zodex/config.toml".to_string(),
+                    last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                },
+            ],
+        };
+        assert!(resolve_remote_sprite_from_registry(None, None, None, &ambiguous).is_err());
+    }
+
+    #[test]
+    fn sprite_registry_path_uses_zodex_config_dir() {
+        assert_eq!(
+            operator_sprites_registry_path_from_home(Path::new("/home/operator")),
+            PathBuf::from("/home/operator/.config/zodex/sprites.json")
+        );
+    }
+
+    #[test]
+    fn sprite_registry_upsert_replaces_matching_sprite() {
+        let mut registry = OperatorSpriteRegistry::default();
+        upsert_operator_sprite_record(
+            &mut registry,
+            OperatorSpriteRecord {
+                name: "dev".to_string(),
+                org: None,
+                remote_config: "/old".to_string(),
+                last_setup_at: "old".to_string(),
+            },
+        );
+        upsert_operator_sprite_record(
+            &mut registry,
+            OperatorSpriteRecord {
+                name: "dev".to_string(),
+                org: None,
+                remote_config: "/new".to_string(),
+                last_setup_at: "new".to_string(),
+            },
+        );
+
+        assert_eq!(registry.sprites.len(), 1);
+        assert_eq!(registry.sprites[0].remote_config, "/new");
     }
 
     #[test]

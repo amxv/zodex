@@ -106,6 +106,16 @@ zodex-agent github publish-pr --repo amxv/zodex --title "Improve docs" --base ma
 
 Also verify the publisher app has `Contents: Read & write` and `Pull requests: Read & write`, the publisher daemon is running, and the repo is listed in `publisher_targets`.
 
+## GitHub mode status does not match expected access
+
+Check mode state from the operator machine:
+
+```bash
+zodex github mode status --sprite dev-sprite
+```
+
+`mode yolo` records an operator-only write window. Explicit `request-push` grants and `publish-pr` continue to work independently. Normal direct pushes through YOLO still require the token-isolated push proxy integration; do not make the Git credential helper return publisher-app tokens to debug this.
+
 ## Runtime service cannot start
 
 Inspect status and logs:

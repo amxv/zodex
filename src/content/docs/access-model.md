@@ -14,7 +14,7 @@ The default state is:
 
 - Git clone and fetch work through the reader GitHub App.
 - Shell execution, patching, tests, and local commits work in the Sprite workspace.
-- Git push fails until a repo-scoped grant is active.
+- Git push fails until a repo-scoped grant is active or an operator-controlled GitHub mode is active through the token-isolated push path.
 - PR creation through `zodex-agent github publish-pr` works without a push grant by sending a bundle of the current committed `HEAD` to the publisher daemon, which pushes a generated branch and opens the PR.
 - Revocation removes the direct-push path while read access and `publish-pr` remain available.
 
@@ -40,6 +40,18 @@ User access token expiration enabled
 ```
 
 It should also be installed on `Only select repositories`. The publisher daemon uses this app installation to push generated PR branches and open PRs without exposing a write token to the agent shell. The device-flow user authorization is used only when an operator approves a temporary direct-push grant.
+
+## Operator GitHub modes
+
+The full operator CLI can record GitHub mode state on a Sprite:
+
+```bash
+zodex github mode yolo --sprite dev-sprite
+zodex github mode default --sprite dev-sprite
+zodex github mode status --sprite dev-sprite
+```
+
+`mode yolo` is not an agent command. It defaults to a `2h` TTL and all installed repositories, or one or more explicit `--repo` allowlist entries. `mode default` removes YOLO state and does not revoke explicit push grants. Direct push needs a token-isolated publisher daemon/proxy path.
 
 ## Local work before remote writes
 

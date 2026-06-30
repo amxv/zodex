@@ -35,6 +35,9 @@ fn zodex_agent_github_help_exposes_only_local_auth_commands() {
     assert!(stdout.contains("list-grants"));
     assert!(stdout.contains("publish-pr"));
     assert!(!stdout.contains("grant-push"));
+    assert!(!stdout.contains("mode"));
+    assert!(!stdout.contains("yolo"));
+    assert!(!stdout.contains("unyolo"));
 }
 
 #[test]

@@ -66,9 +66,15 @@ zodex github grant-push --sprite dev-sprite --repo amxv/zodex --publisher-client
 zodex github list-grants --sprite dev-sprite
 zodex github revoke-push --sprite dev-sprite --repo amxv/zodex
 zodex github revoke-push --sprite dev-sprite --repo amxv/zodex --forget-local-auth
+zodex github mode yolo --sprite dev-sprite
+zodex github mode yolo --sprite dev-sprite --ttl 4h
+zodex github mode yolo --sprite dev-sprite --no-ttl
+zodex github mode yolo --sprite dev-sprite --repo amxv/zodex
+zodex github mode status --sprite dev-sprite
+zodex github mode default --sprite dev-sprite
 ```
 
-`request-push` exists on the operator CLI too, but day-to-day agent sessions normally use `zodex-agent github request-push` on the Sprite.
+`request-push` exists on the operator CLI too, but day-to-day agent sessions normally use `zodex-agent github request-push` on the Sprite. `github mode` is operator-only; it is intentionally not exposed by `zodex-agent`. When exactly one Sprite is registered locally, `--sprite` can be omitted for remote operator commands.
 
 ## Agent-side commands
 
