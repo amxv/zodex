@@ -18,7 +18,7 @@ You are setting up three layers:
 2. a ChatGPT MCP front door at `/mcp?key=...`
 3. a GitHub write policy: PR-only, one-off push approval, remote operator grant, or scoped YOLO mode
 
-Sprites are a good fit for ChatGPT coding sessions because they give agents a real remote machine without requiring a month-long always-on VPS for work that may happen in bursts.
+Sprites are a good fit for ChatGPT coding sessions because they give agents a real remote machine for bursty coding work while keeping the MCP front door simple to expose.
 
 ## Outcome
 
@@ -293,7 +293,7 @@ zodex github mode status --sprite zodex-dev
 zodex github mode default --sprite zodex-dev
 ```
 
-The default active grant TTL is `30m`. `request-push` defaults to a `30m` TTL and does not persist refresh-token state unless that is explicitly requested. `mode yolo` defaults to a `2h` TTL and all installed repositories unless one or more `--repo` entries are provided. Repo-scoped YOLO grants merge with other active repo grants and expire independently. Expired grants stop working in the credential-helper path. Both flows can use `--no-ttl` when the operator intentionally wants an indefinite window.
+The default active grant TTL is `30m`. `request-push` defaults to a `30m` TTL and does not persist refresh-token state unless `--cache-refresh-token` is explicitly requested. `mode yolo` defaults to a `2h` TTL and all installed repositories unless one or more `--repo` entries are provided. Change either window with `--ttl <duration>`. Repo-scoped YOLO grants merge with other active repo grants and expire independently. Expired grants stop working in the credential-helper path. Both flows can use `--no-ttl` when the operator intentionally wants an indefinite window.
 
 For a full comparison, see [Write modes](/docs/write-modes).
 
