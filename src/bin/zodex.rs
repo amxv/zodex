@@ -27,8 +27,8 @@ use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
 use zodex::publisher::{
@@ -413,10 +413,22 @@ struct CachedDeviceFlowGrant {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GithubYoloRepoGrant {
+    repo: String,
+    created_at: String,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    expires_at_epoch_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct GithubModeRecord {
     mode: String,
     all_installed: bool,
     repos: Vec<String>,
+    #[serde(default)]
+    repo_grants: Vec<GithubYoloRepoGrant>,
     created_at: String,
     #[serde(default)]
     expires_at: Option<String>,
@@ -1111,6 +1123,62 @@ fn format_epoch_seconds_rfc3339(epoch_seconds: u64) -> Result<String> {
         .context("failed to build RFC3339 timestamp from epoch seconds")?
         .format(&Rfc3339)
         .context("failed to format RFC3339 timestamp")
+}
+
+fn month_name(month: time::Month) -> &'static str {
+    match month {
+        time::Month::January => "January",
+        time::Month::February => "February",
+        time::Month::March => "March",
+        time::Month::April => "April",
+        time::Month::May => "May",
+        time::Month::June => "June",
+        time::Month::July => "July",
+        time::Month::August => "August",
+        time::Month::September => "September",
+        time::Month::October => "October",
+        time::Month::November => "November",
+        time::Month::December => "December",
+    }
+}
+
+fn local_offset_label(offset: UtcOffset) -> String {
+    let total_seconds = offset.whole_seconds();
+    if total_seconds == 0 {
+        return "UTC".to_string();
+    }
+    if total_seconds == 5 * 60 * 60 + 30 * 60 {
+        return "IST".to_string();
+    }
+
+    let sign = if total_seconds >= 0 { '+' } else { '-' };
+    let absolute_seconds = total_seconds.unsigned_abs();
+    let hours = absolute_seconds / 3_600;
+    let minutes = (absolute_seconds % 3_600) / 60;
+    format!("UTC{sign}{hours:02}:{minutes:02}")
+}
+
+fn format_epoch_seconds_local_display(epoch_seconds: u64) -> Result<String> {
+    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+    let local = OffsetDateTime::from_unix_timestamp(epoch_seconds as i64)
+        .context("failed to build local display timestamp from epoch seconds")?
+        .to_offset(offset);
+    let hour_24 = local.hour();
+    let display_hour = match hour_24 % 12 {
+        0 => 12,
+        hour => hour,
+    };
+    let meridiem = if hour_24 < 12 { "AM" } else { "PM" };
+    Ok(format!(
+        "{} {} {} {}:{:02} {} {}",
+        local.day(),
+        month_name(local.month()),
+        local.year(),
+        display_hour,
+        local.minute(),
+        meridiem,
+        local_offset_label(offset)
+    ))
 }
 
 fn expires_at_from_now(expires_in_seconds: u64) -> Result<(String, u64)> {
@@ -3012,29 +3080,55 @@ fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn github_yolo_expiration_from(
+    created_at_epoch_seconds: u64,
+    active_ttl: Option<Duration>,
+) -> Result<(Option<String>, Option<u64>)> {
+    match active_ttl {
+        Some(active_ttl) => {
+            let expires_at_epoch_seconds = created_at_epoch_seconds
+                .checked_add(active_ttl.as_secs())
+                .ok_or_else(|| anyhow!("YOLO mode expiration overflowed"))?;
+            Ok((
+                Some(format_epoch_seconds_rfc3339(expires_at_epoch_seconds)?),
+                Some(expires_at_epoch_seconds),
+            ))
+        }
+        None => Ok((None, None)),
+    }
+}
+
 fn build_github_yolo_mode_record(
     repos: &[String],
     active_ttl: Option<Duration>,
 ) -> Result<GithubModeRecord> {
     let repos = normalize_github_repos(repos)?;
     let created_at_epoch_seconds = current_epoch_seconds()?;
+    build_github_yolo_mode_record_at(&repos, active_ttl, created_at_epoch_seconds)
+}
+
+fn build_github_yolo_mode_record_at(
+    repos: &[String],
+    active_ttl: Option<Duration>,
+    created_at_epoch_seconds: u64,
+) -> Result<GithubModeRecord> {
     let created_at = format_epoch_seconds_rfc3339(created_at_epoch_seconds)?;
-    let (expires_at, expires_at_epoch_seconds) = match active_ttl {
-        Some(active_ttl) => {
-            let expires_at_epoch_seconds = created_at_epoch_seconds
-                .checked_add(active_ttl.as_secs())
-                .ok_or_else(|| anyhow!("YOLO mode expiration overflowed"))?;
-            (
-                Some(format_epoch_seconds_rfc3339(expires_at_epoch_seconds)?),
-                Some(expires_at_epoch_seconds),
-            )
-        }
-        None => (None, None),
-    };
+    let (expires_at, expires_at_epoch_seconds) =
+        github_yolo_expiration_from(created_at_epoch_seconds, active_ttl)?;
+    let repo_grants = repos
+        .iter()
+        .map(|repo| GithubYoloRepoGrant {
+            repo: repo.clone(),
+            created_at: created_at.clone(),
+            expires_at: expires_at.clone(),
+            expires_at_epoch_seconds,
+        })
+        .collect();
     Ok(GithubModeRecord {
         mode: "yolo".to_string(),
         all_installed: repos.is_empty(),
-        repos,
+        repos: repos.to_vec(),
+        repo_grants,
         created_at,
         expires_at,
         expires_at_epoch_seconds,
@@ -3043,11 +3137,113 @@ fn build_github_yolo_mode_record(
     })
 }
 
-fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+fn github_yolo_repo_grant_expired(grant: &GithubYoloRepoGrant, now_epoch_seconds: u64) -> bool {
     matches!(
+        grant.expires_at_epoch_seconds,
+        Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+    )
+}
+
+fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    !github_mode_has_active_scope(record, now_epoch_seconds)
+}
+
+fn github_yolo_all_installed_active(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    if !record.all_installed {
+        return false;
+    }
+    !matches!(
         record.expires_at_epoch_seconds,
         Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
     )
+}
+
+fn github_yolo_active_repo_grants(
+    record: &GithubModeRecord,
+    now_epoch_seconds: u64,
+) -> Vec<GithubYoloRepoGrant> {
+    if !record.repo_grants.is_empty() {
+        return record
+            .repo_grants
+            .iter()
+            .filter(|grant| !github_yolo_repo_grant_expired(grant, now_epoch_seconds))
+            .cloned()
+            .collect();
+    }
+
+    if record.all_installed
+        || matches!(
+            record.expires_at_epoch_seconds,
+            Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+        )
+    {
+        return Vec::new();
+    }
+
+    record
+        .repos
+        .iter()
+        .map(|repo| GithubYoloRepoGrant {
+            repo: repo.clone(),
+            created_at: record.created_at.clone(),
+            expires_at: record.expires_at.clone(),
+            expires_at_epoch_seconds: record.expires_at_epoch_seconds,
+        })
+        .collect()
+}
+
+fn github_mode_has_active_scope(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    github_yolo_all_installed_active(record, now_epoch_seconds)
+        || !github_yolo_active_repo_grants(record, now_epoch_seconds).is_empty()
+}
+
+fn merge_github_yolo_mode_records(
+    existing: Option<GithubModeRecord>,
+    next: GithubModeRecord,
+    now_epoch_seconds: u64,
+) -> GithubModeRecord {
+    let mut merged = match existing {
+        Some(existing)
+            if existing.mode == "yolo" && !github_mode_expired(&existing, now_epoch_seconds) =>
+        {
+            existing
+        }
+        _ => return next,
+    };
+
+    let mut active_repo_grants = github_yolo_active_repo_grants(&merged, now_epoch_seconds);
+    for grant in next.repo_grants {
+        if let Some(existing_grant) = active_repo_grants
+            .iter_mut()
+            .find(|existing_grant| existing_grant.repo == grant.repo)
+        {
+            *existing_grant = grant;
+        } else {
+            active_repo_grants.push(grant);
+        }
+    }
+    active_repo_grants.sort_by(|left, right| left.repo.cmp(&right.repo));
+
+    if next.all_installed {
+        merged.all_installed = true;
+        merged.created_at = next.created_at;
+        merged.expires_at = next.expires_at;
+        merged.expires_at_epoch_seconds = next.expires_at_epoch_seconds;
+        merged.enabled_by = next.enabled_by;
+        merged.token_source = next.token_source;
+    } else if !github_yolo_all_installed_active(&merged, now_epoch_seconds) {
+        merged.all_installed = false;
+        merged.expires_at = None;
+        merged.expires_at_epoch_seconds = None;
+    }
+
+    merged.repo_grants = active_repo_grants;
+    merged.repos = merged
+        .repo_grants
+        .iter()
+        .map(|grant| grant.repo.clone())
+        .collect();
+    merged
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3190,12 +3386,78 @@ fn print_github_yolo_agent_git_status(status: &GithubYoloAgentGitStatus) {
     }
 }
 
+fn print_epoch_local_line(label: &str, epoch_seconds: Option<u64>) {
+    match epoch_seconds {
+        Some(epoch_seconds) => match format_epoch_seconds_local_display(epoch_seconds) {
+            Ok(local_display) => println!("{label}: {local_display}"),
+            Err(_) => println!("{label}: unavailable"),
+        },
+        None => println!("{label}: none"),
+    }
+}
+
+fn print_github_yolo_scope(record: &GithubModeRecord, now_epoch_seconds: u64) {
+    if github_yolo_all_installed_active(record, now_epoch_seconds) {
+        println!("scope: all-installed");
+        if let Some(expires_at) = record.expires_at.as_deref() {
+            println!("expires-at: {expires_at}");
+        } else {
+            println!("expires-at: none");
+        }
+        print_epoch_local_line("expires-at-local", record.expires_at_epoch_seconds);
+    }
+
+    let active_repo_grants = github_yolo_active_repo_grants(record, now_epoch_seconds);
+    if !active_repo_grants.is_empty() {
+        println!("scope: repo-allowlist");
+        for grant in active_repo_grants {
+            println!("repo: {}", grant.repo);
+            if let Some(expires_at) = grant.expires_at.as_deref() {
+                println!("repo-expires-at: {} {}", grant.repo, expires_at);
+            } else {
+                println!("repo-expires-at: {} none", grant.repo);
+            }
+            match grant.expires_at_epoch_seconds {
+                Some(epoch_seconds) => match format_epoch_seconds_local_display(epoch_seconds) {
+                    Ok(local_display) => {
+                        println!("repo-expires-at-local: {} {}", grant.repo, local_display)
+                    }
+                    Err(_) => println!("repo-expires-at-local: {} unavailable", grant.repo),
+                },
+                None => println!("repo-expires-at-local: {} none", grant.repo),
+            }
+        }
+    }
+}
+
 fn enable_github_yolo_mode(
     resolved: &ResolvedSprite,
     repos: &[String],
     active_ttl: Option<Duration>,
 ) -> Result<()> {
-    let record = build_github_yolo_mode_record(repos, active_ttl)?;
+    let next_record = build_github_yolo_mode_record(repos, active_ttl)?;
+    let existing_raw = run_sprite_exec(
+        &resolved.name,
+        resolved.org.as_deref(),
+        &[
+            "bash".to_string(),
+            "-lc".to_string(),
+            format!(
+                "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
+            ),
+        ],
+        &[],
+    )?;
+    let existing_record = if existing_raw.trim().is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_str(&existing_raw)
+                .context("failed to parse existing remote GitHub mode state")?,
+        )
+    };
+    let record =
+        merge_github_yolo_mode_records(existing_record, next_record, current_epoch_seconds()?);
     let raw =
         serde_json::to_string_pretty(&record).context("failed to encode GitHub mode state")?;
     let mut mode_file = NamedTempFile::new().context("failed to create GitHub mode temp file")?;
@@ -3229,14 +3491,7 @@ fn enable_github_yolo_mode(
     if let Some(org) = resolved.org.as_deref() {
         println!("org: {org}");
     }
-    if record.all_installed {
-        println!("scope: all-installed");
-    } else {
-        println!("scope: repo-allowlist");
-        for repo in &record.repos {
-            println!("repo: {repo}");
-        }
-    }
+    print_github_yolo_scope(&record, current_epoch_seconds()?);
     println!(
         "ttl: {}",
         if active_ttl.is_some() {
@@ -3245,9 +3500,6 @@ fn enable_github_yolo_mode(
             "disabled"
         }
     );
-    if let Some(expires_at) = record.expires_at.as_deref() {
-        println!("expires-at: {expires_at}");
-    }
     println!("token-exposure: none");
     print_github_yolo_agent_git_status(&agent_git_status);
     println!(
@@ -3307,12 +3559,14 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         println!("push-grants: separate");
         return Ok(());
     }
-    if github_mode_expired(&record, current_epoch_seconds()?) {
+    let now_epoch_seconds = current_epoch_seconds()?;
+    if github_mode_expired(&record, now_epoch_seconds) {
         println!("github-mode: default");
         println!("yolo-state: expired");
         if let Some(expires_at) = record.expires_at.as_deref() {
             println!("expired-at: {expires_at}");
         }
+        print_epoch_local_line("expired-at-local", record.expires_at_epoch_seconds);
         println!("direct-git-push: disabled");
         println!("push-grants: separate");
         return Ok(());
@@ -3321,19 +3575,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
     let agent_git_status = inspect_github_yolo_agent_git_status(resolved)?;
 
     println!("github-mode: yolo");
-    if record.all_installed {
-        println!("scope: all-installed");
-    } else {
-        println!("scope: repo-allowlist");
-        for repo in &record.repos {
-            println!("repo: {repo}");
-        }
-    }
-    if let Some(expires_at) = record.expires_at.as_deref() {
-        println!("expires-at: {expires_at}");
-    } else {
-        println!("expires-at: none");
-    }
+    print_github_yolo_scope(&record, now_epoch_seconds);
     println!("token-exposure: none");
     print_github_yolo_agent_git_status(&agent_git_status);
     println!(
@@ -5586,24 +5828,25 @@ mod tests {
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
         SystemctlAction, browser_open_attempts, build_certbot_args,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
-        build_journalctl_args, build_operator_upgrade_shell_args, build_process_status_lines,
-        build_publisher_status_lines, build_reader_status_lines, build_runtime_upgrade_shell_args,
-        build_sprite_api_args, build_sprite_services_status_lines, build_sprite_setup_script,
-        build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
-        certbot_cert_name, credential_host_is_github, credential_url_host, credential_url_path,
+        build_github_yolo_mode_record_at, build_journalctl_args, build_operator_upgrade_shell_args,
+        build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
+        build_runtime_upgrade_shell_args, build_sprite_api_args,
+        build_sprite_services_status_lines, build_sprite_setup_script, build_sprite_upgrade_script,
+        build_status_summary_lines, build_systemctl_args, certbot_cert_name,
+        credential_host_is_github, credential_url_host, credential_url_path,
         credential_url_protocol, ensure_http_listener_ready_for_start,
         expected_sprite_service_definitions, expected_zodex_agent_git_helper,
         generate_self_signed_certificate, git_credential_request_repo,
         git_credential_request_targets_github, github_mode_expired,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
-        load_matching_push_grant, load_push_grant_from_dir, normalize_github_repo,
-        normalize_github_repos, normalize_proxy_origin, operator_sprites_registry_path_from_home,
-        parse_git_credential_request, parse_github_yolo_agent_git_status, parse_push_grant_ttl,
-        parse_push_grants, parse_systemctl_show, process_log_path, process_pid_path,
-        proxy_mcp_status_looks_healthy, push_grant_expired, read_tail_lines,
-        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
-        resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, sprite_service_logs_api_path,
+        load_matching_push_grant, load_push_grant_from_dir, merge_github_yolo_mode_records,
+        normalize_github_repo, normalize_github_repos, normalize_proxy_origin,
+        operator_sprites_registry_path_from_home, parse_git_credential_request,
+        parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
+        parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
+        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
+        resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
+        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
@@ -6370,6 +6613,7 @@ mod tests {
         assert_eq!(record.mode, "yolo");
         assert!(record.all_installed);
         assert!(record.repos.is_empty());
+        assert!(record.repo_grants.is_empty());
         assert_eq!(record.token_source, "publisher-app-installation-token");
         assert!(record.expires_at.is_some());
         assert!(record.expires_at_epoch_seconds.is_some());
@@ -6388,8 +6632,22 @@ mod tests {
             record.repos,
             vec!["amxv/zodex".to_string(), "amxv/webctx".to_string()]
         );
+        assert_eq!(
+            record
+                .repo_grants
+                .iter()
+                .map(|grant| grant.repo.as_str())
+                .collect::<Vec<_>>(),
+            vec!["amxv/zodex", "amxv/webctx"]
+        );
         assert!(record.expires_at.is_none());
         assert!(record.expires_at_epoch_seconds.is_none());
+        assert!(
+            record
+                .repo_grants
+                .iter()
+                .all(|grant| grant.expires_at_epoch_seconds.is_none())
+        );
     }
 
     #[test]
@@ -6399,6 +6657,58 @@ mod tests {
 
         assert!(!github_mode_expired(&record, 999));
         assert!(github_mode_expired(&record, 1_000));
+    }
+
+    #[test]
+    fn yolo_repo_grants_merge_without_replacing_individual_ttls() {
+        let first = build_github_yolo_mode_record_at(
+            &["amxv/gooselake".to_string()],
+            Some(Duration::from_secs(7_200)),
+            1_000,
+        )
+        .expect("first record should build");
+        let second = build_github_yolo_mode_record_at(
+            &["amxv/agentbox".to_string()],
+            Some(Duration::from_secs(7_200)),
+            4_600,
+        )
+        .expect("second record should build");
+
+        let merged = merge_github_yolo_mode_records(Some(first), second, 4_600);
+
+        assert!(!merged.all_installed);
+        assert_eq!(
+            merged.repos,
+            vec!["amxv/agentbox".to_string(), "amxv/gooselake".to_string()]
+        );
+        assert_eq!(merged.repo_grants.len(), 2);
+        assert_eq!(merged.repo_grants[0].repo, "amxv/agentbox");
+        assert_eq!(merged.repo_grants[0].expires_at_epoch_seconds, Some(11_800));
+        assert_eq!(merged.repo_grants[1].repo, "amxv/gooselake");
+        assert_eq!(merged.repo_grants[1].expires_at_epoch_seconds, Some(8_200));
+    }
+
+    #[test]
+    fn yolo_repo_merge_prunes_expired_grants_and_refreshes_matching_repo() {
+        let first = build_github_yolo_mode_record_at(
+            &["amxv/gooselake".to_string(), "amxv/agentbox".to_string()],
+            Some(Duration::from_secs(100)),
+            1_000,
+        )
+        .expect("first record should build");
+        let refreshed = build_github_yolo_mode_record_at(
+            &["amxv/agentbox".to_string()],
+            Some(Duration::from_secs(7_200)),
+            1_200,
+        )
+        .expect("refreshed record should build");
+
+        let merged = merge_github_yolo_mode_records(Some(first), refreshed, 1_200);
+
+        assert_eq!(merged.repos, vec!["amxv/agentbox".to_string()]);
+        assert_eq!(merged.repo_grants.len(), 1);
+        assert_eq!(merged.repo_grants[0].repo, "amxv/agentbox");
+        assert_eq!(merged.repo_grants[0].expires_at_epoch_seconds, Some(8_400));
     }
 
     #[test]

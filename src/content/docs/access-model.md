@@ -88,7 +88,7 @@ zodex github mode yolo --sprite dev-sprite --repo owner/repo
 zodex github mode yolo --sprite dev-sprite --no-ttl
 ```
 
-`mode yolo` is operator-only. It defaults to a `2h` TTL and all installed repositories. Passing `--repo` narrows the scope to a repo allowlist. Passing `--no-ttl` makes the window indefinite until the operator returns to default mode.
+`mode yolo` is operator-only. It defaults to a `2h` TTL and all installed repositories. Passing `--repo` narrows the scope to a repo allowlist. Repo-scoped grants are merged per repo and expire independently according to the TTL used when that repo was granted. Passing `--no-ttl` makes the new window indefinite until the operator returns to default mode.
 
 Disable YOLO mode with:
 

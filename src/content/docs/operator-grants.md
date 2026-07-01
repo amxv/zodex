@@ -45,7 +45,7 @@ zodex github mode yolo --sprite dev-sprite --repo amxv/zodex --repo amxv/webctx
 zodex github mode yolo --sprite dev-sprite --no-ttl
 ```
 
-`mode yolo` defaults to a `2h` TTL and an all-installed-repos scope. Passing `--repo` changes the scope to a repo allowlist. Passing `--no-ttl` makes the window indefinite until the operator disables YOLO mode.
+`mode yolo` defaults to a `2h` TTL and an all-installed-repos scope. Passing `--repo` changes the scope to a repo allowlist. Repo-scoped YOLO commands merge with the active YOLO state instead of replacing other active repo grants, so each repo expires according to the TTL from the command that granted it. Passing `--no-ttl` makes the new window indefinite until the operator disables YOLO mode.
 
 The mode state stores no GitHub token. Direct push is enabled through the zodex-managed remote helper path, while publisher-app credentials remain isolated from the agent shell.
 
