@@ -1,9 +1,9 @@
 ---
 title: MCP tools
-description: Document the three MCP tools exposed by zodexd, their inputs, outputs, annotations, and expected usage patterns.
-order: 11
+description: Document the three ChatGPT-facing tools exposed by zodexd, their inputs, outputs, annotations, and expected usage patterns.
+order: 12
 category: Reference
-summary: "The exact remote tool surface: exec_command, write_stdin, and apply_patch."
+summary: "The exact ChatGPT-facing tool surface: exec_command, write_stdin, and apply_patch."
 ---
 
 ## Tool list
@@ -22,7 +22,9 @@ The MCP server instructions are:
 zodex remote execution tools
 ```
 
-No publisher or PR tool is exposed directly over MCP. GitHub push actions are intentionally routed through `zodex-agent` commands and active grants; `publish-pr` is exposed through `zodex-agent github publish-pr`; it routes branch publication and PR creation through the local publisher daemon without exposing a write token to MCP tools.
+This small surface is deliberate. It gives ChatGPT the primitives GPT models are already good at using: run a shell command, keep a long-running session alive, and apply a targeted patch.
+
+No publisher or PR tool is exposed directly over MCP. GitHub push actions are intentionally routed through normal shell commands plus `zodex-agent` commands and the selected write mode. `publish-pr` is exposed through `zodex-agent github publish-pr`; it routes branch publication and PR creation through the local publisher daemon without exposing a write token to MCP tools.
 
 ## Tool annotations
 
@@ -34,7 +36,7 @@ destructive_hint = false
 open_world_hint = false
 ```
 
-The annotations describe the MCP operation surface from the model/client perspective. They do not mean shell commands cannot modify files. A command like `rm` or a patch can still change the workspace. GitHub network writes remain controlled by the grant workflow.
+The annotations describe the MCP operation surface from the model/client perspective. They do not mean shell commands cannot modify files. A command like `rm` or a patch can still change the workspace. GitHub network writes remain controlled by the selected write mode.
 
 ## exec_command
 

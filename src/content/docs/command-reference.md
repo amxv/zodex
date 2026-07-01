@@ -1,7 +1,7 @@
 ---
 title: Command reference
 description: A complete command map for the operator CLI, Sprite commands, proxy commands, GitHub grant commands, agent helper, local service helpers, and direct HTTP client.
-order: 12
+order: 13
 category: Reference
 summary: The compact command index for day-to-day zodex operation.
 ---

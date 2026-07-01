@@ -7,28 +7,28 @@ const docs = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.
 
 const proofPoints = [
   {
-    title: "Real remote Linux workspaces",
-    body: "Run commands, interact with long-lived sessions, and apply patches inside a Sprite-backed environment instead of a simulated sandbox."
+    title: "Built for ChatGPT",
+    body: "zodex is designed around ChatGPT MCP sessions. The tool shape is intentionally familiar to GPT models: run commands, keep sessions alive, and apply patches."
   },
   {
-    title: "Read by default, write by approval",
-    body: "Agents can clone and inspect repos through a reader GitHub App, while push access stays temporary, repo-scoped, and explicit."
+    title: "Real Sprite workspaces",
+    body: "Give ChatGPT an actual Linux machine for clone-edit-test-commit loops without keeping a full VPS warm when no agent is working."
   },
   {
-    title: "Three focused MCP tools",
-    body: "The remote coding surface is intentionally small: exec_command, write_stdin, and apply_patch."
+    title: "Write autonomy by policy",
+    body: "Choose PR-only, push-on-request, operator-granted push, timed YOLO, repo-scoped YOLO, or no-TTL YOLO for trusted sessions."
   },
   {
-    title: "Operator-controlled deployment",
-    body: "Set up Sprites, inspect services, verify the proxy front door, grant pushes, revoke access, and upgrade the runtime from the operator CLI."
+    title: "Normal Git when trusted",
+    body: "Agents can publish PRs without direct shell write tokens, or use plain git push when the operator opens the right write window."
   }
 ];
 
-const workflows = [
-  "Give an agent a real machine for clone-edit-test-commit loops without handing it permanent GitHub write credentials.",
-  "Expose a Sprite-backed MCP endpoint through a proxy that normalizes /mcp and preserves streaming responses.",
-  "Request push access only when a commit is ready, then revoke the repo-scoped grant after push or PR creation.",
-  "Operate the runtime with explicit status, logs, sync, upgrade, proxy verification, and grant-management commands."
+const autonomyModes = [
+  "Start safe with read-only clone/fetch, local commits, and PR publishing through the publisher daemon.",
+  "Approve a one-off push from ChatGPT with a repo-scoped request-push grant and the default 30 minute TTL.",
+  "Grant write access remotely from the operator machine when the browser/device-flow approval should stay with the human.",
+  "Enable YOLO mode for a trusted session, scoped to selected repos or all installed repos, with a TTL or intentionally no TTL."
 ];
 ---
 
@@ -40,36 +40,37 @@ const workflows = [
 >
   <section class="hero shell">
     <div class="hero__copy">
-      <p class="section-label">Sprite-first remote coding runtime</p>
+      <p class="section-label">ChatGPT-native remote coding workspace</p>
       <h1>
-        Let coding agents work on a real remote machine without giving them standing GitHub write access.
+        Give ChatGPT a real Linux coding machine, then choose exactly how much it can push.
       </h1>
       <p class="hero__lede">
-        zodex runs a focused MCP coding runtime on Sprites.dev. Agents get terminal execution,
-        session interaction, and patch application, while GitHub write access stays off until
-        an operator or agent activates a temporary repo-scoped push grant.
+        zodex runs a Sprite-backed MCP runtime built for ChatGPT coding sessions. GPT models get
+        a familiar command, stdin, and patch surface, while operators keep control over GitHub
+        writes: PR-only, push-on-approval, or scoped YOLO for trusted work.
       </p>
       <p class="hero__annotation">
-        The model is simple: read access is always available through a reader app, edits and tests
-        happen on the Sprite, pushes require an explicit grant, and revoke is part of the workflow.
+        The default path is safe. ChatGPT can clone, edit, test, and commit on the Sprite before
+        any GitHub write window exists. When speed matters, the operator can open direct push for
+        one repo, several repos, or all installed repos for a bounded duration or indefinitely.
       </p>
       <div class="hero__actions">
-        <a class="button button--solid" href="/docs/quickstart">Start with the quickstart</a>
-        <a class="button button--ghost" href="/docs">Browse the docs</a>
+        <a class="button button--solid" href="/docs/quickstart">Connect ChatGPT</a>
+        <a class="button button--ghost" href="/docs/write-modes">Compare write modes</a>
       </div>
     </div>
     <aside class="hero__panel">
-      <p class="hero__panel-label">Agent tool surface</p>
+      <p class="hero__panel-label">Operator control</p>
       <ul class="hero__signal-list">
-        <li>Run shell commands in the Sprite workspace.</li>
-        <li>Continue interactive sessions with stdin writes.</li>
-        <li>Apply targeted patches without broad file rewrites.</li>
+        <li>Expose `/mcp?key=...` to ChatGPT.</li>
+        <li>Run GPT-friendly command/stdin/patch tools.</li>
+        <li>Pick PR-only, approved push, or YOLO mode.</li>
       </ul>
       <div class="hero__terminal">
-        <span>$ zodex sprite status --sprite dev</span>
-        <span>$ zodex proxy verify-origin --sprite dev</span>
+        <span>$ zodex sprite setup --sprite dev --repo amxv/zodex</span>
+        <span>$ zodex-agent github publish-pr --repo amxv/zodex</span>
         <span>$ zodex-agent github request-push --repo amxv/zodex</span>
-        <span>$ zodex-agent github revoke-push --repo amxv/zodex</span>
+        <span>$ zodex github mode yolo --sprite dev --repo amxv/zodex --ttl 4h</span>
       </div>
     </aside>
   </section>
@@ -77,11 +78,12 @@ const workflows = [
   <section class="shell section-grid">
     <div class="section-heading">
       <p class="section-label">Why it exists</p>
-      <h2>A remote coding runtime with a sharper permission boundary.</h2>
+      <h2>ChatGPT is better at coding when it gets the kind of tools it already knows.</h2>
       <p>
-        Agentic coding needs a real machine, real Git history, and real tests. It does not need
-        permanent write credentials. zodex separates the productive coding environment from the
-        moment when writes are intentionally authorized.
+        zodex gives ChatGPT the same basic primitives GPT coding workflows rely on: run a shell
+        command, continue an interactive process, and apply a targeted patch. The difference is that
+        those tools operate on a real Sprite workspace with real Git history, real tests, and real
+        service processes.
       </p>
     </div>
     <div class="proof-grid">
@@ -96,11 +98,11 @@ const workflows = [
 
   <section class="shell split-section">
     <div>
-      <p class="section-label">Built for</p>
-      <h2>Operators who want agents to code freely and push deliberately.</h2>
+      <p class="section-label">Autonomy ladder</p>
+      <h2>Start with review. Open direct push only when the session deserves it.</h2>
     </div>
     <div class="stack-list">
-      {workflows.map((item) => (
+      {autonomyModes.map((item) => (
         <article class="stack-list__item">
           <p>{item}</p>
         </article>
@@ -111,24 +113,32 @@ const workflows = [
   <section class="shell capability-band">
     <div class="capability-band__intro">
       <p class="section-label">Runtime pieces</p>
-      <h2>Operator CLI, Sprite services, MCP daemon, and agent-side GitHub helper.</h2>
+      <h2>ChatGPT front door, Sprite workspace, MCP daemon, GitHub apps, and operator CLI.</h2>
     </div>
     <div class="capability-band__grid">
       <div>
-        <p class="capability-title">zodex</p>
-        <p>Operator CLI for Sprite setup, status, logs, sync, upgrades, proxy checks, and remote grants.</p>
+        <p class="capability-title">ChatGPT MCP</p>
+        <p>Connect ChatGPT to a stable `/mcp?key=...` URL and give it the three-tool coding surface it handles well.</p>
+      </div>
+      <div>
+        <p class="capability-title">Sprites.dev</p>
+        <p>Spin up a remote Linux environment for agent work instead of paying for always-idle VPS capacity.</p>
       </div>
       <div>
         <p class="capability-title">zodexd</p>
-        <p>Sprite-side MCP daemon that exposes command execution, stdin writes, and patch application.</p>
+        <p>Sprite-side MCP daemon for command execution, interactive stdin writes, patch application, health, and HTTP routes.</p>
       </div>
       <div>
         <p class="capability-title">zodex-agent</p>
-        <p>Guest-side helper for push grants, PR creation, grant listing, revocation, and MCP URL hints.</p>
+        <p>Guest-side helper for PR publishing, request-push grants, grant listing, revocation, and MCP URL hints.</p>
+      </div>
+      <div>
+        <p class="capability-title">zodex</p>
+        <p>Operator CLI for Sprite setup, upgrades, logs, proxy checks, remote grants, and scoped YOLO mode.</p>
       </div>
       <div>
         <p class="capability-title">GitHub Apps</p>
-        <p>Reader app for default clone/fetch access and push-grant app for temporary repo-scoped writes.</p>
+        <p>Reader and writer apps separate always-on read access from PR publishing and direct-push policy.</p>
       </div>
     </div>
   </section>
@@ -136,10 +146,11 @@ const workflows = [
   <section class="shell docs-teaser">
     <div class="section-heading">
       <p class="section-label">Docs map</p>
-      <h2>Start with the runtime model, then wire setup, grants, proxy, and operations.</h2>
+      <h2>Connect ChatGPT first, then choose the right write mode for each repo.</h2>
       <p>
-        The docs follow the way zodex is operated: install the Sprite runtime, understand the access
-        boundary, expose the MCP front door, grant writes only when needed, and keep the services healthy.
+        The docs follow the real operating path: install zodex, connect ChatGPT to the Sprite MCP
+        front door, understand the write modes, configure GitHub Apps, operate the Sprite services,
+        and troubleshoot grants, YOLO mode, proxy routing, and command execution.
       </p>
     </div>
     <div class="docs-teaser__grid">
@@ -154,8 +165,8 @@ const workflows = [
   </section>
   <section class="shell closing-note">
     <p>
-      Use zodex when an agent should have the power of a remote machine, the safety of read-first GitHub access,
-      and a push path that stays explicit every time.
+      zodex is for ChatGPT coding sessions that need a real machine, normal Git, and an operator-controlled
+      path from careful PR review to trusted YOLO pushes.
     </p>
   </section>
 </BaseLayout>

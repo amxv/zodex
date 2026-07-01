@@ -1,7 +1,7 @@
 ---
 title: Development and release checks
 description: Build, test, inspect, and release the Rust runtime and the embedded Astro documentation site.
-order: 14
+order: 15
 category: Reference
 summary: Commands maintainers should run before changing runtime behavior, CLI behavior, scripts, or docs.
 ---

@@ -1,12 +1,12 @@
 ---
 title: Troubleshooting
-description: Diagnose setup failures, MCP connection issues, push-grant problems, stale credentials, Sprite service failures, TLS errors, and proxy routing issues.
-order: 13
+description: Diagnose ChatGPT connection issues, setup failures, push-grant problems, YOLO mode mismatches, stale credentials, Sprite service failures, TLS errors, and proxy routing issues.
+order: 14
 category: Reference
 summary: Practical failure modes and the commands that usually identify the cause.
 ---
 
-## MCP client cannot connect
+## ChatGPT cannot connect
 
 Check the public route first:
 
@@ -85,8 +85,8 @@ Then check:
 - grant repo matches the push target
 - grant has not expired
 - branch protection allows the intended push
-- the push-grant app is installed on the repository
-- the push-grant app has `Contents: Read & write`
+- the writer app is installed on the repository
+- the writer app has `Contents: Read & write`
 - the operator approved the GitHub device-flow code
 
 Refresh the grant when needed:
@@ -104,17 +104,30 @@ git status
 zodex-agent github publish-pr --repo amxv/zodex --title "Improve docs" --base main
 ```
 
-Also verify the publisher app has `Contents: Read & write` and `Pull requests: Read & write`, the publisher daemon is running, and the repo is listed in `publisher_targets`.
+Also verify the writer app has `Contents: Read & write` and `Pull requests: Read & write`, the publisher daemon is running, and the repo is listed in `publisher_targets`.
 
-## GitHub mode status does not match expected access
+## YOLO is enabled but direct push fails
 
-Check mode state from the operator machine:
+Check YOLO mode state from the operator machine:
 
 ```bash
 zodex github mode status --sprite dev-sprite
 ```
 
-`mode yolo` records an operator-only write window. Explicit `request-push` grants and `publish-pr` continue to work independently. Normal direct pushes through YOLO still require the token-isolated push proxy integration; do not make the Git credential helper return publisher-app tokens to debug this.
+Then check:
+
+- the mode has not expired
+- the pushed repo is inside the YOLO scope
+- the writer app is installed on that repo
+- branch protection allows the intended direct push
+- the agent Git helper status printed by `mode status` is healthy
+- explicit push grants are not being confused with YOLO state
+
+If the session should no longer be trusted, return to default mode:
+
+```bash
+zodex github mode default --sprite dev-sprite
+```
 
 ## Runtime service cannot start
 
@@ -143,8 +156,8 @@ Check:
 Stop and fix the environment before continuing when:
 
 - reader app has permissions beyond `Contents: Read-only`
-- push-grant app is installed too broadly
-- push-grant app has broader permissions than `Contents` and `Pull requests`
+- writer app is installed too broadly
+- writer app has broader permissions than `Contents` and `Pull requests`
 - `zodexd` cannot bind after setup
 - token minting or installation validation fails
 - the agent is running as root

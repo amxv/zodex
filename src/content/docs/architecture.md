@@ -1,9 +1,9 @@
 ---
 title: Runtime architecture
-description: Understand how the operator CLI, Sprite services, MCP server, HTTP API, agent helper, and publisher daemon fit together.
-order: 2
+description: Understand how ChatGPT, the operator CLI, Sprite services, server routes, HTTP API, agent helper, GitHub Apps, and publisher daemon fit together.
+order: 3
 category: Architecture
-summary: The component map for the Rust binaries and services that make zodex work.
+summary: The component map for the Rust binaries and services that make ChatGPT-backed zodex work.
 ---
 
 ## Component overview
@@ -19,6 +19,18 @@ zodex-prd     internal push-grant support daemon
 ```
 
 The operator machine uses `zodex`. The Sprite guest uses `zodex-agent`, `zodexd`, and `zodex-prd`. The `zodex-client` binary exists for direct HTTP API testing and automation.
+
+## ChatGPT-first tool shape
+
+zodex is designed for ChatGPT coding sessions. The exposed tool surface is intentionally small and familiar:
+
+```text
+exec_command  -> run a shell command
+write_stdin   -> poll or continue an interactive session
+apply_patch   -> apply a targeted patch
+```
+
+That shape matches the command/stdin/patch workflow GPT models already handle well. GitHub write operations are not exposed as separate remote tools. ChatGPT uses normal shell Git commands, and zodex decides whether credentials are available for the selected repo and write mode.
 
 ## Operator CLI
 
@@ -60,15 +72,21 @@ The agent helper can request and revoke direct-push grants, publish PRs through 
 
 ## Service flow
 
-A normal coding session looks like this:
+A normal ChatGPT coding session looks like this:
 
-1. MCP client connects to the proxy-backed `/mcp` route.
+1. ChatGPT connects to the proxy-backed `/mcp?key=...` route.
 2. `zodexd` authenticates the `key` query parameter.
-3. The agent runs shell commands through `exec_command`.
+3. ChatGPT runs shell commands through `exec_command`.
 4. Long-running commands return a `session_handle`.
-5. The agent polls or writes stdin through `write_stdin`.
+5. ChatGPT polls or writes stdin through `write_stdin`.
 6. File edits are applied through shell commands or `apply_patch`.
 7. Git clone and fetch use reader-backed access.
-8. Git push uses a temporary grant only after `request-push` or `grant-push` succeeds.
+8. Work returns to GitHub through PR-only publishing, a push grant, or operator YOLO mode.
 
 The design keeps code execution powerful while making GitHub writes explicit and time-bound.
+
+## Why Sprites fit this model
+
+A ChatGPT coding session often happens in bursts: clone, inspect, run checks, patch, wait for feedback, then continue later. Sprites fit that pattern better than an always-on VPS because the workspace can be provisioned for remote work without treating idle time as the default operating mode.
+
+zodex keeps the Sprite-specific operations in the operator CLI so ChatGPT can focus on the coding loop instead of infrastructure setup.

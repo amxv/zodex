@@ -1,8 +1,24 @@
-# zodex Setup
+---
+title: Quickstart
+description: "Set up zodex for ChatGPT: install the operator CLI, create a Sprite, install the guest runtime, expose the MCP URL, add it to ChatGPT, and choose a GitHub write mode."
+order: 1
+category: Start
+summary: A no-clone path for installing zodex end to end and connecting ChatGPT to a real Sprite-backed coding workspace.
+---
 
-This is the canonical setup document for an agent running on a user's local machine. The goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime on that Sprite, expose the MCP URL, add it to ChatGPT, and verify that GitHub reads and controlled writes work.
+This is the canonical setup document for a local operator or agent helping a user connect ChatGPT to zodex. The goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime, expose the MCP URL, add it to ChatGPT, and verify GitHub reads plus the selected write mode.
 
-For this project's own deployment and release paths, the canonical repository slug is `amxv/zodex`. The public Git URL is `https://github.com/amxv/zodex.git`; substitute `--repo amxv/zodex` into the setup and grant examples when operating this repository itself.
+For this project's own deployment and release paths, the canonical repository slug is `amxv/zodex`. The public Git URL is `https://github.com/amxv/zodex.git`; substitute `--repo amxv/zodex` into setup, PR, grant, and YOLO examples when operating this repository itself.
+
+## What you are setting up
+
+You are setting up three layers:
+
+1. a Sprite-backed Linux workspace where ChatGPT can run commands, keep sessions alive, edit files, test, and commit
+2. a ChatGPT MCP front door at `/mcp?key=...`
+3. a GitHub write policy: PR-only, one-off push approval, remote operator grant, or scoped YOLO mode
+
+Sprites are a good fit for ChatGPT coding sessions because they give agents a real remote machine without requiring a month-long always-on VPS for work that may happen in bursts.
 
 ## Outcome
 
@@ -14,8 +30,8 @@ When setup is complete:
 - the Sprite HTTP URL exposes `/health` and `/mcp`
 - ChatGPT has a connector/app pointed at the zodex `/mcp?key=...` URL
 - the runtime has read-only GitHub access through a reader app
-- the agent can publish PRs through the publisher daemon without direct shell token exposure
-- direct `git push` is available only through temporary repo-scoped direct push access grants
+- ChatGPT can publish PRs through the publisher daemon without direct shell token exposure
+- direct `git push` is available only through the write mode the operator chooses
 
 ## 1. Install the local operator CLI
 
@@ -96,9 +112,9 @@ reader_private_key_pem_path
 
 The `zodex sprite setup` command resolves the reader installation ID automatically from the repo slug and app key.
 
-### Publisher / push-grant app
+### Writer app
 
-Use this for PR publishing and temporary direct-push grants.
+Use this for PR publishing, one-off push grants, and YOLO-backed direct push policy.
 
 Required settings:
 
@@ -136,8 +152,8 @@ zodex sprite setup \
   --repo owner/repo \
   --reader-app-id <reader-app-id> \
   --reader-pem /absolute/path/to/reader.pem \
-  --publisher-app-id <publisher-app-id> \
-  --publisher-pem /absolute/path/to/publisher.pem \
+  --publisher-app-id <writer-app-id> \
+  --publisher-pem /absolute/path/to/writer.pem \
   --default-base main \
   --url-auth sprite
 ```
@@ -215,9 +231,9 @@ https://<sprite-host>/mcp?key=<zodex-api-key>
 
 In ChatGPT, go to Settings → Connectors / Apps, create a new connector/app, paste the full HTTPS `/mcp?key=...` URL, and choose **No authentication**. The key is already in the URL query parameter.
 
-## 7. First agent workflow
+## 7. First ChatGPT coding workflow
 
-Inside ChatGPT with the zodex MCP connector enabled, the agent can use the three zodex MCP tools:
+Inside ChatGPT with the zodex MCP connector enabled, the model gets three tools:
 
 ```text
 exec_command
@@ -239,7 +255,9 @@ git commit -m "Describe the change"
 
 This verifies plain `git clone https://github.com/amxv/zodex.git` works through the reader app before any write path is used.
 
-Preferred PR path after committing locally:
+## 8. Choose a write mode
+
+Review-first PR path:
 
 ```bash
 zodex-agent github publish-pr \
@@ -249,18 +267,13 @@ zodex-agent github publish-pr \
   --body "Summary and tests."
 ```
 
-Direct push path when explicitly approved:
+One-off direct push from inside ChatGPT:
 
 ```bash
 zodex-agent github request-push --repo owner/repo
 # agent pushes normally with git push
 zodex-agent github revoke-push --repo owner/repo
-zodex-agent github revoke-push --repo owner/repo --forget-local-auth
 ```
-
-`request-push` opens the GitHub verification URL automatically for interactive approval.
-
-The default active grant TTL is `30m`. Change it with `--ttl <duration>`, disable it with `--no-ttl`, and opt into refresh-token caching with `--cache-refresh-token` only when intended. By default, `request-push` does not persist refresh-token state. Expired grants stop working in the credential-helper path even if a stale grant file remains.
 
 Remote operator grant alternative:
 
@@ -268,6 +281,18 @@ Remote operator grant alternative:
 zodex github grant-push --sprite zodex-dev --repo owner/repo
 zodex github revoke-push --sprite zodex-dev --repo owner/repo
 ```
+
+Trusted YOLO session:
+
+```bash
+zodex github mode yolo --sprite zodex-dev --repo owner/repo --ttl 4h
+zodex github mode status --sprite zodex-dev
+zodex github mode default --sprite zodex-dev
+```
+
+`request-push` defaults to a `30m` TTL. `mode yolo` defaults to a `2h` TTL and all installed repositories unless one or more `--repo` entries are provided. Both flows can use `--no-ttl` when the operator intentionally wants an indefinite window.
+
+For a full comparison, see [Write modes](/docs/write-modes).
 
 ## Day-to-day commands
 
@@ -278,6 +303,7 @@ zodex sprite sync --sprite zodex-dev --force-recreate
 zodex sprite upgrade --sprite zodex-dev
 zodex-agent github list-grants
 zodex-agent github publish-pr --repo owner/repo --title "Title"
+zodex github mode status --sprite zodex-dev
 ```
 
 ## Migration notes
@@ -294,7 +320,7 @@ If you are migrating an older pre-`zodex` Sprite rather than doing a clean insta
 Stop and ask the user before continuing if:
 
 - the reader app has permissions beyond `Contents: Read-only`
-- the publisher / push-grant app has permissions beyond `Contents: Read & write` and `Pull requests: Read & write`
+- the writer app has permissions beyond `Contents: Read & write` and `Pull requests: Read & write`
 - either app is installed on more repositories than intended
 - `zodexd` cannot bind after setup
 - token minting validation fails

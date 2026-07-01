@@ -1,7 +1,7 @@
 ---
 title: Configuration
 description: Configure bind addresses, TLS, API keys, workspace defaults, session limits, GitHub App credentials, publisher settings, and grant behavior.
-order: 3
+order: 4
 category: Architecture
 summary: The `/etc/zodex/config.toml` fields that control the daemon, tools, GitHub access, and publisher service.
 ---

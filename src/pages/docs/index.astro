@@ -1,7 +1,6 @@
 ---
 import { getCollection } from "astro:content";
 import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
-import DocsPageActions from "zuedocs/components/DocsPageActions.astro";
 import { docCategories, primaryNav, siteConfig } from "../../data/docs";
 
 const entries = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
@@ -13,7 +12,7 @@ const grouped = docCategories.map((category) => ({
 
 <BaseLayout
   title={`${siteConfig.name} Docs`}
-  description="Read zodex guides for Sprite setup, MCP runtime architecture, GitHub App access, temporary push grants, proxy operations, service health, and command reference."
+  description="Read zodex guides for connecting ChatGPT to a Sprite-backed MCP coding workspace, choosing GitHub write modes, operating the runtime, and troubleshooting grants, YOLO mode, proxy routing, and tools."
   siteConfig={siteConfig}
   primaryNav={primaryNav}
 >
@@ -21,14 +20,13 @@ const grouped = docCategories.map((category) => ({
     <div class="docs-index-hero__head">
       <div>
         <p class="section-label">Documentation</p>
-        <h1>Operate a remote coding runtime where reads are default and writes are granted on purpose.</h1>
+        <h1>Connect ChatGPT to a real coding machine and choose the right GitHub write policy.</h1>
       </div>
-      <DocsPageActions />
     </div>
     <p>
-      These guides explain the zodex runtime from the operator and agent perspectives:
-      Sprite setup, MCP exposure, GitHub App boundaries, request-push flows, PR creation,
-      grant revocation, proxy verification, service logs, upgrades, and local docs maintenance.
+      These guides explain zodex from the ChatGPT and operator perspectives: Sprite setup, MCP exposure,
+      GPT-friendly tools, PR-only publishing, request-push grants, operator-side grants, scoped YOLO mode,
+      GitHub App boundaries, proxy verification, service logs, upgrades, and local docs maintenance.
     </p>
   </section>
   <section class="shell docs-index">

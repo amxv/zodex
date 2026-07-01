@@ -1,7 +1,7 @@
 ---
 title: Proxy and MCP front door
 description: Expose the Sprite-hosted zodexd server through a proxy-backed MCP URL that normalizes paths, warms cold Sprites, retries edge failures, and preserves streaming responses.
-order: 8
+order: 9
 category: Operations
 summary: How zodex serves `/mcp`, `/health`, and direct HTTP routes through the Sprite origin and Cloudflare Worker proxy.
 ---

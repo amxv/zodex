@@ -1,7 +1,7 @@
 ---
 title: Docs site maintenance
 description: Run, edit, validate, and deploy the Astro documentation site that lives inside the zodex repository.
-order: 15
+order: 16
 category: Reference
 summary: Developer notes for maintaining the embedded Astro docs app alongside the Rust runtime.
 ---

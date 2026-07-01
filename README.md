@@ -1,112 +1,142 @@
 # zodex
 
-`zodex` is a Sprite-first remote coding runtime plus operator CLI.
+`zodex` is a ChatGPT-native remote coding workspace.
 
-It gives a coding agent three remote tools:
+It gives ChatGPT a real Sprite-backed Linux machine and a tiny MCP tool surface that GPT models already know how to use well:
 
 - `exec_command`
 - `write_stdin`
 - `apply_patch`
 
-The product model is:
+ChatGPT can clone repos, inspect code, edit files, run tests, keep long-lived sessions alive, and commit locally. The operator decides how GitHub writes happen:
 
-- read-only GitHub access is always available through a reader app
-- the agent can inspect, edit, test, and commit without GitHub write access
-- write access is off by default
-- the operator grants temporary repo-scoped push access only when a push is intended
-- the default Sprite-side push path uses GitHub App user access tokens obtained with device flow on the Sprite
-- the operator revokes that access after the push
-
-`zodex` is designed for Sprites.dev and assumes a proxy-backed public MCP front door.
+- PR-only publishing without direct shell write tokens
+- one-off repo-scoped push approval from the Sprite
+- remote operator-granted push windows
+- timed YOLO mode for trusted sessions
+- repo-scoped YOLO for selected repos
+- no-TTL YOLO for intentionally trusted environments
 
 The supported repository slug for this project is `amxv/zodex`.
 
-## Why It Exists
+## Why it exists
 
-`zodex` is for the case where you want a coding agent to work inside a real remote Linux environment without handing it permanent GitHub write credentials.
+ChatGPT coding works best when the model has familiar tools and a real machine. zodex gives it both:
 
-That is enough for the normal coding loop:
+1. a Sprite Linux workspace instead of a simulated sandbox
+2. command/stdin/patch tools that fit GPT coding behavior
+3. normal Git history and normal test commands
+4. operator-controlled GitHub write autonomy
 
-1. clone and inspect a repo
-2. edit code and rerun checks
-3. commit locally
-4. grant push access briefly
-5. push normally with `git push`
-6. revoke write access again
+Sprites are a good fit for this because coding-agent work is bursty. You can run real remote work when ChatGPT is active instead of renting an always-on VPS for a full month and leaving it idle most of the time.
 
-## Supported Workflow
+## Write modes
 
-1. Set up the two GitHub Apps once:
-   - a read-only reader app
-   - a publisher / push-grant app with `Contents: write`, PR write, and device flow enabled
-2. Install `zodex` on a Sprite.
-3. Point MCP clients at the proxy-backed public URL.
-4. Let the agent clone, inspect, edit, test, and commit.
-5. After committing locally, publish a generated branch and open a PR without `gh` or a direct push grant:
+Start safe, then open more autonomy when the session earns it.
+
+### Review-first PR
 
 ```bash
 zodex-agent github publish-pr \
-  --repo <owner/repo> \
+  --repo owner/repo \
   --title "Title" \
   --base main \
-  --body "Optional description"
+  --body "Summary and tests."
 ```
 
-`publish-pr` bundles the current committed `HEAD`, sends it to the local publisher daemon, and lets that daemon mint a short-lived publisher-app token. The daemon pushes only a generated branch using the configured branch prefix, opens the PR, and never exposes the write token to the agent shell.
+`publish-pr` bundles the current committed `HEAD`, sends it to the local publisher daemon, and lets that daemon push a generated branch and open a PR. The writer-app token stays inside `zodex-prd` instead of being exposed to the agent shell.
 
-Direct `git push` remains available only when an operator intentionally starts a temporary repo-scoped grant:
+### One-off push approval
 
 ```bash
-zodex-agent github request-push --repo <owner/repo>
-zodex-agent github revoke-push --repo <owner/repo>
+zodex-agent github request-push --repo owner/repo
+# then normal Git works
+git push origin main
+zodex-agent github revoke-push --repo owner/repo
 ```
 
-The default active grant TTL is `30m`. Disable the TTL with `--no-ttl`, change it with `--ttl 2h`, and opt into refresh-token caching with `--cache-refresh-token`.
+The default active grant TTL is `30m`. Change it with `--ttl 2h`, disable TTL enforcement with `--no-ttl`, and opt into refresh-token caching with `--cache-refresh-token` only when intended.
 
-When an operator wants to activate a grant remotely from their own machine instead, run:
+### Operator-granted push
 
 ```bash
-zodex github grant-push --sprite <sprite> --repo <owner/repo>
+zodex github grant-push --sprite dev-sprite --repo owner/repo
+git push origin main
+zodex github revoke-push --sprite dev-sprite --repo owner/repo
 ```
 
-If the push-grant app client ID is not present in config, pass it directly:
+Use this when the human operator should open the write window from their own machine.
+
+### YOLO mode
 
 ```bash
-zodex github grant-push \
-  --sprite <sprite> \
-  --repo <owner/repo> \
-  --publisher-client-id <push-grant-app-client-id>
+zodex github mode yolo --sprite dev-sprite
+zodex github mode yolo --sprite dev-sprite --ttl 4h
+zodex github mode yolo --sprite dev-sprite --repo owner/repo
+zodex github mode yolo --sprite dev-sprite --no-ttl
+zodex github mode status --sprite dev-sprite
+zodex github mode default --sprite dev-sprite
 ```
 
-Then revoke the remote grant:
+`mode yolo` defaults to a `2h` TTL and all installed repositories. Passing `--repo` changes the scope to a repo allowlist. Passing `--no-ttl` makes the window indefinite until the operator disables it. `mode default` removes only YOLO state and leaves explicit push grants alone.
+
+## Quick setup shape
+
+See the Quickstart for the no-clone installer path. The setup flow is:
+
+1. install the local `zodex` operator CLI
+2. install and authenticate the Sprite CLI
+3. create and select a Sprite
+4. make the Sprite URL public for ChatGPT MCP access
+5. create the reader and writer GitHub Apps
+6. run `zodex sprite setup`
+7. connect ChatGPT to the `/mcp?key=...` URL
+
+Create two GitHub Apps:
+
+- reader app: `Contents: Read-only`
+- writer app: `Contents: Read & write`, `Pull requests: Read & write`, Device Flow enabled, user access token expiration enabled
+
+Install zodex on the Sprite:
 
 ```bash
-zodex github revoke-push --sprite <sprite> --repo <owner/repo>
+zodex sprite setup \
+  --sprite zodex-dev \
+  --repo owner/repo \
+  --reader-app-id <reader-app-id> \
+  --reader-pem /absolute/path/to/reader.pem \
+  --publisher-app-id <writer-app-id> \
+  --publisher-pem /absolute/path/to/writer.pem \
+  --default-base main \
+  --url-auth sprite
 ```
 
-That temporary repo-scoped grant flow is the supported write path.
-`zodex-agent github request-push` and `zodex github grant-push` both use the GitHub App device-flow path.
-By default, `request-push` does not persist refresh-token state and writes a repo-scoped local grant that expires after `30m`.
+Connect ChatGPT to:
 
-Operator-controlled GitHub mode is separate from repo-scoped push grants:
+```text
+https://<sprite-host>/mcp?key=<zodex-api-key>
+```
+
+## Core commands
 
 ```bash
-zodex github mode yolo --sprite <sprite>
-zodex github mode yolo --sprite <sprite> --ttl 4h
-zodex github mode yolo --sprite <sprite> --repo amxv/zodex
-zodex github mode default --sprite <sprite>
-zodex github mode status --sprite <sprite>
+zodex sprite status --sprite zodex-dev
+zodex sprite logs --sprite zodex-dev --service zodexd --lines 100
+zodex sprite sync --sprite zodex-dev --force-recreate
+zodex sprite upgrade --sprite zodex-dev
+zodex proxy inspect --sprite zodex-dev
+zodex proxy verify-origin --sprite zodex-dev
+zodex-agent github publish-pr --repo owner/repo --title "Title"
+zodex-agent github request-push --repo owner/repo
+zodex github grant-push --sprite zodex-dev --repo owner/repo
+zodex github mode yolo --sprite zodex-dev --repo owner/repo --ttl 4h
+zodex github mode default --sprite zodex-dev
+zodex-agent show-url --host <public-host>
 ```
 
-`mode yolo` records an operator-only direct-push window on the Sprite with a default `2h` TTL and an all-installed-repos scope unless `--repo` is provided. The mode state contains no GitHub token. `mode default` removes only the YOLO state and leaves explicit push grants unchanged. Direct push through YOLO still requires the token-isolated push proxy integration; zodex intentionally does not expose publisher tokens through the Git credential helper.
-Expired grants stop working in the credential-helper path even if a stale grant file still exists.
-By default, `revoke-push` removes the active repo grant and keeps the local device-flow refresh state so the remote operator path usually avoids a full reauth on the next grant.
-If you want to fully forget the local cached auth state too, add `--forget-local-auth`.
+## Documentation site
 
-
-## Documentation Site
-
-This repository includes an Astro documentation site for zodex. It covers the Sprite runtime architecture, GitHub App access model, setup flow, temporary push grants, proxy and MCP front door, direct HTTP API, command reference, troubleshooting, and docs maintenance.
+This repository includes an Astro documentation site for zodex. It covers ChatGPT setup, Sprite runtime architecture, GitHub App access, write modes, proxy and MCP front door, direct HTTP API, command reference, troubleshooting, and docs maintenance.
 
 Run it locally with:
 
@@ -131,63 +161,3 @@ bun run deploy:docs
 Production routing keeps `zodex.ashray.xyz` on the existing Cloudflare proxy worker. That worker forwards `/mcp`, `/mcp/*`, and `/health` to the live Sprite and sends all other paths to the `zodex-docs` worker origin.
 
 The Astro docs content lives in `src/content/docs`, with site-wide navigation and metadata in `src/data/docs.ts`.
-
-## Setup
-
-The one canonical setup document is [docs/setup.md](docs/setup.md).
-
-The install path is the Rust operator CLI:
-
-```bash
-zodex sprite setup \
-  --sprite <sprite> \
-  --repo amxv/zodex \
-  --reader-app-id <reader-app-id> \
-  --reader-pem /absolute/path/to/reader.pem \
-  --publisher-app-id <push-grant-app-id> \
-  --publisher-pem /absolute/path/to/push-grant-app.pem \
-  --url-auth sprite
-```
-
-For day-to-day push grants, set `publisher_client_id` in `/etc/zodex/config.toml` or export `ZODEX_PUBLISHER_CLIENT_ID` in the environment where you run the command.
-The publisher app key remains available for the internal `zodex-prd` publish flow.
-After setup, the Sprite guest keeps `zodex-agent`, `zodexd`, and `zodex-prd` on-box; the full `zodex` operator CLI remains an operator-machine tool.
-The Sprite agent should use `zodex-agent`, not the full `zodex` operator CLI, for `show-url`, Git credential helper access, and local push auth.
-
-## Proxy Front Door
-
-Useful commands:
-
-```bash
-zodex proxy inspect --sprite <sprite>
-zodex proxy verify-origin --sprite <sprite>
-cd proxy/cloudflare-worker
-# set vars.SPRITE_ORIGIN in wrangler.jsonc first
-npx wrangler deploy
-```
-
-Treat the proxy or its custom domain as the default public MCP front door for Sprite deployments unless the raw Sprite URL has been re-validated against the MCP clients you care about.
-
-## Core Commands
-
-```bash
-zodex sprite status --sprite <sprite>
-zodex sprite logs --sprite <sprite> --service zodexd --lines 100
-zodex sprite sync --sprite <sprite> --force-recreate
-zodex sprite upgrade --sprite <sprite>
-zodex-agent github request-push --repo <owner/repo>
-zodex github grant-push --sprite <sprite> --repo <owner/repo>
-zodex-agent github list-grants
-zodex-agent github publish-pr --repo <owner/repo> --title "Title"
-zodex-agent github revoke-push --repo <owner/repo>
-zodex-agent show-url --host <public-host>
-```
-
-## Access Model
-
-- Read access comes from the reader GitHub App.
-- Write access is temporary, explicit, and repo-scoped.
-- The preferred write grant path is `zodex-agent github request-push`, which uses GitHub App device flow directly on the Sprite with a repo-scoped local grant and a default `30m` TTL.
-- The remote operator path `zodex github grant-push --sprite ...` remains supported and keeps local refresh-token cache behavior unless explicitly forgotten.
-- The agent should not run as root.
-- The operator or agent should treat `zodex-agent github request-push` or `zodex github grant-push`, followed by revoke, as part of every push.

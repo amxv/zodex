@@ -1,19 +1,19 @@
 export const siteConfig = {
   name: "zodex",
-  strapline: "Sprite-first remote coding runtime",
+  strapline: "ChatGPT-native remote coding workspace",
   description:
-    "Documentation for zodex, a Sprite-first remote coding runtime and operator CLI that gives coding agents a real Linux workspace, a focused MCP tool surface, read-only GitHub access by default, and explicit repo-scoped push grants for writes.",
+    "Documentation for zodex, a ChatGPT-native remote coding workspace that gives GPT models a real Sprite-backed Linux machine, a familiar command/stdin/patch MCP surface, and operator-chosen GitHub write modes: PR-only, push-on-approval, or scoped YOLO.",
   repoUrl: "https://github.com/amxv/zodex",
   footerSections: [
     {
       title: "zodex",
       text:
-        "A remote coding runtime and operator CLI for real Linux workspaces, MCP tooling, and repo-scoped write controls."
+        "A ChatGPT-native remote coding workspace for real Linux work, normal Git workflows, and operator-controlled write autonomy."
     },
     {
       title: "What this site covers",
       text:
-        "Architecture, access model, GitHub permissions, operational workflows, and the runtime behavior agents depend on."
+        "ChatGPT setup, Sprite deployment, write modes, GitHub permissions, MCP tooling, service operations, and the runtime behavior agents depend on."
     },
     {
       title: "Repository",

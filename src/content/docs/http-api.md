@@ -1,7 +1,7 @@
 ---
 title: HTTP API and client
 description: Use zodex-client or raw HTTP calls against the direct JSON API for command execution, stdin writes, and patch application.
-order: 10
+order: 11
 category: Operations
 summary: The `/v1/*` API routes, Bearer auth model, request shapes, and thin client commands.
 ---
