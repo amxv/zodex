@@ -3113,14 +3113,30 @@ printf 'push_rewrite=%s\n' "$push_rewrite"
 
 fn parse_github_yolo_agent_git_status(raw: &str) -> GithubYoloAgentGitStatus {
     let mut status = GithubYoloAgentGitStatus::default();
+    let mut current_key = None;
     for line in raw.lines() {
         let Some((key, value)) = line.split_once('=') else {
+            if matches!(current_key, Some("push_rewrite")) {
+                if !status.push_rewrite.is_empty() {
+                    status.push_rewrite.push('\n');
+                }
+                status.push_rewrite.push_str(line);
+            }
             continue;
         };
         match key {
-            "helper" => status.helper = value.to_string(),
-            "use_http_path" => status.use_http_path = value.to_string(),
-            "push_rewrite" => status.push_rewrite = value.to_string(),
+            "helper" => {
+                status.helper = value.to_string();
+                current_key = Some("helper");
+            }
+            "use_http_path" => {
+                status.use_http_path = value.to_string();
+                current_key = Some("use_http_path");
+            }
+            "push_rewrite" => {
+                status.push_rewrite = value.to_string();
+                current_key = Some("push_rewrite");
+            }
             _ => {}
         }
     }
@@ -3139,31 +3155,39 @@ fn inspect_github_yolo_agent_git_status(
     Ok(parse_github_yolo_agent_git_status(&raw))
 }
 
+fn build_github_yolo_agent_git_status_lines(status: &GithubYoloAgentGitStatus) -> Vec<String> {
+    vec![
+        format!(
+            "agent-git-helper: {}",
+            if status.helper_ok() {
+                "ok"
+            } else {
+                "missing-or-mismatched"
+            }
+        ),
+        format!(
+            "agent-git-use-http-path: {}",
+            if status.use_http_path_ok() {
+                "ok"
+            } else {
+                "missing-or-mismatched"
+            }
+        ),
+        format!(
+            "agent-git-push-rewrite: {}",
+            if status.push_rewrite_ok() {
+                "ok"
+            } else {
+                "missing"
+            }
+        ),
+    ]
+}
+
 fn print_github_yolo_agent_git_status(status: &GithubYoloAgentGitStatus) {
-    println!(
-        "agent-git-helper: {}",
-        if status.helper_ok() {
-            "ok"
-        } else {
-            "missing-or-mismatched"
-        }
-    );
-    println!(
-        "agent-git-use-http-path: {}",
-        if status.use_http_path_ok() {
-            "ok"
-        } else {
-            "missing-or-mismatched"
-        }
-    );
-    println!(
-        "agent-git-push-rewrite: {}",
-        if status.push_rewrite_ok() {
-            "ok"
-        } else {
-            "missing"
-        }
-    );
+    for line in build_github_yolo_agent_git_status_lines(status) {
+        println!("{line}");
+    }
 }
 
 fn enable_github_yolo_mode(
@@ -5557,25 +5581,29 @@ run `{PRIMARY_OPERATOR_BINARY} --config \"{}\" restart` manually.\n{}",
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_LOG_LINES, OperatorSpriteRecord, OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL,
-        ProcessModeState, PushGrantRecord, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager,
-        SpriteServiceState, SpriteServiceStatus, SystemctlAction, browser_open_attempts,
-        build_certbot_args, build_github_yolo_mode_record, build_journalctl_args,
-        build_operator_upgrade_shell_args, build_process_status_lines,
+        DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord, OperatorSpriteRegistry,
+        PUBLISHER_SERVICE_LABEL, ProcessModeState, PushGrantRecord, SERVICE_NAME,
+        SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
+        SystemctlAction, browser_open_attempts, build_certbot_args,
+        build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
+        build_journalctl_args, build_operator_upgrade_shell_args, build_process_status_lines,
         build_publisher_status_lines, build_reader_status_lines, build_runtime_upgrade_shell_args,
         build_sprite_api_args, build_sprite_services_status_lines, build_sprite_setup_script,
         build_sprite_upgrade_script, build_status_summary_lines, build_systemctl_args,
         certbot_cert_name, credential_host_is_github, credential_url_host, credential_url_path,
         credential_url_protocol, ensure_http_listener_ready_for_start,
-        expected_sprite_service_definitions, generate_self_signed_certificate,
-        git_credential_request_repo, git_credential_request_targets_github, github_mode_expired,
+        expected_sprite_service_definitions, expected_zodex_agent_git_helper,
+        generate_self_signed_certificate, git_credential_request_repo,
+        git_credential_request_targets_github, github_mode_expired,
+        github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
         load_matching_push_grant, load_push_grant_from_dir, normalize_github_repo,
         normalize_github_repos, normalize_proxy_origin, operator_sprites_registry_path_from_home,
-        parse_git_credential_request, parse_push_grant_ttl, parse_push_grants,
-        parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
-        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
-        resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
-        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
+        parse_git_credential_request, parse_github_yolo_agent_git_status, parse_push_grant_ttl,
+        parse_push_grants, parse_systemctl_show, process_log_path, process_pid_path,
+        proxy_mcp_status_looks_healthy, push_grant_expired, read_tail_lines,
+        render_proxy_wrangler_config, render_systemd_unit, resolve_publisher_client_id,
+        resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
@@ -6371,6 +6399,94 @@ mod tests {
 
         assert!(!github_mode_expired(&record, 999));
         assert!(github_mode_expired(&record, 1_000));
+    }
+
+    #[test]
+    fn yolo_agent_git_repair_script_sets_direct_push_plumbing() {
+        let script = github_yolo_agent_git_repair_script();
+
+        assert!(script.contains(r#"helper_cmd="/usr/local/bin/zodex-agent --config /etc/zodex/config.toml git-credential-helper""#));
+        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all credential.https://github.com.helper "$helper_cmd""#));
+        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global credential.https://github.com.useHttpPath true"#));
+        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
+        assert!(!script.contains(".insteadOf https://github.com/"));
+    }
+
+    #[test]
+    fn yolo_agent_git_inspect_script_reads_direct_push_plumbing() {
+        let script = github_yolo_agent_git_inspect_script();
+
+        assert!(
+            script.contains(
+                r#"git config --global --get credential.https://github.com.helper || true"#
+            )
+        );
+        assert!(script.contains(
+            r#"git config --global --get credential.https://github.com.useHttpPath || true"#
+        ));
+        assert!(script.contains(r#"git config --global --get-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(script.contains(r#"printf 'helper=%s\n' "$helper""#));
+        assert!(script.contains(r#"printf 'use_http_path=%s\n' "$use_http_path""#));
+        assert!(script.contains(r#"printf 'push_rewrite=%s\n' "$push_rewrite""#));
+    }
+
+    #[test]
+    fn parse_yolo_agent_git_status_accepts_repaired_config() {
+        let raw = format!(
+            "helper={}\nuse_http_path=TRUE\npush_rewrite=https://example.com/\nhttps://github.com/\n",
+            expected_zodex_agent_git_helper()
+        );
+
+        let status = parse_github_yolo_agent_git_status(&raw);
+
+        assert_eq!(
+            status,
+            GithubYoloAgentGitStatus {
+                helper: expected_zodex_agent_git_helper(),
+                use_http_path: "TRUE".to_string(),
+                push_rewrite: "https://example.com/\nhttps://github.com/".to_string(),
+            }
+        );
+        assert!(status.helper_ok());
+        assert!(status.use_http_path_ok());
+        assert!(status.push_rewrite_ok());
+        assert!(status.direct_push_ready());
+        assert_eq!(
+            build_github_yolo_agent_git_status_lines(&status),
+            vec![
+                "agent-git-helper: ok".to_string(),
+                "agent-git-use-http-path: ok".to_string(),
+                "agent-git-push-rewrite: ok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_yolo_agent_git_status_reports_broken_config() {
+        let status = parse_github_yolo_agent_git_status(
+            "helper=/usr/bin/git-credential-store\nuse_http_path=false\npush_rewrite=https://example.com/\n",
+        );
+
+        assert_eq!(
+            status,
+            GithubYoloAgentGitStatus {
+                helper: "/usr/bin/git-credential-store".to_string(),
+                use_http_path: "false".to_string(),
+                push_rewrite: "https://example.com/".to_string(),
+            }
+        );
+        assert!(!status.helper_ok());
+        assert!(!status.use_http_path_ok());
+        assert!(!status.push_rewrite_ok());
+        assert!(!status.direct_push_ready());
+        assert_eq!(
+            build_github_yolo_agent_git_status_lines(&status),
+            vec![
+                "agent-git-helper: missing-or-mismatched".to_string(),
+                "agent-git-use-http-path: missing-or-mismatched".to_string(),
+                "agent-git-push-rewrite: missing".to_string(),
+            ]
+        );
     }
 
     #[test]
