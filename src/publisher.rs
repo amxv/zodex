@@ -457,12 +457,12 @@ pub fn validate_publish_request(
     config: &Config,
     request: &PublishPrRequest,
 ) -> Result<(PublishTarget, Vec<u8>)> {
-    let target = config
-        .publisher_targets
-        .iter()
-        .find(|target| target.id == request.repo_id)
-        .cloned()
-        .ok_or_else(|| anyhow!("repo id not allowed for publishing: {}", request.repo_id))?;
+    let target = resolve_publisher_target(config, &request.repo_id).ok_or_else(|| {
+        anyhow!(
+            "repo is not covered by publisher installation config: {}",
+            request.repo_id
+        )
+    })?;
 
     if target.repo.trim().is_empty() {
         bail!("publisher target {} has an empty repo value", target.id);
@@ -836,7 +836,7 @@ fn validate_direct_push_request(
         bail!("YOLO mode is not active for repo {repo}");
     }
 
-    resolve_direct_push_target(config, &repo)
+    resolve_publisher_target(config, &repo)
         .ok_or_else(|| anyhow!("repo {repo} is not covered by publisher installation config"))
 }
 
@@ -865,7 +865,7 @@ fn github_mode_allows_repo(record: &GithubModeRecord, repo: &str) -> bool {
     record.all_installed || record.repos.iter().any(|allowed| allowed == repo)
 }
 
-fn resolve_direct_push_target(config: &Config, repo: &str) -> Option<PublishTarget> {
+fn resolve_publisher_target(config: &Config, repo: &str) -> Option<PublishTarget> {
     if let Some(target) = config
         .publisher_targets
         .iter()
@@ -1251,7 +1251,7 @@ mod tests {
         PublisherRequest, SOCKET_DIR_MODE, TokenPermissionProfile, build_publish_branch_name,
         build_publish_request, create_head_bundle, decode_request, encode_direct_push_wire_request,
         ensure_clean_worktree, ensure_publisher_socket_parent_dir, github_mode_allows_repo,
-        github_mode_expired, parse_github_remote_repo, resolve_direct_push_target,
+        github_mode_expired, parse_github_remote_repo, resolve_publisher_target,
         validate_publish_request,
     };
     use crate::config::{Config, PublishTarget, PublisherInstallation};
@@ -1267,20 +1267,79 @@ mod tests {
     #[test]
     fn validate_publish_request_rejects_unknown_repo_id() {
         let cfg = Config::default();
-        let err = validate_publish_request(
-            &cfg,
-            &PublishPrRequest {
-                repo_id: "missing".to_string(),
-                base: None,
-                title: "title".to_string(),
-                body: String::new(),
-                draft: false,
-                bundle_base64: base64::engine::general_purpose::STANDARD.encode(b"hello"),
-            },
-        )
-        .expect_err("request should be rejected");
+        let err = validate_publish_request(&cfg, &publish_pr_request("missing"))
+            .expect_err("request should be rejected");
 
-        assert!(err.to_string().contains("repo id not allowed"));
+        assert!(
+            err.to_string()
+                .contains("repo is not covered by publisher installation config: missing")
+        );
+    }
+
+    #[test]
+    fn validate_publish_request_accepts_account_installation_repo() {
+        let cfg = Config {
+            publisher_installations: vec![PublisherInstallation {
+                account: "owner".to_string(),
+                installation_id: 11,
+                default_base: "main".to_string(),
+            }],
+            ..Config::default()
+        };
+
+        let (target, _) = validate_publish_request(&cfg, &publish_pr_request("owner/other"))
+            .expect("account installation should authorize publish-pr");
+
+        assert_eq!(target.id, "owner/other");
+        assert_eq!(target.repo, "owner/other");
+        assert_eq!(target.installation_id, 11);
+        assert_eq!(target.default_base, "main");
+    }
+
+    #[test]
+    fn validate_publish_request_prefers_explicit_target_over_account_installation() {
+        let cfg = Config {
+            publisher_installations: vec![PublisherInstallation {
+                account: "owner".to_string(),
+                installation_id: 11,
+                default_base: "main".to_string(),
+            }],
+            publisher_targets: vec![PublishTarget {
+                id: "custom".to_string(),
+                repo: "owner/repo".to_string(),
+                default_base: "trunk".to_string(),
+                installation_id: 22,
+            }],
+            ..Config::default()
+        };
+
+        let (target, _) = validate_publish_request(&cfg, &publish_pr_request("owner/repo"))
+            .expect("explicit target should authorize publish-pr");
+
+        assert_eq!(target.id, "custom");
+        assert_eq!(target.repo, "owner/repo");
+        assert_eq!(target.installation_id, 22);
+        assert_eq!(target.default_base, "trunk");
+    }
+
+    #[test]
+    fn validate_publish_request_rejects_repo_outside_installation_accounts() {
+        let cfg = Config {
+            publisher_installations: vec![PublisherInstallation {
+                account: "owner".to_string(),
+                installation_id: 11,
+                default_base: "main".to_string(),
+            }],
+            ..Config::default()
+        };
+
+        let err = validate_publish_request(&cfg, &publish_pr_request("other/repo"))
+            .expect_err("outside account should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("repo is not covered by publisher installation config: other/repo")
+        );
     }
 
     #[test]
@@ -1345,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_push_target_resolves_exact_target_before_account_installation() {
+    fn publisher_target_resolves_exact_target_before_account_installation() {
         let cfg = Config {
             publisher_installations: vec![PublisherInstallation {
                 account: "owner".to_string(),
@@ -1361,15 +1420,26 @@ mod tests {
             ..Config::default()
         };
 
-        let exact = resolve_direct_push_target(&cfg, "owner/repo").expect("exact target");
+        let exact = resolve_publisher_target(&cfg, "owner/repo").expect("exact target");
         assert_eq!(exact.installation_id, 22);
         assert_eq!(exact.default_base, "trunk");
 
-        let account = resolve_direct_push_target(&cfg, "owner/other").expect("account target");
+        let account = resolve_publisher_target(&cfg, "owner/other").expect("account target");
         assert_eq!(account.repo, "owner/other");
         assert_eq!(account.installation_id, 11);
 
-        assert!(resolve_direct_push_target(&cfg, "other/repo").is_none());
+        assert!(resolve_publisher_target(&cfg, "other/repo").is_none());
+    }
+
+    fn publish_pr_request(repo_id: &str) -> PublishPrRequest {
+        PublishPrRequest {
+            repo_id: repo_id.to_string(),
+            base: None,
+            title: "title".to_string(),
+            body: String::new(),
+            draft: false,
+            bundle_base64: base64::engine::general_purpose::STANDARD.encode(b"hello"),
+        }
     }
 
     #[test]
@@ -1411,7 +1481,7 @@ mod tests {
         let err = validate_publish_request(
             &cfg,
             &PublishPrRequest {
-                repo_id: "repo".to_string(),
+                repo_id: "owner/repo".to_string(),
                 base: None,
                 title: "too long".to_string(),
                 body: "123456".to_string(),
