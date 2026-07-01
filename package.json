@@ -17,6 +17,6 @@
     "astro": "^7.0.3",
     "typescript": "^5.9.2",
     "wrangler": "^4.105.0",
-    "zuedocs": "^0.1.18"
+    "zuedocs": "^0.1.19"
   }
 }
