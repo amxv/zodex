@@ -164,6 +164,7 @@ struct SessionRuntime {
     internal_session_id: u64,
     session_handle: String,
     created_at: SystemTime,
+    started_at: Instant,
     initial_command: String,
     transport: SessionTransport,
     caller_label: Option<String>,
@@ -332,8 +333,16 @@ impl SessionRuntime {
             }
 
             if let Some((exit_code, cwd, termination_reason)) = finished {
-                let text = snapshot_output_after_exit(&self.output).await;
+                let text = strip_ansi_codes(snapshot_output_after_exit(&self.output).await);
+                let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
+                    summary: command_result_summary(
+                        CommandStatus::Exited,
+                        elapsed,
+                        None,
+                        Some(exit_code),
+                        Some(termination_reason),
+                    ),
                     output: text,
                     status: CommandStatus::Exited,
                     cwd,
@@ -345,8 +354,16 @@ impl SessionRuntime {
             }
 
             if let Some(cwd) = running_cwd {
-                let text = self.output.snapshot().await;
+                let text = strip_ansi_codes(self.output.snapshot().await);
+                let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
+                    summary: command_result_summary(
+                        CommandStatus::Running,
+                        elapsed,
+                        Some(&self.session_handle),
+                        None,
+                        None,
+                    ),
                     output: text,
                     status: CommandStatus::Running,
                     cwd,
@@ -473,6 +490,7 @@ impl SessionManager {
             internal_session_id,
             session_handle: session_handle.clone(),
             created_at: now_system,
+            started_at: now,
             initial_command: input.cmd.clone(),
             transport: origin.transport,
             caller_label: origin.caller_label,
@@ -630,6 +648,34 @@ fn summarize_command(command: &str) -> String {
 
     let cut = next_char_boundary(&cleaned, COMMAND_SUMMARY_MAX_CHARS);
     format!("{}...", &cleaned[..cut])
+}
+
+fn strip_ansi_codes(output: String) -> String {
+    strip_ansi_escapes::strip_str(output)
+}
+
+fn command_result_summary(
+    status: CommandStatus,
+    elapsed: Duration,
+    session_handle: Option<&str>,
+    exit_code: Option<i32>,
+    termination_reason: Option<TerminationReason>,
+) -> String {
+    let elapsed_secs = elapsed.as_secs_f64();
+    match status {
+        CommandStatus::Running => {
+            let handle = session_handle.unwrap_or("<unknown>");
+            format!("still running after {elapsed_secs:.1}s; use session_handle {handle} to poll")
+        }
+        CommandStatus::Exited => match termination_reason {
+            Some(TerminationReason::Timeout) => format!("timed out after {elapsed_secs:.1}s"),
+            Some(TerminationReason::Killed) => format!("killed after {elapsed_secs:.1}s"),
+            _ => format!(
+                "exited {} after {elapsed_secs:.1}s",
+                exit_code.unwrap_or(-1)
+            ),
+        },
+    }
 }
 
 fn system_time_epoch_ms(t: SystemTime) -> u128 {
@@ -827,7 +873,7 @@ mod tests {
     use crate::config::Config;
     use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
 
-    use super::{SESSION_HANDLE_LEN, SessionManager, SessionOrigin};
+    use super::{SESSION_HANDLE_LEN, SessionManager, SessionOrigin, strip_ansi_codes};
 
     async fn start_stateful_shell(mgr: &SessionManager, cfg: &Config) -> String {
         let response = mgr
@@ -897,6 +943,16 @@ mod tests {
         assert_eq!(finished.exit_code, Some(0));
         assert_eq!(finished.status, CommandStatus::Exited);
         assert_eq!(finished.termination_reason, Some(TerminationReason::Exit));
+        assert!(
+            finished.summary.starts_with("exited 0 after "),
+            "unexpected success summary: {}",
+            finished.summary
+        );
+        assert!(
+            finished.summary.ends_with('s'),
+            "summary should include seconds: {}",
+            finished.summary
+        );
 
         let running = mgr
             .exec_command(
@@ -916,13 +972,27 @@ mod tests {
         assert!(running.exit_code.is_none());
         assert_eq!(running.status, CommandStatus::Running);
         assert_eq!(running.termination_reason, None);
+        let running_handle = running
+            .session_handle
+            .clone()
+            .expect("running output should include handle");
+        assert!(
+            running.summary.starts_with("still running after "),
+            "unexpected running summary: {}",
+            running.summary
+        );
+        assert!(
+            running
+                .summary
+                .contains(&format!("use session_handle {running_handle} to poll")),
+            "running summary should include polling handle: {}",
+            running.summary
+        );
 
         let _ = mgr
             .write_stdin(
                 WriteStdinInput {
-                    session_handle: running
-                        .session_handle
-                        .expect("running output should include handle"),
+                    session_handle: running_handle,
                     chars: None,
                     yield_time_ms: Some(1_000),
                     kill_process: Some(true),
@@ -931,6 +1001,66 @@ mod tests {
             )
             .await
             .expect("cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn ansi_codes_are_stripped_from_tool_output() {
+        assert_eq!(
+            strip_ansi_codes("\x1b[31mred\x1b[0m plain".to_string()),
+            "red plain"
+        );
+
+        let mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+
+        let finished = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "printf '\\033[31mred\\033[0m plain\\n'".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: None,
+                    timeout_ms: None,
+                },
+                &cfg,
+                SessionOrigin::direct(),
+            )
+            .await
+            .expect("ansi command should complete");
+
+        assert!(finished.output.contains("red plain"));
+        assert!(
+            !finished.output.contains('\u{1b}'),
+            "output should not include ANSI escapes: {:?}",
+            finished.output
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_command_summary_reports_exit_code() {
+        let mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+
+        let failed = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "exit 1".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: None,
+                    timeout_ms: None,
+                },
+                &cfg,
+                SessionOrigin::direct(),
+            )
+            .await
+            .expect("failing command should still return a tool output");
+
+        assert_eq!(failed.status, CommandStatus::Exited);
+        assert_eq!(failed.exit_code, Some(1));
+        assert!(
+            failed.summary.starts_with("exited 1 after "),
+            "unexpected failure summary: {}",
+            failed.summary
+        );
     }
 
     #[tokio::test]
@@ -965,6 +1095,16 @@ mod tests {
             .await
             .expect("pwd should succeed");
         assert!(pwd.output.contains("/tmp"));
+        assert!(
+            pwd.summary.starts_with("still running after "),
+            "write_stdin polling should include a running summary: {}",
+            pwd.summary
+        );
+        assert!(
+            pwd.summary.contains("use session_handle"),
+            "write_stdin polling summary should explain how to poll: {}",
+            pwd.summary
+        );
 
         let done = mgr
             .write_stdin(
@@ -980,6 +1120,11 @@ mod tests {
             .expect("shell should exit");
         assert_eq!(done.exit_code, Some(0));
         assert!(done.session_handle.is_none());
+        assert!(
+            done.summary.starts_with("exited 0 after "),
+            "write_stdin exit should include an exit summary: {}",
+            done.summary
+        );
     }
 
     #[tokio::test]
@@ -1021,6 +1166,11 @@ mod tests {
         assert!(killed.exit_code.is_some());
         assert_eq!(killed.status, CommandStatus::Exited);
         assert_eq!(killed.termination_reason, Some(TerminationReason::Killed));
+        assert!(
+            killed.summary.starts_with("killed after "),
+            "kill summary should report killed state: {}",
+            killed.summary
+        );
         assert!(killed.output.contains("terminated by kill_process"));
         assert!(!killed.output.contains("should-be-ignored"));
     }
@@ -1054,6 +1204,11 @@ mod tests {
         assert_eq!(
             timed_out.termination_reason,
             Some(TerminationReason::Timeout)
+        );
+        assert!(
+            timed_out.summary.starts_with("timed out after "),
+            "timeout summary should report timeout state: {}",
+            timed_out.summary
         );
         assert!(
             timed_out

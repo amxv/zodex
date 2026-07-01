@@ -45,6 +45,7 @@ pub enum TerminationReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolOutput {
+    pub summary: String,
     pub output: String,
     pub status: CommandStatus,
     pub cwd: String,

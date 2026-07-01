@@ -132,6 +132,7 @@ Command-style tools return:
 
 ```json
 {
+  "summary": "still running after 1.0s; use session_handle session-token to poll",
   "output": "...",
   "status": "running",
   "cwd": "/workspace/zodex",
@@ -143,6 +144,7 @@ or, after exit:
 
 ```json
 {
+  "summary": "exited 0 after 0.3s",
   "output": "...",
   "status": "exited",
   "cwd": "/workspace/zodex",
@@ -151,4 +153,4 @@ or, after exit:
 }
 ```
 
-`termination_reason` can be `exit`, `timeout`, or `killed`.
+`output` is stripped of ANSI color/control escape sequences before it is returned. `summary` is a single scan-friendly line such as `exited 1 after 0.2s`, `still running after 30.1s; use session_handle session-token to poll`, `timed out after 120.0s`, or `killed after 12.6s`. `termination_reason` can be `exit`, `timeout`, or `killed`.

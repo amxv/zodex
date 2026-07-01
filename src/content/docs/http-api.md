@@ -56,7 +56,32 @@ Request shape:
 }
 ```
 
-Successful responses include status, output, working directory, and exit metadata. If a command is still running, the response includes a `session_handle`.
+Successful responses include a short `summary`, ANSI-stripped `output`, status, working directory, and exit metadata. If a command is still running, the response includes a `session_handle`.
+
+Running response example:
+
+```json
+{
+  "summary": "still running after 1.0s; use session_handle session-token to poll",
+  "output": "...",
+  "status": "running",
+  "cwd": "/workspace/zodex",
+  "session_handle": "session-token"
+}
+```
+
+Exited response example:
+
+```json
+{
+  "summary": "exited 0 after 0.3s",
+  "output": "...",
+  "status": "exited",
+  "cwd": "/workspace/zodex",
+  "exit_code": 0,
+  "termination_reason": "exit"
+}
+```
 
 ## write-stdin request
 
