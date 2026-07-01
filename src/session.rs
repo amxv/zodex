@@ -830,10 +830,10 @@ fn resolve_live_cwd(pid: i32) -> Option<String> {
         }
 
         if let Some((_, cwd)) = best {
-            return Some(cwd);
+            Some(cwd)
+        } else {
+            read_proc_cwd(pid)
         }
-
-        return read_proc_cwd(pid);
     }
 
     #[cfg(not(target_os = "linux"))]

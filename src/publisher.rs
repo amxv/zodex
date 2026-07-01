@@ -101,12 +101,21 @@ enum PublisherResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GithubYoloRepoGrant {
+    repo: String,
+    #[serde(default)]
+    expires_at_epoch_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct GithubModeRecord {
     mode: String,
     #[serde(default)]
     all_installed: bool,
     #[serde(default)]
     repos: Vec<String>,
+    #[serde(default)]
+    repo_grants: Vec<GithubYoloRepoGrant>,
     #[serde(default)]
     expires_at_epoch_seconds: Option<u64>,
 }
@@ -854,15 +863,52 @@ fn load_active_github_yolo_mode(path: &Path) -> Result<GithubModeRecord> {
     Ok(record)
 }
 
-fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
-    matches!(
+fn github_yolo_all_installed_active(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    if !record.all_installed {
+        return false;
+    }
+    !matches!(
         record.expires_at_epoch_seconds,
         Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
     )
 }
 
+fn github_yolo_repo_grant_active(grant: &GithubYoloRepoGrant, now_epoch_seconds: u64) -> bool {
+    !matches!(
+        grant.expires_at_epoch_seconds,
+        Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+    )
+}
+
+fn github_yolo_active_legacy_repos(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    record.repo_grants.is_empty()
+        && !record.all_installed
+        && !matches!(
+            record.expires_at_epoch_seconds,
+            Some(expires_at_epoch_seconds) if expires_at_epoch_seconds <= now_epoch_seconds
+        )
+        && !record.repos.is_empty()
+}
+
+fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
+    !github_yolo_all_installed_active(record, now_epoch_seconds)
+        && !record
+            .repo_grants
+            .iter()
+            .any(|grant| github_yolo_repo_grant_active(grant, now_epoch_seconds))
+        && !github_yolo_active_legacy_repos(record, now_epoch_seconds)
+}
+
 fn github_mode_allows_repo(record: &GithubModeRecord, repo: &str) -> bool {
-    record.all_installed || record.repos.iter().any(|allowed| allowed == repo)
+    let Ok(now_epoch_seconds) = current_epoch_seconds() else {
+        return false;
+    };
+    github_yolo_all_installed_active(record, now_epoch_seconds)
+        || record.repo_grants.iter().any(|grant| {
+            grant.repo == repo && github_yolo_repo_grant_active(grant, now_epoch_seconds)
+        })
+        || (github_yolo_active_legacy_repos(record, now_epoch_seconds)
+            && record.repos.iter().any(|allowed| allowed == repo))
 }
 
 fn resolve_publisher_target(config: &Config, repo: &str) -> Option<PublishTarget> {
@@ -1388,16 +1434,23 @@ mod tests {
             mode: "yolo".to_string(),
             all_installed: false,
             repos: vec!["owner/repo".to_string()],
-            expires_at_epoch_seconds: Some(1_000),
+            repo_grants: Vec::new(),
+            expires_at_epoch_seconds: Some(u64::MAX),
         };
         assert!(github_mode_allows_repo(&record, "owner/repo"));
         assert!(!github_mode_allows_repo(&record, "owner/other"));
-        assert!(!github_mode_expired(&record, 999));
-        assert!(github_mode_expired(&record, 1_000));
+
+        let expiring = GithubModeRecord {
+            expires_at_epoch_seconds: Some(1_000),
+            ..record.clone()
+        };
+        assert!(!github_mode_expired(&expiring, 999));
+        assert!(github_mode_expired(&expiring, 1_000));
 
         let all_installed = GithubModeRecord {
             all_installed: true,
             repos: Vec::new(),
+            repo_grants: Vec::new(),
             ..record
         };
         assert!(github_mode_allows_repo(&all_installed, "owner/other"));
