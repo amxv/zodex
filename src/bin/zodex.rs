@@ -73,6 +73,11 @@ const GITHUB_MODE_DIR: &str = "/var/lib/zodex/mode";
 const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
 const GITHUB_MODE_REMOTE_TMP_PATH: &str = "/tmp/zodex-github-mode.json";
 const DEFAULT_YOLO_TTL_SECONDS: u64 = 2 * 60 * 60;
+const ZODEX_AGENT_USER: &str = "zodex-agent";
+const ZODEX_AGENT_HOME: &str = "/home/zodex-agent";
+const ZODEX_AGENT_BINARY_PATH: &str = "/usr/local/bin/zodex-agent";
+const GITHUB_PUSH_REWRITE_SOURCE: &str = "https://github.com/";
+const GITHUB_PUSH_REWRITE_TARGET: &str = "zodex::https://github.com/";
 const ZODEX_SPRITE_ENV: &str = "ZODEX_SPRITE";
 const OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH: &str = ".config/zodex/sprites.json";
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -3045,6 +3050,122 @@ fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> boo
     )
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GithubYoloAgentGitStatus {
+    helper: String,
+    use_http_path: String,
+    push_rewrite: String,
+}
+
+impl GithubYoloAgentGitStatus {
+    fn helper_ok(&self) -> bool {
+        self.helper == expected_zodex_agent_git_helper()
+    }
+
+    fn use_http_path_ok(&self) -> bool {
+        self.use_http_path.eq_ignore_ascii_case("true")
+    }
+
+    fn push_rewrite_ok(&self) -> bool {
+        self.push_rewrite
+            .lines()
+            .any(|value| value == GITHUB_PUSH_REWRITE_SOURCE)
+    }
+
+    fn direct_push_ready(&self) -> bool {
+        self.helper_ok() && self.use_http_path_ok() && self.push_rewrite_ok()
+    }
+}
+
+fn expected_zodex_agent_git_helper() -> String {
+    format!("{ZODEX_AGENT_BINARY_PATH} --config {DEFAULT_CONFIG_PATH} git-credential-helper")
+}
+
+fn github_yolo_agent_git_repair_script() -> String {
+    let helper = expected_zodex_agent_git_helper();
+    format!(
+        r#"helper_cmd={helper:?}
+sudo -u {user} env HOME={home:?} git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u {user} env HOME={home:?} git config --global credential.https://github.com.useHttpPath true
+sudo -u {user} env HOME={home:?} git config --global --replace-all url.{rewrite_target:?}.pushInsteadOf {rewrite_source:?}
+"#,
+        user = ZODEX_AGENT_USER,
+        home = ZODEX_AGENT_HOME,
+        rewrite_target = GITHUB_PUSH_REWRITE_TARGET,
+        rewrite_source = GITHUB_PUSH_REWRITE_SOURCE,
+    )
+}
+
+fn github_yolo_agent_git_inspect_script() -> String {
+    format!(
+        r#"helper="$(sudo -u {user} env HOME={home:?} git config --global --get credential.https://github.com.helper || true)"
+use_http_path="$(sudo -u {user} env HOME={home:?} git config --global --get credential.https://github.com.useHttpPath || true)"
+push_rewrite="$(sudo -u {user} env HOME={home:?} git config --global --get-all url.{rewrite_target:?}.pushInsteadOf || true)"
+printf 'helper=%s\n' "$helper"
+printf 'use_http_path=%s\n' "$use_http_path"
+printf 'push_rewrite=%s\n' "$push_rewrite"
+"#,
+        user = ZODEX_AGENT_USER,
+        home = ZODEX_AGENT_HOME,
+        rewrite_target = GITHUB_PUSH_REWRITE_TARGET,
+    )
+}
+
+fn parse_github_yolo_agent_git_status(raw: &str) -> GithubYoloAgentGitStatus {
+    let mut status = GithubYoloAgentGitStatus::default();
+    for line in raw.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key {
+            "helper" => status.helper = value.to_string(),
+            "use_http_path" => status.use_http_path = value.to_string(),
+            "push_rewrite" => status.push_rewrite = value.to_string(),
+            _ => {}
+        }
+    }
+    status
+}
+
+fn inspect_github_yolo_agent_git_status(
+    resolved: &ResolvedSprite,
+) -> Result<GithubYoloAgentGitStatus> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        github_yolo_agent_git_inspect_script(),
+    ];
+    let raw = run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+    Ok(parse_github_yolo_agent_git_status(&raw))
+}
+
+fn print_github_yolo_agent_git_status(status: &GithubYoloAgentGitStatus) {
+    println!(
+        "agent-git-helper: {}",
+        if status.helper_ok() {
+            "ok"
+        } else {
+            "missing-or-mismatched"
+        }
+    );
+    println!(
+        "agent-git-use-http-path: {}",
+        if status.use_http_path_ok() {
+            "ok"
+        } else {
+            "missing-or-mismatched"
+        }
+    );
+    println!(
+        "agent-git-push-rewrite: {}",
+        if status.push_rewrite_ok() {
+            "ok"
+        } else {
+            "missing"
+        }
+    );
+}
+
 fn enable_github_yolo_mode(
     resolved: &ResolvedSprite,
     repos: &[String],
@@ -3059,11 +3180,12 @@ fn enable_github_yolo_mode(
         .write_all(raw.as_bytes())
         .context("failed to write GitHub mode temp file")?;
 
+    let repair_agent_git = github_yolo_agent_git_repair_script();
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
         format!(
-            "sudo install -d -m 0750 -o zodex-publisher -g zodex {dir} && sudo install -m 0640 -o zodex-publisher -g zodex {tmp} {dest} && rm -f {tmp}",
+            "sudo install -d -m 0750 -o zodex-publisher -g zodex {dir} && sudo install -m 0640 -o zodex-publisher -g zodex {tmp} {dest} && rm -f {tmp}\n{repair_agent_git}",
             dir = GITHUB_MODE_DIR,
             tmp = GITHUB_MODE_REMOTE_TMP_PATH,
             dest = GITHUB_MODE_STATE_PATH
@@ -3075,6 +3197,8 @@ fn enable_github_yolo_mode(
         &exec_args,
         &[(mode_file.path(), GITHUB_MODE_REMOTE_TMP_PATH)],
     )?;
+
+    let agent_git_status = inspect_github_yolo_agent_git_status(resolved)?;
 
     println!("github-mode: yolo");
     println!("sprite: {}", resolved.name);
@@ -3101,7 +3225,15 @@ fn enable_github_yolo_mode(
         println!("expires-at: {expires_at}");
     }
     println!("token-exposure: none");
-    println!("direct-git-push: enabled-via-zodex-remote-helper");
+    print_github_yolo_agent_git_status(&agent_git_status);
+    println!(
+        "direct-git-push: {}",
+        if agent_git_status.direct_push_ready() {
+            "enabled-via-zodex-remote-helper"
+        } else {
+            "broken-missing-agent-git-config"
+        }
+    );
     Ok(())
 }
 
@@ -3162,6 +3294,8 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         return Ok(());
     }
 
+    let agent_git_status = inspect_github_yolo_agent_git_status(resolved)?;
+
     println!("github-mode: yolo");
     if record.all_installed {
         println!("scope: all-installed");
@@ -3177,7 +3311,15 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         println!("expires-at: none");
     }
     println!("token-exposure: none");
-    println!("direct-git-push: enabled-via-zodex-remote-helper");
+    print_github_yolo_agent_git_status(&agent_git_status);
+    println!(
+        "direct-git-push: {}",
+        if agent_git_status.direct_push_ready() {
+            "enabled-via-zodex-remote-helper"
+        } else {
+            "broken-missing-agent-git-config"
+        }
+    );
     println!("push-grants: separate");
     Ok(())
 }
