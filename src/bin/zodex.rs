@@ -3510,6 +3510,8 @@ fn enable_github_yolo_mode(
             "broken-missing-agent-git-config"
         }
     );
+    println!("direct-git-push-refs: refs/heads/* refs/tags/*");
+    println!("push-grants: covered-by-yolo-mode");
     Ok(())
 }
 
@@ -3586,7 +3588,8 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
             "broken-missing-agent-git-config"
         }
     );
-    println!("push-grants: separate");
+    println!("direct-git-push-refs: refs/heads/* refs/tags/*");
+    println!("push-grants: covered-by-yolo-mode");
     Ok(())
 }
 

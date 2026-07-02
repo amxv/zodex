@@ -404,10 +404,14 @@ async fn handle_git_remote_zodex_push(
         bail!("push destination ref cannot be empty");
     }
 
-    let bundle_base64 = if src.is_empty() {
-        None
+    let (bundle_base64, src_oid, src_object_type) = if src.is_empty() {
+        (None, None, None)
     } else {
-        Some(create_direct_push_bundle_base64(src)?)
+        (
+            create_direct_push_bundle_base64(src)?,
+            Some(resolve_git_object_id(Path::new("."), src)?),
+            Some(resolve_git_object_type(Path::new("."), src)?),
+        )
     };
     let request = DirectPushRequest {
         repo: repo.to_string(),
@@ -415,6 +419,8 @@ async fn handle_git_remote_zodex_push(
         dst: dst.to_string(),
         force,
         bundle_base64,
+        src_oid,
+        src_object_type,
     };
     let response = submit_direct_push_request(Path::new(&config.publisher_socket_path), &request)
         .await
@@ -432,17 +438,16 @@ fn git_remote_zodex_push_dst(raw_spec: &str) -> Option<String> {
     }
 }
 
-fn create_direct_push_bundle_base64(src: &str) -> Result<String> {
+fn create_direct_push_bundle_base64(src: &str) -> Result<Option<String>> {
     create_direct_push_bundle_base64_from_dir(Path::new("."), src)
 }
 
-fn create_direct_push_bundle_base64_from_dir(repo_dir: &Path, src: &str) -> Result<String> {
+fn create_direct_push_bundle_base64_from_dir(repo_dir: &Path, src: &str) -> Result<Option<String>> {
     let tempdir = tempfile::tempdir().context("failed to create direct push bundle tempdir")?;
     let bundle_path = tempdir.path().join("direct-push.bundle");
     let mut args = vec!["bundle", "create", bundle_path.to_str().unwrap(), src];
-    if repository_has_refs(repo_dir, "refs/remotes")? || repository_has_refs(repo_dir, "refs/tags")?
-    {
-        args.extend(["--not", "--remotes", "--tags"]);
+    if repository_has_refs(repo_dir, "refs/remotes")? {
+        args.extend(["--not", "--remotes"]);
     }
     let output = Command::new("git")
         .current_dir(repo_dir)
@@ -451,11 +456,40 @@ fn create_direct_push_bundle_base64_from_dir(repo_dir: &Path, src: &str) -> Resu
         .context("failed to run git bundle create for direct push")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Refusing to create empty bundle") {
+            return Ok(None);
+        }
         bail!("git bundle create failed: {}", stderr.trim());
     }
     let bundle = fs::read(&bundle_path)
         .with_context(|| format!("failed to read {}", bundle_path.display()))?;
-    Ok(BASE64.encode(bundle))
+    Ok(Some(BASE64.encode(bundle)))
+}
+
+fn resolve_git_object_id(repo_dir: &Path, src: &str) -> Result<String> {
+    git_single_line(
+        repo_dir,
+        &["rev-parse", "--verify", &format!("{src}^{{object}}")],
+    )
+    .with_context(|| format!("failed to resolve pushed source object {src}"))
+}
+
+fn resolve_git_object_type(repo_dir: &Path, src: &str) -> Result<String> {
+    git_single_line(repo_dir, &["cat-file", "-t", src])
+        .with_context(|| format!("failed to resolve pushed source object type for {src}"))
+}
+
+fn git_single_line(repo_dir: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .current_dir(repo_dir)
+        .args(args)
+        .output()
+        .context("failed to run git")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git {} failed: {}", args.join(" "), stderr.trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn repository_has_refs(repo_dir: &Path, ref_namespace: &str) -> Result<bool> {
@@ -1492,7 +1526,8 @@ mod tests {
     use super::{
         Args, PushGrantRecord, create_direct_push_bundle_base64_from_dir,
         git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
-        resolve_active_push_grant, sanitize_remote_helper_error,
+        resolve_active_push_grant, resolve_git_object_id, resolve_git_object_type,
+        sanitize_remote_helper_error,
     };
     use clap::CommandFactory;
     use std::fs;
@@ -1640,7 +1675,8 @@ mod tests {
         ));
 
         let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/heads/smoke")
-            .expect("create bundle");
+            .expect("create bundle")
+            .expect("branch push should have bundle contents");
         fs::write(
             &bundle_path,
             base64::engine::general_purpose::STANDARD
@@ -1659,9 +1695,177 @@ mod tests {
             Command::new("git").current_dir(&publisher_clone).args([
                 "fetch",
                 bundle_path.to_str().unwrap(),
-                "refs/heads/smoke:refs/heads/__zodex_direct_push",
+                "refs/heads/smoke:refs/zodex/direct-push",
             ])
         ));
+    }
+
+    #[test]
+    fn direct_push_bundle_imports_annotated_tag_without_heads_namespace() {
+        let tempdir = tempdir().expect("tempdir");
+        let origin = tempdir.path().join("origin.git");
+        let repo = tempdir.path().join("repo");
+        let publisher_clone = tempdir.path().join("publisher-clone");
+        let bundle_path = tempdir.path().join("direct-push.bundle");
+
+        assert!(git_test_status(Command::new("git").args([
+            "init",
+            "-q",
+            "--bare",
+            origin.to_str().unwrap()
+        ])));
+        assert!(git_test_status(Command::new("git").args([
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            repo.to_str().unwrap()
+        ])));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["config", "user.name", "Test"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "config",
+                "user.email",
+                "test@example.com"
+            ])
+        ));
+        fs::write(repo.join("a.txt"), "base\n").expect("write base");
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["add", "a.txt"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["commit", "-q", "-m", "base"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["push", "-q", "origin", "HEAD:main"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "fetch",
+                "-q",
+                "origin",
+                "main:refs/remotes/origin/main"
+            ])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["tag", "-a", "v1.0.0", "-m", "v1.0.0"])
+        ));
+
+        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+            .expect("create tag bundle")
+            .expect(
+                "annotated tag object should produce a bundle even when target commit is remote",
+            );
+        fs::write(
+            &bundle_path,
+            base64::engine::general_purpose::STANDARD
+                .decode(bundle_base64)
+                .expect("decode bundle"),
+        )
+        .expect("write bundle");
+
+        assert!(git_test_status(Command::new("git").args([
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            publisher_clone.to_str().unwrap()
+        ])));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&publisher_clone).args([
+                "fetch",
+                bundle_path.to_str().unwrap(),
+                "refs/tags/v1.0.0:refs/zodex/direct-push",
+            ])
+        ));
+        let object_type = resolve_git_object_type(&publisher_clone, "refs/zodex/direct-push")
+            .expect("imported ref object type");
+        assert_eq!(object_type, "tag");
+    }
+
+    #[test]
+    fn direct_push_bundle_uses_oid_fallback_for_lightweight_tag_on_remote_commit() {
+        let tempdir = tempdir().expect("tempdir");
+        let origin = tempdir.path().join("origin.git");
+        let repo = tempdir.path().join("repo");
+
+        assert!(git_test_status(Command::new("git").args([
+            "init",
+            "-q",
+            "--bare",
+            origin.to_str().unwrap()
+        ])));
+        assert!(git_test_status(Command::new("git").args([
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            repo.to_str().unwrap()
+        ])));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["config", "user.name", "Test"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "config",
+                "user.email",
+                "test@example.com"
+            ])
+        ));
+        fs::write(repo.join("a.txt"), "base\n").expect("write base");
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["add", "a.txt"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["commit", "-q", "-m", "base"])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["push", "-q", "origin", "HEAD:main"])
+        ));
+        assert!(git_test_status(
+            Command::new("git").current_dir(&repo).args([
+                "fetch",
+                "-q",
+                "origin",
+                "main:refs/remotes/origin/main"
+            ])
+        ));
+        assert!(git_test_status(
+            Command::new("git")
+                .current_dir(&repo)
+                .args(["tag", "v1.0.0"])
+        ));
+
+        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+            .expect("lightweight tag bundle attempt should not hard fail");
+        assert!(
+            bundle_base64.is_none(),
+            "lightweight tag on an already-remote commit has no new bundle objects"
+        );
+        let tag_oid = resolve_git_object_id(&repo, "refs/tags/v1.0.0").expect("tag oid");
+        let head_oid = resolve_git_object_id(&repo, "HEAD").expect("head oid");
+        assert_eq!(tag_oid, head_oid);
+        assert_eq!(
+            resolve_git_object_type(&repo, "refs/tags/v1.0.0").expect("tag object type"),
+            "commit"
+        );
     }
 
     #[test]

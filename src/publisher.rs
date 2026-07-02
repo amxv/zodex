@@ -28,7 +28,7 @@ const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
 const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";
 const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
-const DIRECT_PUSH_IMPORTED_REF: &str = "refs/heads/__zodex_direct_push";
+const DIRECT_PUSH_IMPORTED_REF: &str = "refs/zodex/direct-push";
 
 fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
@@ -67,6 +67,10 @@ pub struct DirectPushRequest {
     pub force: bool,
     #[serde(default)]
     pub bundle_base64: Option<String>,
+    #[serde(default)]
+    pub src_oid: Option<String>,
+    #[serde(default)]
+    pub src_object_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -663,38 +667,51 @@ async fn handle_direct_push_request(
             ],
         )?;
     } else {
-        let bundle_base64 = request
-            .bundle_base64
-            .as_deref()
-            .ok_or_else(|| anyhow!("direct push bundle is required for non-delete pushes"))?;
-        let bundle_bytes = BASE64
-            .decode(bundle_base64.as_bytes())
-            .context("direct push bundle was not valid base64")?;
-        if bundle_bytes.is_empty() {
-            bail!("direct push bundle cannot be empty");
-        }
-        if bundle_bytes.len() > config.publisher_max_bundle_bytes {
-            bail!(
-                "direct push bundle exceeds limit ({} bytes > {} bytes)",
-                bundle_bytes.len(),
-                config.publisher_max_bundle_bytes
-            );
-        }
-        let bundle_path = tempdir.path().join("direct-push.bundle");
-        fs::write(&bundle_path, bundle_bytes)
-            .with_context(|| format!("failed to write {}", bundle_path.display()))?;
-        git_plain(
-            &repo_dir,
-            &[
-                "fetch",
-                bundle_path.to_str().unwrap(),
-                &format!("{}:{DIRECT_PUSH_IMPORTED_REF}", request.src),
-            ],
-        )?;
-        let refspec = if request.force {
-            format!("+{DIRECT_PUSH_IMPORTED_REF}:{}", request.dst)
+        let push_src = if let Some(bundle_base64) = request.bundle_base64.as_deref() {
+            let bundle_bytes = BASE64
+                .decode(bundle_base64.as_bytes())
+                .context("direct push bundle was not valid base64")?;
+            if bundle_bytes.is_empty() {
+                bail!("direct push bundle cannot be empty");
+            }
+            if bundle_bytes.len() > config.publisher_max_bundle_bytes {
+                bail!(
+                    "direct push bundle exceeds limit ({} bytes > {} bytes)",
+                    bundle_bytes.len(),
+                    config.publisher_max_bundle_bytes
+                );
+            }
+            let bundle_path = tempdir.path().join("direct-push.bundle");
+            fs::write(&bundle_path, bundle_bytes)
+                .with_context(|| format!("failed to write {}", bundle_path.display()))?;
+            git_plain(
+                &repo_dir,
+                &[
+                    "fetch",
+                    bundle_path.to_str().unwrap(),
+                    &format!("{}:{DIRECT_PUSH_IMPORTED_REF}", request.src),
+                ],
+            )?;
+            DIRECT_PUSH_IMPORTED_REF.to_string()
         } else {
-            format!("{DIRECT_PUSH_IMPORTED_REF}:{}", request.dst)
+            let src_oid = request.src_oid.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "direct push bundle is empty and no source object id was provided; this usually means the pushed ref points to an object already present on the remote"
+                )
+            })?;
+            validate_git_object_id(src_oid)?;
+            git_plain(&repo_dir, &["cat-file", "-e", &format!("{src_oid}^{{object}}")])
+                .with_context(|| {
+                    format!(
+                        "direct push source object {src_oid} is not present in the publisher clone; retry after pushing the containing branch or include the object in the push bundle"
+                    )
+                })?;
+            src_oid.to_string()
+        };
+        let refspec = if request.force {
+            format!("+{push_src}:{}", request.dst)
+        } else {
+            format!("{push_src}:{}", request.dst)
         };
         git_with_token(
             &repo_dir,
@@ -839,6 +856,9 @@ fn validate_direct_push_request(
     {
         bail!("direct push source ref is invalid");
     }
+    if let Some(src_oid) = request.src_oid.as_deref() {
+        validate_git_object_id(src_oid)?;
+    }
 
     let mode = load_active_github_yolo_mode(Path::new(GITHUB_MODE_STATE_PATH))?;
     if !github_mode_allows_repo(&mode, &repo) {
@@ -847,6 +867,14 @@ fn validate_direct_push_request(
 
     resolve_publisher_target(config, &repo)
         .ok_or_else(|| anyhow!("repo {repo} is not covered by publisher installation config"))
+}
+
+fn validate_git_object_id(raw: &str) -> Result<()> {
+    let valid_hex_len = raw.len() == 40 || raw.len() == 64;
+    if !valid_hex_len || !raw.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!("direct push source object id is invalid");
+    }
+    Ok(())
 }
 
 fn load_active_github_yolo_mode(path: &Path) -> Result<GithubModeRecord> {
@@ -1396,6 +1424,8 @@ mod tests {
             dst: "refs/heads/smoke".to_string(),
             force: false,
             bundle_base64: Some("YnVuZGxl".to_string()),
+            src_oid: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+            src_object_type: Some("commit".to_string()),
         };
 
         let payload = encode_direct_push_wire_request(&request).expect("encode direct push");
