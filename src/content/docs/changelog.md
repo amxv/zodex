@@ -8,6 +8,14 @@ summary: Version-by-version changes for the zodex CLI, agent runtime, proxy, pub
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.2.24 — 2026-07-03
+
+- Added support for YOLO direct pushes to Git tags.
+
+## 0.2.23 — 2026-07-02
+
+- Fixed Sprite setup document validation.
+
 ## 0.2.22 — 2026-07-01
 
 - Allowed `publish-pr` to work through publisher installations.
