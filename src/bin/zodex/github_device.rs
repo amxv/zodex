@@ -752,4 +752,3 @@ fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
     }
     Ok(())
 }
-

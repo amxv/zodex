@@ -732,4 +732,3 @@ fn resolve_publisher_daemon_binary_path() -> Result<PathBuf> {
         .find(|path| path.exists())
         .ok_or_else(|| anyhow!("failed to locate {PUBLISHER_SERVICE_LABEL} binary"))
 }
-

@@ -517,4 +517,3 @@ fn build_local_operator_binaries() -> Result<()> {
         .context("failed to build local zodex binaries")
         .map(|_| ())
 }
-

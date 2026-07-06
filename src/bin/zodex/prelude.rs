@@ -500,4 +500,3 @@ struct LocalOperatorBinaries {
     daemon: PathBuf,
     publisher: PathBuf,
 }
-

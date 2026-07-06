@@ -395,4 +395,3 @@ run `{PRIMARY_OPERATOR_BINARY} --config \"{}\" restart` manually.\n{}",
         },
     }
 }
-

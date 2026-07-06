@@ -965,4 +965,3 @@ rm -f {upgrade_script}
         upgrade_script = SPRITE_UPGRADE_REMOTE_SCRIPT_PATH
     )
 }
-

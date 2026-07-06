@@ -564,4 +564,3 @@ fn write_if_changed(path: &Path, content: &str) -> Result<bool> {
     fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(true)
 }
-

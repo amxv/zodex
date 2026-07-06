@@ -527,4 +527,3 @@ fn send_signal_if_running(pid: i32, signal: Signal) -> Result<()> {
         Err(err) => Err(anyhow!("failed to send {signal:?} to pid {pid}: {err}")),
     }
 }
-

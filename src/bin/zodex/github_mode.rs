@@ -510,4 +510,3 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
     println!("push-grants: covered-by-yolo-mode");
     Ok(())
 }
-
