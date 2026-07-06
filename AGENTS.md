@@ -16,12 +16,20 @@ Keep the repo, docs, and operator guidance centered on the current `zodex` surfa
 
 ## Validation Baseline
 
-As of March 19, 2026, `main` has a healthy local Rust gate baseline:
+As of July 6, 2026, `main` has a healthy repo-wide validation gate:
 
-- `cargo test`
+```bash
+bash scripts/check.sh
+```
+
+This runs:
+
+- `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
+- `cargo test --test source_file_size source_files_stay_under_1000_lines`
+- `cargo test`
 
-Treat unexpected failures in those commands as real regressions unless you can prove they come from an unrelated in-flight branch.
+Use `bash scripts/check.sh` as the default full validation command before pushing broad Rust, CLI, runtime, or cross-module changes. The source file size test enforces the 1000 LOC guard for repo-owned source files. Treat unexpected failures in this command as real regressions unless you can prove they come from an unrelated in-flight branch.
 
 ## Default Access Model
 
