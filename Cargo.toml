@@ -35,7 +35,7 @@ base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
 jsonwebtoken = "9.3"
-nix = { version = "0.30", features = ["fs", "signal", "process", "term", "user"] }
+nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"] }
 rand = "0.10"
 rcgen = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
