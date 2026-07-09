@@ -78,7 +78,7 @@ zodex github mode status --sprite dev-sprite
 zodex github mode default --sprite dev-sprite
 ```
 
-`mode yolo` defaults to a `2h` TTL and all installed repositories. Passing `--repo` changes the scope to a repo allowlist. Passing `--no-ttl` makes the window indefinite until the operator disables it. `mode default` removes only YOLO state and leaves explicit push grants alone.
+`mode yolo` defaults to a `2h` TTL and all installed repositories. Passing `--repo` changes the scope to a repo allowlist; repeated repo-scoped YOLO commands merge with active repo grants instead of replacing them, and each repo keeps its own TTL. Passing `--no-ttl` makes the new window indefinite until the operator disables it. `mode default` removes only YOLO state and leaves explicit push grants alone.
 
 ## Quick setup shape
 

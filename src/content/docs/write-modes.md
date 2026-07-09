@@ -116,7 +116,7 @@ Use YOLO mode when repeated push approvals are just friction and you trust the C
 zodex github mode yolo --sprite dev
 ```
 
-By default, YOLO mode uses a `2h` TTL and applies to all repositories installed for the writer app. Scope it to one or more repos when you want narrower autonomy:
+By default, YOLO mode uses a `2h` TTL and applies to all repositories installed for the writer app. Scope it to one or more repos when you want narrower autonomy. Repo-scoped YOLO commands merge with active repo grants instead of replacing them, and each repo keeps the TTL from its own grant command:
 
 ```bash
 zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h
