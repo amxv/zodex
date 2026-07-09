@@ -9,6 +9,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
+    "check:repo": "bash scripts/check.sh",
     "deploy:docs": "astro build && wrangler deploy -c wrangler.docs.jsonc"
   },
   "devDependencies": {

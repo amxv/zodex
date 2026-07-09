@@ -16,12 +16,20 @@ Keep the repo, docs, and operator guidance centered on the current `zodex` surfa
 
 ## Validation Baseline
 
-As of March 19, 2026, `main` has a healthy local Rust gate baseline:
+As of July 6, 2026, `main` has a healthy repo-wide validation gate:
 
-- `cargo test`
+```bash
+bash scripts/check.sh
+```
+
+This runs:
+
+- `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
+- `cargo test --test source_file_size source_files_stay_under_1000_lines`
+- `cargo test`
 
-Treat unexpected failures in those commands as real regressions unless you can prove they come from an unrelated in-flight branch.
+Use `bash scripts/check.sh` as the default full validation command before pushing broad Rust, CLI, runtime, or cross-module changes. The source file size test enforces the 1000 LOC guard for repo-owned source files. Treat unexpected failures in this command as real regressions unless you can prove they come from an unrelated in-flight branch.
 
 ## Default Access Model
 
@@ -36,3 +44,16 @@ When updating operator or setup guidance, treat this as the supported product st
 - `zodex github mode default` turns YOLO mode off
 - `zodex github revoke-push` turns explicit push grants back off
 - Sprite deployments should assume the proxy-backed MCP front door by default
+
+## Changelog Guidelines
+
+When cutting a release, update `src/content/docs/changelog.md` before tagging.
+
+- Add a new section for the exact version tag being released.
+- Keep the newest version at the top.
+- Skip versions that do not have git tags.
+- Use commit history and diffs on `main` to summarize code changes.
+- This is an OSS project, so internal code changes may be included when useful.
+- Do not include docs-site-only changes such as site styling, Zuedocs/package bumps, deploy plumbing, footer/layout changes, or documentation navigation changes.
+- Rewrite commit subjects into clear release notes instead of pasting raw commit messages.
+- If a release contains only tagging/release metadata, write: `Maintenance release. No direct code behavior changes beyond release preparation.`
