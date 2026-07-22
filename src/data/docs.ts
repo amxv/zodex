@@ -4,6 +4,8 @@ export const siteConfig = {
   description:
     "Documentation for zodex, a ChatGPT-native remote coding workspace that gives GPT models a real Sprite-backed Linux machine, a familiar command/stdin/patch MCP surface, and operator-chosen GitHub write modes: PR-only, push-on-approval, or scoped YOLO.",
   repoUrl: "https://github.com/amxv/zodex",
+  accentColor: "#be123c",
+  accentColorDark: "#fb7185",
   footerSections: [
     {
       title: "zodex",
@@ -33,7 +35,6 @@ export const docCategories = [
 ] as const;
 
 export const primaryNav = [
-  { href: "/", label: "Overview" },
   { href: "/docs", label: "Docs" },
   { href: siteConfig.repoUrl, label: "GitHub", external: true }
 ];
