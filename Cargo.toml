@@ -33,7 +33,7 @@ axum = { version = "0.8", features = ["macros"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
-codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
+codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "6f647caa9bd62b16824cf5efc8e4575090feddf4" }
 jsonwebtoken = "9.3"
 nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"] }
 rand = "0.10"
