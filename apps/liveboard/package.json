@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@solidjs/testing-library": "0.8.10",
-    "@types/node": "24.0.13",
+    "@types/node": "26.2.0",
     "@vitest/browser-playwright": "4.1.10",
     "jsdom": "^30.0.1",
     "playwright": "1.62.1",
