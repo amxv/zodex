@@ -110,22 +110,21 @@ impl OfficialTunnelReleaseClient {
             bail!("official tunnel-client release is missing a tag name");
         }
 
+        let expected_name = format!("tunnel-client-{}{}", release.tag_name, arch.asset_suffix());
         let mut matching_assets = release
             .assets
             .iter()
-            .filter(|asset| asset.name.ends_with(arch.asset_suffix()));
+            .filter(|asset| asset.name == expected_name);
         let archive = matching_assets.next().with_context(|| {
             format!(
                 "official tunnel-client release {} has no {} asset",
-                release.tag_name,
-                arch.asset_suffix()
+                release.tag_name, expected_name
             )
         })?;
         if matching_assets.next().is_some() {
             bail!(
                 "official tunnel-client release {} contains multiple {} assets",
-                release.tag_name,
-                arch.asset_suffix()
+                release.tag_name, expected_name
             );
         }
         if archive.size == 0 || archive.size > MAX_PLATFORM_ARCHIVE_BYTES {
