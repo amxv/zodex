@@ -124,7 +124,8 @@ impl OfficialTunnelReleaseClient {
         if matching_assets.next().is_some() {
             bail!(
                 "official tunnel-client release {} contains multiple {} assets",
-                release.tag_name, expected_name
+                release.tag_name,
+                expected_name
             );
         }
         if archive.size == 0 || archive.size > MAX_PLATFORM_ARCHIVE_BYTES {
