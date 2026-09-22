@@ -4,8 +4,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-#[cfg(target_os = "windows")]
-use anyhow::Context as _;
 use anyhow::Result;
 
 use super::lifecycle::{

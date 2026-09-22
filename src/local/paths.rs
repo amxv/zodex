@@ -241,6 +241,7 @@ impl LocalPaths {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn xdg_root(variable: &str, home: Option<&Path>, fallback: &str) -> Result<PathBuf> {
     if let Some(value) = env::var_os(variable).filter(|value| !value.is_empty()) {
         return require_absolute(variable, PathBuf::from(value));

@@ -1,11 +1,14 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
+#[cfg(unix)]
+use std::io::Read as _;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
+#[cfg(unix)]
 use anyhow::{Context, Result};
 #[cfg(not(unix))]
 use tokio::io::AsyncReadExt as _;
@@ -328,6 +331,7 @@ fn cleanup_stale_spills(dir: &std::path::Path) {
     }
 }
 
+#[cfg(unix)]
 pub(super) fn spawn_reader(
     mut reader: std::fs::File,
     output: Arc<OutputBuffer>,

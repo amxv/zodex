@@ -7,6 +7,7 @@ use sha2::{Digest as _, Sha256};
 const OPERATOR_UPGRADE_SCHEMA_VERSION: u32 = 1;
 const OPERATOR_LATEST_API: &str = "https://api.github.com/repos/amxv/zodex/releases/latest";
 const OPERATOR_RELEASE_BASE: &str = "https://github.com/amxv/zodex/releases/download";
+#[cfg(not(target_os = "windows"))]
 const EMBEDDED_OPERATOR_INSTALLER: &str = include_str!("../../../scripts/install.sh");
 const UPGRADE_CHECK_CACHE_SECONDS: i64 = 5 * 60;
 const UPGRADE_DOWNLOAD_ATTEMPTS: usize = 3;
