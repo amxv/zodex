@@ -44,7 +44,7 @@ impl ProcessTunnelMetadataValidator {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_environment(environment: Vec<(OsString, OsString)>) -> Self {
         Self {
             inherited_environment: environment,
@@ -231,11 +231,10 @@ impl ArchiveExtractor for WindowsTarArchiveExtractor {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::ffi::OsString;
     use std::fs;
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
@@ -243,7 +242,6 @@ mod tests {
     use super::{ProcessTunnelMetadataValidator, TunnelMetadataValidator};
     use crate::local::RuntimeKey;
 
-    #[cfg(unix)]
     #[test]
     fn provider_subprocess_get_uses_only_runtime_key_and_allowlisted_environment() {
         let dir = tempdir().unwrap();

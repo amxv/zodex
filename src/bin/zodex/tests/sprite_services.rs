@@ -2,7 +2,7 @@
         Commands, GithubYoloAgentGitStatus, MAX_GITHUB_ERROR_DETAIL_CHARS,
         OPERATOR_SPRITES_REGISTRY_VERSION,
         OperatorSpriteRecord, OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProxyCommand,
-        ProxyDeployCommandSpec, ProxyOriginResolution, ProxyWorkerStatus, PushGrantRecord,
+        ProxyOriginResolution, ProxyWorkerStatus, PushGrantRecord,
         ResolvedSprite, SPRITE_MAIN_SERVICE_LABEL, SpriteCommand, SpriteGithubCommand,
         SpriteServiceAction, SpriteServiceState, SpriteServiceStatus, browser_open_attempts,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
@@ -14,11 +14,10 @@
         github_mode_expired,
         github_default_agent_git_repair_script,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
-        derive_proxy_worker_name, execute_wrangler_deploy,
+        derive_proxy_worker_name,
         materialize_proxy_project,
         merge_github_yolo_mode_records, normalize_github_repo, normalize_github_repos,
         normalize_proxy_origin, parse_sprite_info, parse_wrangler_deploy_output, parse_wrangler_version,
-        operator_sprites_registry_path_from_home,
         parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
         proxy_mcp_status_looks_healthy, proxy_worker_build_id, proxy_worker_build_state,
         push_grant_expired, render_proxy_wrangler_config, restart_sprite_service_stack_with,
@@ -29,12 +28,18 @@
         upsert_operator_sprite_record, validate_installed_sprite_release,
         validate_sprite_service_operation_stream,
     };
+    #[cfg(unix)]
+    use super::{ProxyDeployCommandSpec, execute_wrangler_deploy};
+    #[cfg(not(target_os = "windows"))]
+    use super::operator_sprites_registry_path_from_home;
     use crate::operator_cli::Cli;
     use clap::Parser;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(not(target_os = "windows"))]
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::tempdir;
     #[test]

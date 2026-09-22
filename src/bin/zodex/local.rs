@@ -930,13 +930,16 @@ fn ensure_local_runtime_host() -> Result<()> {
 #[cfg(test)]
 mod local_cli_tests {
     use std::env;
+    #[cfg(unix)]
     use std::io::{Seek as _, Write as _};
     #[cfg(unix)]
     use std::os::fd::AsRawFd as _;
 
+    #[cfg(unix)]
+    use super::read_runtime_key_from_fd;
     use super::{
-        read_runtime_key_from_fd, resolve_local_setup_inputs, resolve_local_start_directory,
-        trim_one_line_ending, validate_agent_id,
+        resolve_local_setup_inputs, resolve_local_start_directory, trim_one_line_ending,
+        validate_agent_id,
     };
 
     #[test]
