@@ -852,7 +852,7 @@ try {
             format!("Could not write Windows upgrade helper {}: {error}", helper.display()),
         )
     })?;
-    Command::new("powershell.exe")
+    Command::new(windows_powershell_path()?)
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&helper)
         .arg("-Source")
@@ -875,6 +875,30 @@ try {
             )
         })?;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_powershell_path() -> std::result::Result<PathBuf, UpgradeFailure> {
+    let system_root = env::var_os("SystemRoot")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            UpgradeFailure::new(
+                "install_failed",
+                "SystemRoot is unavailable; cannot locate built-in Windows PowerShell",
+            )
+        })?;
+    let powershell = PathBuf::from(system_root)
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    if !powershell.is_file() {
+        return Err(UpgradeFailure::new(
+            "install_failed",
+            format!(
+                "Built-in Windows PowerShell was not found at {}",
+                powershell.display()
+            ),
+        ));
+    }
+    Ok(powershell)
 }
 
 fn operator_binary_name() -> &'static str {
@@ -995,6 +1019,15 @@ mod operator_upgrade_tests {
     fn windows_operator_target_and_binary_name_match_release_contract() {
         assert_eq!(operator_target_triple().unwrap(), "x86_64-pc-windows-msvc");
         assert_eq!(operator_binary_name(), "zodex.exe");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_upgrade_uses_builtin_powershell() {
+        let system_root = env::var_os("SystemRoot").expect("Windows runner has SystemRoot");
+        let expected = PathBuf::from(system_root)
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        assert_eq!(windows_powershell_path().unwrap(), expected);
     }
 
     #[test]
