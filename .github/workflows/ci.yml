@@ -189,6 +189,7 @@ jobs:
           cargo test --locked --lib session::process::tests::windows_current_process_uses_creation_time_identity -- --exact
           cargo test --locked --bin zodex operator_cli::local_cli_tests::setup_env_input_is_scriptable_without_secret_argv -- --exact
           cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_operator_target_and_binary_name_match_release_contract -- --exact
+          cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_upgrade_uses_builtin_powershell -- --exact
 
       - name: Smoke test Windows CLI
         shell: pwsh
