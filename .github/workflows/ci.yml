@@ -16,6 +16,7 @@ on:
       - scripts/check.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
+      - scripts/install.ps1
       - apps/liveboard/**
       - apps/menubar/**
       - services/cloudflare-proxy/**
@@ -39,6 +40,7 @@ on:
       - scripts/check.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
+      - scripts/install.ps1
       - apps/liveboard/**
       - apps/menubar/**
       - services/cloudflare-proxy/**
@@ -158,3 +160,58 @@ jobs:
           print(f"::error title=Repository validation failed::{escaped}")
           PY
           exit 1
+
+  windows:
+    name: Windows operator validation
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Windows operator and Local runtime
+        run: cargo check --locked --lib --bin zodex
+
+      - name: Compile Windows test targets
+        run: cargo test --locked --lib --bin zodex --no-run
+
+      - name: Run Windows-relevant unit tests
+        shell: pwsh
+        run: |
+          cargo test --locked --lib local::environment_handoff::tests::environment_handoff_round_trips_and_is_consumed -- --exact
+          cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_preserves_utf16_values -- --exact
+          cargo test --locked --lib local::lifecycle_context::windows_tests::windows_resolves_builtin_powershell_from_captured_system_root -- --exact
+          cargo test --locked --lib local::paths::tests::local_paths_separate_durable_and_runtime_state -- --exact
+          cargo test --locked --lib local::private_fs::windows_tests::windows_private_file_acl_is_user_only_and_verifiable -- --exact
+          cargo test --locked --lib local::tunnel_release::tests::architecture_selectors_track_platform_asset_suffixes -- --exact
+          cargo test --locked --lib session::process::tests::windows_current_process_uses_creation_time_identity -- --exact
+          cargo test --locked --bin zodex operator_cli::local_cli_tests::setup_env_input_is_scriptable_without_secret_argv -- --exact
+          cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_operator_target_and_binary_name_match_release_contract -- --exact
+          cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_upgrade_uses_builtin_powershell -- --exact
+
+      - name: Smoke test Windows CLI
+        shell: pwsh
+        run: |
+          cargo build --locked --bin zodex
+          .\target\debug\zodex.exe --version
+          .\target\debug\zodex.exe local --help | Out-Null
+          .\target\debug\zodex.exe local setup --help | Out-Null
+          .\target\debug\zodex.exe local watch --help | Out-Null
+          .\target\debug\zodex.exe upgrade --help | Out-Null
+
+      - name: Validate Windows installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$env:GITHUB_WORKSPACE/scripts/install.ps1",
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }

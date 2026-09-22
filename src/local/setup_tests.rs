@@ -219,7 +219,7 @@ async fn key_store_failure_restores_prior_secret_and_files() {
         .await
         .unwrap_err();
 
-    assert!(format!("{error:#}").contains("prior Keychain state was restored"));
+    assert!(format!("{error:#}").contains("prior secure credential state was restored"));
     fixture.assert_snapshot(&before);
 }
 
@@ -368,8 +368,9 @@ impl ArchiveExtractor for FixtureExtractor {
     fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()> {
         let archive = fs::read(archive_path)?;
         fs::create_dir_all(bundle_dir)?;
-        let binary_path = bundle_dir.join("tunnel-client");
-        let cloudflared_path = bundle_dir.join("cloudflared");
+        let binary_path = bundle_dir.join(format!("tunnel-client{}", std::env::consts::EXE_SUFFIX));
+        let cloudflared_path =
+            bundle_dir.join(format!("cloudflared{}", std::env::consts::EXE_SUFFIX));
         let manifest_path = bundle_dir.join("cloudflared-manifest.json");
         fs::write(&binary_path, Self::binary_for(&archive))?;
         fs::write(&cloudflared_path, Self::cloudflared_for(&archive))?;

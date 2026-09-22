@@ -1,6 +1,7 @@
 mod api;
 mod git;
 mod github;
+#[cfg(unix)]
 mod server;
 mod validation;
 
@@ -17,24 +18,38 @@ pub use github::{
     mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
     resolve_repo_installation_id,
 };
+#[cfg(unix)]
 pub use server::{serve_publisher, submit_direct_push_request, submit_publish_request};
 pub use validation::{build_publish_branch_name, validate_publish_request};
 
 pub(super) const GITHUB_API_BASE: &str = "https://api.github.com";
 pub(super) const GITHUB_API_VERSION: &str = "2022-11-28";
+#[cfg(unix)]
 pub(super) const SOCKET_DIR_MODE: u32 = 0o750;
+#[cfg(unix)]
 pub(super) const SOCKET_MODE: u32 = 0o660;
+#[cfg(unix)]
 pub(super) const ASKPASS_MODE: u32 = 0o700;
+#[cfg(unix)]
 pub(super) const PUBLISHER_WIRE_MAGIC: [u8; 8] = *b"ZDXPUB\0\0";
+#[cfg(unix)]
 pub(super) const PUBLISHER_WIRE_VERSION: u16 = 1;
+#[cfg(unix)]
 pub(super) const PUBLISHER_WIRE_HEADER_BYTES: usize = 24;
+#[cfg(unix)]
 pub(super) const MAX_PUBLISHER_METADATA_BYTES: usize = 64 * 1024;
+#[cfg(unix)]
 pub(super) const MAX_PUBLISHER_RESPONSE_BYTES: usize = 64 * 1024;
+#[cfg(unix)]
 pub(super) const PUBLISHER_STREAM_BUFFER_BYTES: usize = 64 * 1024;
+#[cfg(unix)]
 pub(super) const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
+#[cfg(unix)]
 pub(super) const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 pub(super) const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";
+#[cfg(unix)]
 pub(super) const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
+#[cfg(unix)]
 pub(super) const DIRECT_PUSH_IMPORTED_REF: &str = "refs/zodex/direct-push";
 
 #[cfg(test)]

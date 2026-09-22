@@ -1,12 +1,13 @@
 use std::fs::{File, OpenOptions};
 
-use nix::fcntl::{Flock, FlockArg};
+use fs2::FileExt as _;
 use semver::Version;
 use sha2::{Digest as _, Sha256};
 
 const OPERATOR_UPGRADE_SCHEMA_VERSION: u32 = 1;
 const OPERATOR_LATEST_API: &str = "https://api.github.com/repos/amxv/zodex/releases/latest";
 const OPERATOR_RELEASE_BASE: &str = "https://github.com/amxv/zodex/releases/download";
+#[cfg(not(target_os = "windows"))]
 const EMBEDDED_OPERATOR_INSTALLER: &str = include_str!("../../../scripts/install.sh");
 const UPGRADE_CHECK_CACHE_SECONDS: i64 = 5 * 60;
 const UPGRADE_DOWNLOAD_ATTEMPTS: usize = 3;
@@ -55,40 +56,40 @@ impl UpgradeDirection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpgradeLocalState {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Unconfigured,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Stopped,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Running,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Stale,
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Unsupported,
 }
 
 impl UpgradeLocalState {
     fn as_str(self) -> &'static str {
         match self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Unconfigured => "unconfigured",
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Stopped => "stopped",
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Running => "running",
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Stale => "stale",
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Unsupported => "unsupported",
         }
     }
 
     fn blocks_upgrade(self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             matches!(self, Self::Running | Self::Stale)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             false
         }
@@ -209,7 +210,7 @@ impl UpgradeFailure {
 }
 
 struct OperatorUpgradeLock {
-    _file: Flock<File>,
+    _file: File,
 }
 
 impl OperatorUpgradeLock {
@@ -228,13 +229,13 @@ impl OperatorUpgradeLock {
                 format!("Could not open the upgrade lock {}: {error}", path.display()),
             )
         })?;
-        let locked = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, error)| {
+        file.try_lock_exclusive().map_err(|error| {
             UpgradeFailure::new(
                 "upgrade_in_progress",
                 format!("Another Zodex upgrade is already in progress: {error}"),
             )
         })?;
-        Ok(Self { _file: locked })
+        Ok(Self { _file: file })
     }
 }
 
@@ -378,6 +379,7 @@ async fn continue_operator_upgrade(
         &target_text,
     )
     .await?;
+    #[cfg(not(target_os = "windows"))]
     fs::write(&installer_path, EMBEDDED_OPERATOR_INSTALLER).map_err(|error| {
         UpgradeFailure::new(
             "install_failed",
@@ -391,10 +393,14 @@ async fn continue_operator_upgrade(
     emitter.progress("installing", Some(&target_text), "Installing update…");
     let extracted_dir = temp.path().join(format!("zodex-{target_triple}"));
     extract_upgrade_archive(&archive_path, temp.path())?;
-    if !extracted_dir.join("zodex").is_file() {
+    if !extracted_dir.join(operator_binary_name()).is_file() {
         return Err(UpgradeFailure::new(
             "release_archive_invalid",
-            format!("Release archive did not contain {}/zodex", extracted_dir.display()),
+            format!(
+                "Release archive did not contain {}/{}",
+                extracted_dir.display(),
+                operator_binary_name()
+            ),
         ));
     }
     install_extracted_operator(&installer_path, &extracted_dir)?;
@@ -571,6 +577,29 @@ fn save_upgrade_cache(version: &Version) -> std::result::Result<(), UpgradeFailu
 }
 
 fn upgrade_cache_file() -> std::result::Result<PathBuf, UpgradeFailure> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = env::var_os("LOCALAPPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("USERPROFILE")
+                    .filter(|value| !value.is_empty())
+                    .map(|home| PathBuf::from(home).join("AppData/Local"))
+            })
+            .ok_or_else(|| {
+                UpgradeFailure::new(
+                    "upgrade_cache",
+                    "LOCALAPPDATA and USERPROFILE are unavailable",
+                )
+            })?
+            .join("zodex/cache");
+        create_private_upgrade_dir(&root)?;
+        return Ok(root.join("upgrade-check.json"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let root = env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -579,9 +608,33 @@ fn upgrade_cache_file() -> std::result::Result<PathBuf, UpgradeFailure> {
         .join("zodex");
     create_private_upgrade_dir(&root)?;
     Ok(root.join("upgrade-check.json"))
+    }
 }
 
 fn upgrade_state_root() -> std::result::Result<PathBuf, UpgradeFailure> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = env::var_os("LOCALAPPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("USERPROFILE")
+                    .filter(|value| !value.is_empty())
+                    .map(|home| PathBuf::from(home).join("AppData/Local"))
+            })
+            .ok_or_else(|| {
+                UpgradeFailure::new(
+                    "upgrade_lock_failed",
+                    "LOCALAPPDATA and USERPROFILE are unavailable",
+                )
+            })?
+            .join("zodex/state");
+        create_private_upgrade_dir(&root)?;
+        return Ok(root);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let root = env::var_os("XDG_STATE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -590,6 +643,7 @@ fn upgrade_state_root() -> std::result::Result<PathBuf, UpgradeFailure> {
         .join("zodex");
     create_private_upgrade_dir(&root)?;
     Ok(root)
+    }
 }
 
 fn create_private_upgrade_dir(path: &Path) -> std::result::Result<(), UpgradeFailure> {
@@ -716,6 +770,14 @@ fn install_extracted_operator(
     installer: &Path,
     extracted_dir: &Path,
 ) -> std::result::Result<(), UpgradeFailure> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = installer;
+        return install_extracted_operator_windows(extracted_dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let current = env::current_exe().map_err(|error| {
         UpgradeFailure::new("install_failed", format!("Could not resolve current zodex executable: {error}"))
     })?;
@@ -743,6 +805,108 @@ fn install_extracted_operator(
         ));
     }
     Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_extracted_operator_windows(
+    extracted_dir: &Path,
+) -> std::result::Result<(), UpgradeFailure> {
+    use std::os::windows::process::CommandExt as _;
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+
+    let current = env::current_exe().map_err(|error| {
+        UpgradeFailure::new(
+            "install_failed",
+            format!("Could not resolve current zodex executable: {error}"),
+        )
+    })?;
+    let source = extracted_dir.join(operator_binary_name());
+    let state = upgrade_state_root()?;
+    let pending = state.join("pending-zodex.exe");
+    let helper = state.join("finish-upgrade.ps1");
+    fs::copy(&source, &pending).map_err(|error| {
+        UpgradeFailure::new(
+            "install_failed",
+            format!("Could not stage Windows update at {}: {error}", pending.display()),
+        )
+    })?;
+    let script = r#"param(
+    [Parameter(Mandatory=$true)][string]$Source,
+    [Parameter(Mandatory=$true)][string]$Destination,
+    [Parameter(Mandatory=$true)][int]$ParentPid,
+    [Parameter(Mandatory=$true)][string]$ScriptPath
+)
+$ErrorActionPreference = 'Stop'
+try {
+    Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
+} finally {
+    Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+}
+"#;
+    fs::write(&helper, script).map_err(|error| {
+        UpgradeFailure::new(
+            "install_failed",
+            format!("Could not write Windows upgrade helper {}: {error}", helper.display()),
+        )
+    })?;
+    Command::new(windows_powershell_path()?)
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&helper)
+        .arg("-Source")
+        .arg(&pending)
+        .arg("-Destination")
+        .arg(&current)
+        .arg("-ParentPid")
+        .arg(std::process::id().to_string())
+        .arg("-ScriptPath")
+        .arg(&helper)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|error| {
+            UpgradeFailure::new(
+                "install_failed",
+                format!("Could not launch Windows upgrade helper: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_powershell_path() -> std::result::Result<PathBuf, UpgradeFailure> {
+    let system_root = env::var_os("SystemRoot")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            UpgradeFailure::new(
+                "install_failed",
+                "SystemRoot is unavailable; cannot locate built-in Windows PowerShell",
+            )
+        })?;
+    let powershell = PathBuf::from(system_root)
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    if !powershell.is_file() {
+        return Err(UpgradeFailure::new(
+            "install_failed",
+            format!(
+                "Built-in Windows PowerShell was not found at {}",
+                powershell.display()
+            ),
+        ));
+    }
+    Ok(powershell)
+}
+
+fn operator_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "zodex.exe"
+    } else {
+        "zodex"
+    }
 }
 
 fn operator_target_triple() -> std::result::Result<&'static str, UpgradeFailure> {
@@ -750,6 +914,7 @@ fn operator_target_triple() -> std::result::Result<&'static str, UpgradeFailure>
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => Ok("aarch64-unknown-linux-gnu"),
+        ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
         (os, arch) => Err(UpgradeFailure::new(
             "unsupported_platform",
             format!("Zodex operator upgrades do not support {os}/{arch}"),
@@ -757,7 +922,7 @@ fn operator_target_triple() -> std::result::Result<&'static str, UpgradeFailure>
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, UpgradeFailure> {
     use zodex::local::{LocalPaths, LocalStatusDocument, LocalStatusState};
 
@@ -775,7 +940,7 @@ fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, Upgr
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, UpgradeFailure> {
     Ok(UpgradeLocalState::Unsupported)
 }
@@ -794,7 +959,26 @@ async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFai
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFailure> {
+    use zodex::local::{LocalPaths, stop_via_windows_process};
+
+    let paths = LocalPaths::discover().map_err(|error| {
+        UpgradeFailure::new(
+            "local_stop_failed",
+            format!("Could not resolve Zodex Local state: {error:#}"),
+        )
+    })?;
+    stop_via_windows_process(&paths).await.map_err(|error| {
+        UpgradeFailure::new(
+            "local_stop_failed",
+            format!("Could not stop Zodex Local: {error:#}"),
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFailure> {
     Ok(())
 }
@@ -828,6 +1012,22 @@ mod operator_upgrade_tests {
             requested_direction(&current, &target, false),
             UpgradeDirection::Downgrade
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_operator_target_and_binary_name_match_release_contract() {
+        assert_eq!(operator_target_triple().unwrap(), "x86_64-pc-windows-msvc");
+        assert_eq!(operator_binary_name(), "zodex.exe");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_upgrade_uses_builtin_powershell() {
+        let system_root = env::var_os("SystemRoot").expect("Windows runner has SystemRoot");
+        let expected = PathBuf::from(system_root)
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        assert_eq!(windows_powershell_path().unwrap(), expected);
     }
 
     #[test]

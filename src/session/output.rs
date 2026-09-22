@@ -1,12 +1,17 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
+#[cfg(unix)]
+use std::io::Read as _;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
+#[cfg(unix)]
 use anyhow::{Context, Result};
+#[cfg(not(unix))]
+use tokio::io::AsyncReadExt as _;
 use tokio::sync::Notify;
 
 use crate::invocation::InvocationContext;
@@ -326,6 +331,7 @@ fn cleanup_stale_spills(dir: &std::path::Path) {
     }
 }
 
+#[cfg(unix)]
 pub(super) fn spawn_reader(
     mut reader: std::fs::File,
     output: Arc<OutputBuffer>,
@@ -378,6 +384,108 @@ pub(super) fn spawn_reader(
         })
         .context("failed to start PTY output reader thread")?;
     Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn spawn_pipe_readers(
+    mut stdout: tokio::process::ChildStdout,
+    mut stderr: tokio::process::ChildStderr,
+    output: Arc<OutputBuffer>,
+    observer: Arc<dyn SessionOutputObserver>,
+    internal_session_id: u64,
+    session_handle: Arc<str>,
+    invocation: InvocationContext,
+) {
+    tokio::spawn(async move {
+        let mut stdout_open = true;
+        let mut stderr_open = true;
+        let mut stdout_decoder = StreamingUtf8Decoder::default();
+        let mut stderr_decoder = StreamingUtf8Decoder::default();
+        let mut stdout_buffer = [0_u8; 8192];
+        let mut stderr_buffer = [0_u8; 8192];
+        let mut sequence = 0_u64;
+
+        while stdout_open || stderr_open {
+            tokio::select! {
+                result = stdout.read(&mut stdout_buffer), if stdout_open => {
+                    match result {
+                        Ok(0) | Err(_) => stdout_open = false,
+                        Ok(read) => {
+                            let chunk = stdout_decoder.push(&stdout_buffer[..read]);
+                            observe_pipe_chunk(
+                                &output,
+                                observer.as_ref(),
+                                internal_session_id,
+                                &session_handle,
+                                &invocation,
+                                &mut sequence,
+                                chunk,
+                            );
+                        }
+                    }
+                }
+                result = stderr.read(&mut stderr_buffer), if stderr_open => {
+                    match result {
+                        Ok(0) | Err(_) => stderr_open = false,
+                        Ok(read) => {
+                            let chunk = stderr_decoder.push(&stderr_buffer[..read]);
+                            observe_pipe_chunk(
+                                &output,
+                                observer.as_ref(),
+                                internal_session_id,
+                                &session_handle,
+                                &invocation,
+                                &mut sequence,
+                                chunk,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        for final_chunk in [stdout_decoder.finish(), stderr_decoder.finish()] {
+            observe_pipe_chunk(
+                &output,
+                observer.as_ref(),
+                internal_session_id,
+                &session_handle,
+                &invocation,
+                &mut sequence,
+                final_chunk,
+            );
+        }
+        observer.observe_output_complete(SessionOutputCompletion {
+            internal_session_id,
+            session_handle,
+            invocation,
+        });
+        output.mark_reader_done();
+    });
+}
+
+#[cfg(not(unix))]
+fn observe_pipe_chunk(
+    output: &OutputBuffer,
+    observer: &dyn SessionOutputObserver,
+    internal_session_id: u64,
+    session_handle: &Arc<str>,
+    invocation: &InvocationContext,
+    sequence: &mut u64,
+    chunk: String,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    observer.observe_output(SessionOutputChunk {
+        internal_session_id,
+        session_handle: session_handle.clone(),
+        invocation: invocation.clone(),
+        sequence: *sequence,
+        text: chunk.clone(),
+    });
+    *sequence = (*sequence).saturating_add(1);
+    output.append(&chunk);
 }
 
 pub(super) fn next_char_boundary(s: &str, idx: usize) -> usize {

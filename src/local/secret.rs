@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use anyhow::Context as _;
 use anyhow::{Result, bail};
 
@@ -43,6 +43,9 @@ pub trait RuntimeKeyStore: Send + Sync {
 
 #[cfg(target_os = "macos")]
 pub struct MacKeychainRuntimeKeyStore;
+
+#[cfg(target_os = "windows")]
+pub struct WindowsCredentialRuntimeKeyStore;
 
 #[cfg(target_os = "macos")]
 impl MacKeychainRuntimeKeyStore {
@@ -89,6 +92,45 @@ impl RuntimeKeyStore for MacKeychainRuntimeKeyStore {
             Err(error) => {
                 Err(error).context("failed to remove OpenAI tunnel runtime key from Keychain")
             }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsCredentialRuntimeKeyStore {
+    const SERVICE: &'static str = "com.amxv.zodex.local";
+    const ACCOUNT: &'static str = "openai-tunnel-runtime-key";
+
+    fn entry() -> Result<keyring::Entry> {
+        keyring::Entry::new(Self::SERVICE, Self::ACCOUNT)
+            .context("failed to open Windows Credential Manager entry for Zodex Local")
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl RuntimeKeyStore for WindowsCredentialRuntimeKeyStore {
+    fn get(&self) -> Result<Option<RuntimeKey>> {
+        match Self::entry()?.get_password() {
+            Ok(value) => Ok(Some(RuntimeKey::new(value)?)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error).context(
+                "failed to read OpenAI tunnel runtime key from Windows Credential Manager",
+            ),
+        }
+    }
+
+    fn set(&self, key: &RuntimeKey) -> Result<()> {
+        Self::entry()?
+            .set_password(key.expose())
+            .context("failed to store OpenAI tunnel runtime key in Windows Credential Manager")
+    }
+
+    fn delete(&self) -> Result<()> {
+        match Self::entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error).context(
+                "failed to remove OpenAI tunnel runtime key from Windows Credential Manager",
+            ),
         }
     }
 }

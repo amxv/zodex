@@ -8,13 +8,7 @@ use serde::Serialize;
 use super::LocalPaths;
 
 pub(super) fn set_user_only_directory(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("failed to set 0700 permissions on {}", path.display()))?;
-    }
-    Ok(())
+    super::private_fs::set_user_only_directory(path)
 }
 
 pub(super) fn write_private_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -41,11 +35,7 @@ pub(super) fn write_private_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("failed to write Local runtime artifact {}", path.display()))?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
+    super::private_fs::set_user_only_file(path)?;
     Ok(())
 }
 
@@ -69,6 +59,7 @@ pub(super) fn append_lifecycle_diagnostic(paths: &LocalPaths, message: &str) -> 
     }
     let mut file = options.open(path)?;
     writeln!(file, "{message}")?;
+    super::private_fs::set_user_only_file(&paths.diagnostic_log_file())?;
     Ok(())
 }
 

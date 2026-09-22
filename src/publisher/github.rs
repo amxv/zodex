@@ -1,7 +1,12 @@
 use std::fs;
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,18 +15,22 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 
+#[cfg(unix)]
+use super::ASKPASS_MODE;
+#[cfg(unix)]
+use super::ASKPASS_SCRIPT_NAME;
 use super::api::{
     CreatePullRequestPayload, CreatePullRequestResponse, GithubAppClaims,
     InstallationTokenResponse, MintedInstallationToken, PublishPrResponse,
 };
-use super::{
-    ASKPASS_MODE, ASKPASS_SCRIPT_NAME, DEFAULT_USER_AGENT, GITHUB_API_BASE, GITHUB_API_VERSION,
-};
+use super::{DEFAULT_USER_AGENT, GITHUB_API_BASE, GITHUB_API_VERSION};
 
+#[cfg(unix)]
 pub(super) fn github_repo_https_url(repo: &str) -> String {
     format!("https://github.com/{repo}.git")
 }
 
+#[cfg(unix)]
 pub(super) fn clone_repo_with_token(
     parent_dir: &Path,
     token: &str,
@@ -44,6 +53,7 @@ pub(super) fn clone_repo_with_token(
     Ok(repo_dir)
 }
 
+#[cfg(unix)]
 pub(super) fn write_askpass_script(dir: &Path) -> Result<PathBuf> {
     let script_path = dir.join(ASKPASS_SCRIPT_NAME);
     let mut file = fs::File::create(&script_path)
@@ -58,11 +68,13 @@ esac
 "#,
     )
     .with_context(|| format!("failed to write {}", script_path.display()))?;
+    #[cfg(unix)]
     fs::set_permissions(&script_path, fs::Permissions::from_mode(ASKPASS_MODE))
         .with_context(|| format!("failed to chmod {}", script_path.display()))?;
     Ok(script_path)
 }
 
+#[cfg(unix)]
 pub(super) fn git_plain(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -72,6 +84,7 @@ pub(super) fn git_plain(cwd: &Path, args: &[&str]) -> Result<String> {
     check_command_output("git", args, output)
 }
 
+#[cfg(unix)]
 pub(super) fn git_with_token(
     cwd: &Path,
     token: &str,
@@ -89,6 +102,7 @@ pub(super) fn git_with_token(
     check_command_output("git", args, output)
 }
 
+#[cfg(unix)]
 fn check_command_output(
     program: &str,
     args: &[&str],

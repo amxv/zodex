@@ -295,6 +295,7 @@
         assert!(ambiguous_message.contains("ZODEX_SPRITE"));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn sprite_registry_path_uses_zodex_config_dir() {
         assert_eq!(

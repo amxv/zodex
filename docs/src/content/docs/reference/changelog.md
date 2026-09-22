@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## Unreleased
+
+- Added first-class x86_64 Windows support for Zodex Local, including Windows-native path discovery, PowerShell command execution, pipe-backed long-running sessions, process birth-identity/tree cleanup, Windows Credential Manager storage, and managed Windows OpenAI tunnel-client assets.
+- Added detached Windows Local start/stop lifecycle, terminal-watch defaults with `clip.exe` clipboard support, and preserved the existing macOS Liveboard/menu-bar experience as a macOS-specific control surface.
+- Added Windows operator release artifacts, a checksum-verifying PowerShell installer, Windows-safe self-upgrades, and native Windows CI/package smoke validation.
+
 ## 0.3.17 — 2026-09-16
 
 - Fixed `zodex local setup` failing with "contains multiple -darwin-arm64.zip assets" after the upstream `openai/tunnel-client` release started publishing additional `tunnel-client-runtime-*` and `tunnel-client-runtime-cloudflared-*` archives alongside the primary asset. The managed tunnel-client installer now matches the exact `tunnel-client-<version>-<platform>.zip` asset name instead of a bare suffix.

@@ -203,6 +203,12 @@ impl CommandExecutionProfile {
             }
             Self::Local(local) => {
                 let mut command = Command::new(&local.shell);
+                #[cfg(target_os = "windows")]
+                command
+                    .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+                    .arg(cmd)
+                    .env_clear();
+                #[cfg(not(target_os = "windows"))]
                 command.arg("-c").arg(cmd).env_clear();
                 for (key, value) in local.environment.iter() {
                     command.env(key, value);
@@ -230,6 +236,8 @@ struct LocalExecutionProfile {
 
 impl LocalExecutionProfile {
     fn new(shell: PathBuf, environment: Vec<(OsString, OsString)>) -> Result<Self> {
+        #[cfg(target_os = "windows")]
+        let mut environment = environment;
         if !shell.is_absolute() {
             bail!(
                 "Local command shell must be an absolute path: {}",
@@ -239,10 +247,23 @@ impl LocalExecutionProfile {
         if shell.as_os_str().is_empty() {
             bail!("Local command shell must not be empty");
         }
-        for required in ["HOME", "PATH"] {
-            if !contains_nonempty_environment_key(&environment, required) {
-                bail!("captured Local developer environment is missing `{required}`");
-            }
+        if !contains_nonempty_environment_key(&environment, "PATH") {
+            bail!("captured Local developer environment is missing `PATH`");
+        }
+        #[cfg(target_os = "windows")]
+        if !contains_nonempty_environment_key(&environment, "HOME") {
+            let user_profile = environment
+                .iter()
+                .find(|(key, value)| environment_key_matches(key, "USERPROFILE") && !value.is_empty())
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "captured Local developer environment is missing both `HOME` and `USERPROFILE`"
+                ))?;
+            environment.push((OsString::from("HOME"), user_profile));
+        }
+        #[cfg(not(target_os = "windows"))]
+        if !contains_nonempty_environment_key(&environment, "HOME") {
+            bail!("captured Local developer environment is missing `HOME`");
         }
         Ok(Self {
             shell,
@@ -254,7 +275,18 @@ impl LocalExecutionProfile {
 fn contains_nonempty_environment_key(environment: &[(OsString, OsString)], key: &str) -> bool {
     environment
         .iter()
-        .any(|(candidate, value)| candidate == OsStr::new(key) && !value.is_empty())
+        .any(|(candidate, value)| environment_key_matches(candidate, key) && !value.is_empty())
+}
+
+fn environment_key_matches(candidate: &OsStr, key: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        candidate.to_string_lossy().eq_ignore_ascii_case(key)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidate == OsStr::new(key)
+    }
 }
 
 struct NoopOutputObserver;

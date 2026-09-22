@@ -19,14 +19,21 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             archive_name: zodex-x86_64-unknown-linux-gnu
             os: ubuntu-22.04
+            windows: false
           - target: aarch64-unknown-linux-gnu
             archive_name: zodex-aarch64-unknown-linux-gnu
             os: ubuntu-22.04
             linker: aarch64-linux-gnu-gcc
             apt_packages: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            windows: false
           - target: aarch64-apple-darwin
             archive_name: zodex-aarch64-apple-darwin
             os: macos-15
+            windows: false
+          - target: x86_64-pc-windows-msvc
+            archive_name: zodex-x86_64-pc-windows-msvc
+            os: windows-latest
+            windows: true
 
     steps:
       - name: Checkout
@@ -57,6 +64,7 @@ jobs:
           bun run build
 
       - name: Build release binaries
+        if: ${{ !matrix.windows }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
           ZODEX_LIVEBOARD_EMBED_REQUIRED: ${{ contains(matrix.target, 'apple-darwin') && '1' || '0' }}
@@ -68,12 +76,17 @@ jobs:
             --bin zodexd \
             --bin zodex-prd
 
+      - name: Build Windows operator
+        if: ${{ matrix.windows }}
+        run: cargo build --locked --release --target "${{ matrix.target }}" --bin zodex
+
       - name: Build macOS menu bar app
         if: contains(matrix.target, 'apple-darwin')
         run: |
           apps/menubar/build.sh "target/${{ matrix.target }}/release/Zodex.app"
 
       - name: Package release archive
+        if: ${{ !matrix.windows }}
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
           cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
@@ -89,6 +102,61 @@ jobs:
             cd dist
             shasum -a 256 "${{ matrix.archive_name }}.tar.gz" > "${{ matrix.archive_name }}.tar.gz.sha256"
           )
+
+      - name: Package Windows release archive
+        if: ${{ matrix.windows }}
+        shell: pwsh
+        run: |
+          $archiveName = "${{ matrix.archive_name }}"
+          $target = "${{ matrix.target }}"
+          $packageDir = "dist/$archiveName"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/$target/release/zodex.exe" "$packageDir/zodex.exe"
+          tar -C dist -czf "dist/$archiveName.tar.gz" $archiveName
+          $hash = (Get-FileHash "dist/$archiveName.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archiveName.tar.gz" | Set-Content -Encoding ascii "dist/$archiveName.tar.gz.sha256"
+
+      - name: Smoke test packaged Windows operator
+        if: ${{ matrix.windows }}
+        shell: pwsh
+        run: |
+          $archiveName = "${{ matrix.archive_name }}"
+          $smoke = Join-Path $env:RUNNER_TEMP "zodex-smoke"
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          tar -C $smoke -xzf "dist/$archiveName.tar.gz"
+          $zodex = Join-Path $smoke "$archiveName/zodex.exe"
+          & $zodex --version
+          & $zodex local --help | Out-Null
+          & $zodex local setup --help | Out-Null
+          & $zodex local watch --help | Out-Null
+          & $zodex upgrade --help | Out-Null
+
+          $installDir = Join-Path $smoke "installed"
+          $assetPath = (Resolve-Path -LiteralPath "dist/$archiveName.tar.gz").Path
+          $env:ZODEX_ASSET_URL = [Uri]::new($assetPath).AbsoluteUri
+          $env:ZODEX_INSTALL_DIR = $installDir
+          & "$env:GITHUB_WORKSPACE/scripts/install.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer smoke test failed" }
+          $installed = Join-Path $installDir "zodex.exe"
+          if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            throw "Windows installer did not install zodex.exe"
+          }
+          & $installed --version
+          if ($LASTEXITCODE -ne 0) { throw "installed zodex --version failed" }
+          Remove-Item Env:ZODEX_ASSET_URL -ErrorAction SilentlyContinue
+          Remove-Item Env:ZODEX_INSTALL_DIR -ErrorAction SilentlyContinue
+
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$env:GITHUB_WORKSPACE/scripts/install.ps1",
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "Windows installer syntax is invalid"
+          }
 
       - name: Smoke test packaged macOS Local operator
         if: contains(matrix.target, 'apple-darwin')

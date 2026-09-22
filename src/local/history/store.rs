@@ -80,7 +80,7 @@ impl HistoryStore {
                  );",
             )
             .context("failed to initialize Local history active-process retention guard")?;
-        set_user_only_file_permissions(&path)?;
+        crate::local::private_fs::set_user_only_file(&path)?;
 
         let store = Self {
             path,
@@ -1036,7 +1036,7 @@ fn ensure_history_parent(path: &Path) -> Result<()> {
             parent.display()
         )
     })?;
-    set_user_only_directory_permissions(parent)
+    crate::local::private_fs::set_user_only_directory(parent)
 }
 
 pub(super) fn physical_store_size(path: &Path) -> Result<u64> {
@@ -1051,30 +1051,6 @@ pub(super) fn physical_store_size(path: &Path) -> Result<u64> {
         }
     }
     Ok(total)
-}
-
-#[cfg(unix)]
-fn set_user_only_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("failed to set 0700 permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_user_only_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_user_only_file_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_user_only_file_permissions(_path: &Path) -> Result<()> {
-    Ok(())
 }
 
 pub(super) fn mark_retention_error_best_effort(store: &HistoryStore, error_message: &str) {

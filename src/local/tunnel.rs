@@ -415,6 +415,7 @@ fn append_bounded_log(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
     if !bytes.ends_with(b"\n") {
         file.write_all(b"\n")?;
     }
+    super::private_fs::set_user_only_file(path)?;
     Ok(())
 }
 
@@ -428,11 +429,7 @@ fn write_user_only_file(path: &Path, bytes: &[u8]) -> Result<()> {
             parent.display()
         )
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-    }
+    super::private_fs::set_user_only_directory(parent)?;
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -445,11 +442,7 @@ fn write_user_only_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("failed to write Local runtime file {}", path.display()))?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
+    super::private_fs::set_user_only_file(path)?;
     Ok(())
 }
 

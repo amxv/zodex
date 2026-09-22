@@ -375,7 +375,10 @@ fn zodex_local_runtime_actions_fail_cleanly_on_unsupported_host() {
     let output = fixture.command().args(["local", "start"]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("macOS-only"), "{stderr}");
+    assert!(
+        stderr.contains("supported on macOS and Windows"),
+        "{stderr}"
+    );
     assert!(stderr.contains("zodex local status"), "{stderr}");
 }
 

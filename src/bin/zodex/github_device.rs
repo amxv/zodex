@@ -35,9 +35,27 @@ fn resolve_publisher_client_id(publisher_client_id: Option<&str>) -> Option<Stri
 }
 
 fn push_grant_cache_path(repo: &str) -> Result<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = if let Some(app_data) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            PathBuf::from(app_data).join("zodex/github-device-flow")
+        } else {
+            let profile = env::var_os("USERPROFILE")
+                .filter(|value| !value.is_empty())
+                .context(
+                    "APPDATA or USERPROFILE must be set to use GitHub App device flow on Windows",
+                )?;
+            PathBuf::from(profile).join("AppData/Roaming/zodex/github-device-flow")
+        };
+        return Ok(root.join(push_grant_file_name(repo)));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let home = env::var("HOME").context("HOME must be set to use GitHub App device flow")?;
     let root = Path::new(&home).join(GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR);
     Ok(root.join(push_grant_file_name(repo)))
+    }
 }
 
 fn save_cached_device_flow_grant(repo: &str, grant: &CachedDeviceFlowGrant) -> Result<()> {

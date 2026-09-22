@@ -7,19 +7,28 @@ use zodex::local::{
     run_local_liveboard_without_open, run_local_watch, validate_tunnel_id, WatchOptions,
 };
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use zodex::local::{
+    LocalSetupRequest, LocalSetupService, OfficialTunnelReleaseClient,
+    ProcessTunnelMetadataValidator, RuntimeKeyStore, TunnelArchitecture,
+    paths_from_runtime_bootstrap, run_hidden_runtime,
+};
 #[cfg(target_os = "macos")]
 use zodex::local::{
-    LocalSetupRequest, LocalSetupService, MacDittoArchiveExtractor, MacKeychainRuntimeKeyStore,
-    OfficialTunnelReleaseClient, ProcessTunnelMetadataValidator, RuntimeKeyStore,
-    SystemLaunchdController, TunnelArchitecture, paths_from_runtime_bootstrap, run_hidden_runtime,
+    MacDittoArchiveExtractor, MacKeychainRuntimeKeyStore, SystemLaunchdController,
     start_via_launchd, stop_via_launchd,
+};
+#[cfg(target_os = "windows")]
+use zodex::local::{
+    WindowsCredentialRuntimeKeyStore, WindowsTarArchiveExtractor, start_via_windows_process,
+    stop_via_windows_process,
 };
 
 #[derive(Debug, Subcommand)]
 #[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --tui --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
 enum LocalCommand {
     /// Provision Local configuration, credentials, and the managed tunnel client.
-    #[command(after_help = "Examples:\n  zodex local setup\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin, an environment variable name, or an already-open file descriptor; never put the secret itself on argv.\n\nmacOS privacy: setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Ordinary unprotected workspaces do not require blanket Full Disk Access.")]
+    #[command(after_help = "Examples:\n  zodex local setup\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin or an environment variable name; Unix hosts may also use an already-open file descriptor. Never put the secret itself on argv.\n\nmacOS privacy: setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Ordinary unprotected workspaces do not require blanket Full Disk Access. Windows stores the runtime key in Windows Credential Manager.")]
     Setup {
         /// Existing OpenAI tunnel ID. If omitted, setup prompts interactively.
         #[arg(long, value_name = "TUNNEL_ID")]
@@ -47,11 +56,11 @@ enum LocalCommand {
         /// Generate a new localhost observability bearer instead of reusing the current one.
         #[arg(long)]
         rotate_observability_bearer: bool,
-        /// Skip launching and enabling the macOS menu bar controls at login.
+        /// Skip launching/enabling the macOS menu bar controls (ignored on Windows).
         #[arg(long)]
         no_menu_bar: bool,
     },
-    /// Start the one Mac-wide Local runtime from a repository or workspace.
+    /// Start the one machine-wide Local runtime from a repository or workspace.
     #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir. ChatGPT caches MCP server instructions, so refresh the Zodex Local app in ChatGPT app settings after changing PATH.")]
     Start {
         /// Start directory published to ChatGPT as the suggested initial explicit workdir.
@@ -67,10 +76,10 @@ enum LocalCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Open the runtime-owned Local Liveboard, or explicitly use the terminal viewer.
+    /// Open Local activity (web Liveboard on macOS, terminal viewer on Windows).
     #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local watch --no-open --agent k7m2\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
     Watch {
-        /// Use the terminal viewer instead of the default web Liveboard.
+        /// Use the terminal viewer (the default mode on Windows).
         #[arg(long)]
         tui: bool,
         /// Print the Liveboard URL without opening the default browser.
@@ -83,6 +92,7 @@ enum LocalCommand {
         #[arg(long, requires = "tui")]
         all: bool,
     },
+    #[cfg(target_os = "macos")]
     /// Open the lightweight macOS menu bar controls for Local.
     Menu,
     /// Inspect durable Local invocation history without opening the TUI.
@@ -208,6 +218,15 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 validate_agent_id(agent)?;
             }
             ensure_local_runtime_host()?;
+            #[cfg(target_os = "windows")]
+            if !tui {
+                if no_open {
+                    bail!(
+                        "Windows Local does not host the macOS web Liveboard; use `zodex local watch --tui`"
+                    );
+                }
+                return run_local_watch(&paths, WatchOptions { agent, all: false }).await;
+            }
             if tui {
                 run_local_watch(&paths, WatchOptions { agent, all }).await
             } else if no_open {
@@ -216,6 +235,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 run_local_liveboard(&paths, agent.as_deref()).await
             }
         }
+        #[cfg(target_os = "macos")]
         LocalCommand::Menu => {
             ensure_local_runtime_host()?;
             run_native_local_menu()
@@ -376,11 +396,6 @@ fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn run_native_local_menu() -> Result<()> {
-    bail!("Zodex menu bar controls are only available on macOS")
-}
-
 #[cfg(target_os = "macos")]
 async fn run_native_local_start(
     paths: &LocalPaths,
@@ -410,14 +425,58 @@ async fn run_native_local_start(
         &launchd,
     )
     .await?;
+    print_local_start_outcome(&outcome);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn run_native_local_start(
+    paths: &LocalPaths,
+    start_directory: &Path,
+    ttl_seconds: Option<u64>,
+) -> Result<()> {
+    let secrets = WindowsCredentialRuntimeKeyStore;
+    if secrets.get()?.is_none() {
+        bail!(
+            "OpenAI tunnel runtime key is missing from Windows Credential Manager; run `zodex local setup` first"
+        );
+    }
+    let config = LocalConfig::load(&paths.config_file())?;
+    if !config.is_provider_configured() {
+        bail!("Zodex Local is not configured; run `zodex local setup` first");
+    }
+    let executable = env::current_exe()
+        .context("failed to resolve installed Zodex executable")?
+        .canonicalize()
+        .context("failed to canonicalize installed Zodex executable")?;
+    let environment = env::vars_os().collect::<Vec<_>>();
+    let outcome = start_via_windows_process(
+        paths,
+        &executable,
+        start_directory,
+        ttl_seconds,
+        &environment,
+    )
+    .await?;
+    print_local_start_outcome(&outcome);
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+async fn run_native_local_start(
+    _paths: &LocalPaths,
+    _start_directory: &Path,
+    _ttl_seconds: Option<u64>,
+) -> Result<()> {
+    bail!("Zodex Local start is supported on macOS and Windows")
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn print_local_start_outcome(outcome: &zodex::local::LocalStartOutcome) {
     let discovery = &outcome.discovery;
     println!(
         "Zodex Local is {}.",
-        if outcome.already_running {
-            "already running"
-        } else {
-            "ready"
-        }
+        if outcome.already_running { "already running" } else { "ready" }
     );
     println!("Runtime: {}", discovery.runtime_id);
     println!("PID: {}", discovery.pid);
@@ -431,21 +490,9 @@ async fn run_native_local_start(
         outcome.active_process_count,
         if outcome.active_process_count == 1 { "" } else { "es" }
     );
-    println!(
-        "ChatGPT: refresh the Zodex Local app in app settings to load this start directory."
-    );
-    println!("Inspect: zodex local status | zodex local watch");
+    println!("ChatGPT: refresh the Zodex Local app in app settings to load this start directory.");
+    println!("Inspect: zodex local status | zodex local watch --tui");
     println!("Stop: zodex local stop");
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn run_native_local_start(
-    _paths: &LocalPaths,
-    _start_directory: &Path,
-    _ttl_seconds: Option<u64>,
-) -> Result<()> {
-    bail!("Zodex Local start is only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -456,9 +503,16 @@ async fn run_native_local_stop(paths: &LocalPaths) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+async fn run_native_local_stop(paths: &LocalPaths) -> Result<()> {
+    let outcome = stop_via_windows_process(paths).await?;
+    println!("Zodex Local stopped ({outcome:?}).");
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn run_native_local_stop(_paths: &LocalPaths) -> Result<()> {
-    bail!("Zodex Local stop is only available on macOS")
+    bail!("Zodex Local stop is supported on macOS and Windows")
 }
 
 #[cfg(target_os = "macos")]
@@ -471,9 +525,19 @@ async fn run_native_hidden_runtime(bootstrap: PathBuf) -> Result<()> {
     run_hidden_runtime(paths, bootstrap, runtime_key).await
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+async fn run_native_hidden_runtime(bootstrap: PathBuf) -> Result<()> {
+    let paths = paths_from_runtime_bootstrap(&bootstrap)?;
+    let secrets = WindowsCredentialRuntimeKeyStore;
+    let runtime_key = secrets.get()?.context(
+        "OpenAI tunnel runtime key is missing from Windows Credential Manager; run `zodex local setup` again",
+    )?;
+    run_hidden_runtime(paths, bootstrap, runtime_key).await
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn run_native_hidden_runtime(_bootstrap: PathBuf) -> Result<()> {
-    bail!("hidden Zodex Local runtime is only available on macOS")
+    bail!("hidden Zodex Local runtime is supported on macOS and Windows")
 }
 
 fn resolve_local_setup_inputs(
@@ -634,7 +698,46 @@ async fn run_native_local_setup(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+async fn run_native_local_setup(
+    paths: &LocalPaths,
+    tunnel_id: String,
+    runtime_key: RuntimeKey,
+    rotate_observability_bearer: bool,
+    _enable_menu_bar: bool,
+) -> Result<()> {
+    let releases = OfficialTunnelReleaseClient::new()?;
+    let extractor = WindowsTarArchiveExtractor;
+    let validator = ProcessTunnelMetadataValidator::new();
+    let secrets = WindowsCredentialRuntimeKeyStore;
+    let service = LocalSetupService::new(paths, &releases, &extractor, &validator, &secrets);
+    let result = service
+        .run(LocalSetupRequest {
+            tunnel_id,
+            runtime_key,
+            architecture: TunnelArchitecture::current_windows()?,
+            rotate_observability_bearer,
+        })
+        .await?;
+    println!("Zodex Local setup complete.");
+    println!("Tunnel: {}", result.tunnel_id);
+    println!(
+        "Tunnel client: {} ({}, {})",
+        result.managed_binary.display(),
+        result.release_version,
+        if result.binary_updated { "updated" } else { "verified/reused" }
+    );
+    println!("OpenAI runtime key: stored in Windows Credential Manager");
+    println!("Tunnel metadata: read access verified; Tunnels Use/readiness is verified by `zodex local start`");
+    println!(
+        "Observability bearer: {}",
+        if result.observability_bearer_rotated { "generated/rotated" } else { "verified/reused" }
+    );
+    println!("Windows Local uses terminal watch controls; `zodex local watch --tui` opens the activity viewer.");
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn run_native_local_setup(
     _paths: &LocalPaths,
     _tunnel_id: String,
@@ -642,7 +745,7 @@ async fn run_native_local_setup(
     _rotate_observability_bearer: bool,
     _enable_menu_bar: bool,
 ) -> Result<()> {
-    bail!("Zodex Local setup is only available on macOS")
+    bail!("Zodex Local setup is supported on macOS and Windows")
 }
 
 fn handle_local_config(paths: &LocalPaths, command: LocalConfigCommand) -> Result<()> {
@@ -815,11 +918,11 @@ fn validate_agent_id(agent: &str) -> Result<()> {
 }
 
 fn ensure_local_runtime_host() -> Result<()> {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
         Ok(())
     } else {
         bail!(
-            "Zodex Local runtime actions are macOS-only; `zodex local status`, `zodex local config`, and help remain available on this host"
+            "Zodex Local runtime actions are supported on macOS and Windows; `zodex local status`, `zodex local config`, and help remain available on this host"
         )
     }
 }
@@ -827,13 +930,16 @@ fn ensure_local_runtime_host() -> Result<()> {
 #[cfg(test)]
 mod local_cli_tests {
     use std::env;
+    #[cfg(unix)]
     use std::io::{Seek as _, Write as _};
     #[cfg(unix)]
     use std::os::fd::AsRawFd as _;
 
+    #[cfg(unix)]
+    use super::read_runtime_key_from_fd;
     use super::{
-        read_runtime_key_from_fd, resolve_local_setup_inputs, resolve_local_start_directory,
-        trim_one_line_ending, validate_agent_id,
+        resolve_local_setup_inputs, resolve_local_start_directory, trim_one_line_ending,
+        validate_agent_id,
     };
 
     #[test]

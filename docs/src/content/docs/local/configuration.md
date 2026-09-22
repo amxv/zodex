@@ -252,7 +252,7 @@ because setup validates the tunnel/key combination and the managed tunnel client
 
 ## What is not stored in Local config
 
-The OpenAI runtime API key is not a normal config value. Zodex stores it in macOS Keychain.
+The OpenAI runtime API key is not a normal config value. Zodex stores it in macOS Keychain or Windows Credential Manager.
 
 The Local observability bearer is also managed separately and automatically. You do not need to put it in ChatGPT or in shell config.
 

@@ -8,7 +8,7 @@ summary: "The complete one-time setup path for Zodex Local, from OpenAI Platform
 
 Local connects ChatGPT through the OpenAI Secure MCP Tunnel. You do **not** need a Sprite proxy, Cloudflare Worker, public inbound port, or separate proxy URL for Local.
 
-This guide takes a new Apple Silicon Mac from “Zodex is installed” to “ChatGPT can call the three Zodex tools through an OpenAI Secure MCP Tunnel.”
+This guide takes a supported macOS or Windows machine from “Zodex is installed” to “ChatGPT can call the three Zodex tools through an OpenAI Secure MCP Tunnel.”
 
 For the shorter path, start with [Local](/docs/local).
 
@@ -18,7 +18,7 @@ OpenAI references: [Secure MCP Tunnel](https://developers.openai.com/api/docs/gu
 
 You need:
 
-- an Apple Silicon Mac;
+- an Apple Silicon Mac or x86_64 Windows machine;
 - the Zodex operator CLI;
 - an OpenAI Platform account/organization that can create or access Secure MCP Tunnels;
 - a ChatGPT workspace/account with developer-mode custom MCP access;
@@ -28,9 +28,17 @@ OpenAI Platform tunnel permissions and ChatGPT developer-mode permissions are se
 
 ## Install the operator CLI
 
+macOS:
+
 ```bash
 curl -fsSL https://zodex.ashray.xyz/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://zodex.ashray.xyz/install.ps1 | iex
 ```
 
 Verify:
@@ -40,9 +48,9 @@ zodex --help
 zodex local --help
 ```
 
-The normal non-root install uses `~/.local/bin`; add the PATH line above to your shell profile to keep it available in new terminals. An explicitly root-run install uses `/usr/local/bin` instead.
+On macOS, the normal non-root install uses `~/.local/bin`. On Windows, the PowerShell installer uses `%LOCALAPPDATA%\Programs\Zodex` by default and adds it to the user's PATH.
 
-The Local runtime is part of the `zodex` operator binary. You do not install a separate `zodexd` service on the Mac.
+The Local runtime is part of the `zodex` operator binary. You do not install a separate `zodexd` service on the Local host.
 
 ## Create the tunnel in OpenAI Platform
 
@@ -89,7 +97,7 @@ Tunnels: Use
 
 The runtime key does not need Tunnels Manage and does not need an OpenAI admin key.
 
-Copy the key when OpenAI shows it. You will enter it into `zodex local setup` once; Zodex stores it in macOS Keychain.
+Copy the key when OpenAI shows it. You will enter it into `zodex local setup` once; Zodex stores it in macOS Keychain or Windows Credential Manager.
 
 ## Run `zodex local setup`
 
@@ -107,16 +115,16 @@ You will be prompted for:
 On success, Zodex:
 
 - validates that the runtime key can read the selected tunnel;
-- stores the runtime key in macOS Keychain;
+- stores the runtime key in macOS Keychain or Windows Credential Manager;
 - downloads and checksum-verifies the supported OpenAI tunnel client bundle;
 - saves the non-secret tunnel configuration;
 - creates the automatically managed Local observability credential;
-- enables and opens the lightweight Zodex menu bar app so it returns at future logins;
+- on macOS, enables and opens the lightweight Zodex menu bar app so it returns at future logins;
 - exits without leaving the Local runtime or tunnel running.
 
 Setup is idempotent, so running it again is also the repair/update path.
 
-The menu app is only a control surface. Enabling it at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app, opt out during setup:
+The macOS menu app is only a control surface. Windows uses the CLI and terminal viewer instead. Enabling the macOS app at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app on macOS, opt out during setup:
 
 ```bash
 zodex local setup --no-menu-bar
@@ -178,7 +186,7 @@ Or:
 zodex local start ~/code/my-project --ttl 4h
 ```
 
-Success means Zodex has started the Mac runtime and the managed OpenAI tunnel and reached its readiness checks.
+Success means Zodex has started the Local runtime and the managed OpenAI tunnel and reached its readiness checks.
 
 Check it with:
 

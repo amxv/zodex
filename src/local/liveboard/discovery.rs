@@ -121,6 +121,7 @@ fn validate_base_url(value: &str) -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
@@ -148,12 +149,15 @@ mod tests {
         .unwrap();
         write_liveboard_discovery(&paths, &discovery).unwrap();
 
-        let mode = fs::metadata(paths.liveboard_discovery_file())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(paths.liveboard_discovery_file())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         let loaded = load_liveboard_discovery(&paths, "runtime-a").unwrap();
         assert_eq!(
             loaded.focused_url("k7m2").unwrap(),

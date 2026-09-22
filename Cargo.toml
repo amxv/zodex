@@ -32,7 +32,7 @@ codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 jsonwebtoken = "9.3"
-nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"] }
+fs2 = "0.4"
 rand = "0.10"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-webpki-roots-no-provider"] }
@@ -64,6 +64,14 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = "4.2"
+sysinfo = "0.39"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

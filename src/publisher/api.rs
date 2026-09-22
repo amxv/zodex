@@ -38,11 +38,13 @@ pub struct PublishPrResponse {
     pub pull_number: u64,
 }
 
+#[cfg(unix)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct PublishPrError {
     pub(super) error: String,
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PublisherRequest {
@@ -50,6 +52,7 @@ pub(super) enum PublisherRequest {
     DirectPush(DirectPushRequest),
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PublisherResponse {
@@ -57,6 +60,7 @@ pub(super) enum PublisherResponse {
     DirectPush(DirectPushResponse),
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct GithubYoloRepoGrant {
     pub(super) repo: String,
@@ -64,6 +68,7 @@ pub(super) struct GithubYoloRepoGrant {
     pub(super) expires_at_epoch_seconds: Option<u64>,
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct GithubModeRecord {
     pub(super) mode: String,

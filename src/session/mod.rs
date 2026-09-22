@@ -9,6 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use nix::pty::openpty;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Child;
+#[cfg(not(unix))]
+use tokio::process::ChildStdin;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
@@ -27,9 +29,11 @@ mod query;
 mod shutdown;
 
 use lifecycle::{owned_process_end, process_termination_reason};
-use output::{
-    OutputBuffer, OutputSnapshot, next_char_boundary, spawn_reader, spill_path_for_session,
-};
+#[cfg(not(unix))]
+use output::spawn_pipe_readers;
+#[cfg(unix)]
+use output::spawn_reader;
+use output::{OutputBuffer, OutputSnapshot, next_char_boundary, spill_path_for_session};
 use shutdown::{
     maybe_force_kill, reap_exit_code, request_termination, signal_owned_group_members,
     snapshot_descendants_before_termination, wait_for_session_exits_until,
@@ -107,7 +111,7 @@ struct SessionInner {
     last_known_cwd: String,
     child: Child,
     reaped_exit_code: Option<i32>,
-    pty_writer: Option<tokio::fs::File>,
+    input_writer: Option<SessionInputWriter>,
     last_used_at: SystemTime,
     last_input_at: Instant,
     idle_timeout: Duration,
@@ -119,6 +123,34 @@ struct SessionInner {
     leader_identity: Option<ProcessIdentity>,
     owned_group_members: Vec<ProcessIdentity>,
     persisted_group_members: Vec<ProcessIdentity>,
+}
+
+#[derive(Debug)]
+enum SessionInputWriter {
+    #[cfg(unix)]
+    Pty(tokio::fs::File),
+    #[cfg(not(unix))]
+    Pipe(ChildStdin),
+}
+
+impl SessionInputWriter {
+    async fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Self::Pty(writer) => writer.write_all(bytes).await,
+            #[cfg(not(unix))]
+            Self::Pipe(writer) => writer.write_all(bytes).await,
+        }
+    }
+
+    async fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Self::Pty(writer) => writer.flush().await,
+            #[cfg(not(unix))]
+            Self::Pipe(writer) => writer.flush().await,
+        }
+    }
 }
 
 struct SessionRuntime {
@@ -217,12 +249,12 @@ impl SessionRuntime {
                 command_summary = self.command_summary(),
             );
         } else if let Some(chars) = input.chars.as_deref() {
-            let mut pty_writer = {
+            let mut input_writer = {
                 let mut inner = self.inner.lock().await;
-                inner.pty_writer.take()
+                inner.input_writer.take()
             };
 
-            if let Some(writer) = pty_writer.as_mut() {
+            if let Some(writer) = input_writer.as_mut() {
                 writer
                     .write_all(chars.as_bytes())
                     .await
@@ -231,7 +263,7 @@ impl SessionRuntime {
             }
 
             let mut inner = self.inner.lock().await;
-            inner.pty_writer = pty_writer;
+            inner.input_writer = input_writer;
         }
 
         self.wait_for_yield_or_exit_locked(yield_time_ms, poll_interval)
@@ -474,6 +506,12 @@ impl SessionManager {
             .stdout(Stdio::from(slave_stdout))
             .stderr(Stdio::from(slave_file));
 
+        #[cfg(not(unix))]
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
         #[cfg(unix)]
         command.process_group(0);
 
@@ -508,6 +546,36 @@ impl SessionManager {
         let mut child = command
             .spawn()
             .with_context(|| format!("failed to spawn command: {}", input.cmd))?;
+
+        #[cfg(unix)]
+        let input_writer = Some(SessionInputWriter::Pty(master_writer));
+        #[cfg(not(unix))]
+        let input_writer = Some(SessionInputWriter::Pipe(
+            child
+                .stdin
+                .take()
+                .context("failed to capture command stdin pipe")?,
+        ));
+        #[cfg(not(unix))]
+        {
+            let stdout = child
+                .stdout
+                .take()
+                .context("failed to capture command stdout pipe")?;
+            let stderr = child
+                .stderr
+                .take()
+                .context("failed to capture command stderr pipe")?;
+            spawn_pipe_readers(
+                stdout,
+                stderr,
+                output.clone(),
+                self.policy.output_observer(),
+                internal_session_id,
+                session_handle_arc.clone(),
+                invocation.clone(),
+            );
+        }
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("failed to obtain child process id"))? as i32;
@@ -565,7 +633,7 @@ impl SessionManager {
                 last_known_cwd: command_cwd_display.clone(),
                 child,
                 reaped_exit_code: None,
-                pty_writer: Some(master_writer),
+                input_writer,
                 last_used_at: now_system,
                 last_input_at: now,
                 idle_timeout: Duration::from_millis(timeout_ms),
@@ -981,7 +1049,7 @@ fn unknown_session_handle(session_handle: &str) -> anyhow::Error {
     anyhow!("Unknown session handle: {session_handle}")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod runtime_lifecycle_tests;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

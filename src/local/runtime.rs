@@ -365,7 +365,7 @@ async fn cleanup_failed_runtime_start(
     let _ = tokio::task::spawn_blocking(move || history.shutdown_blocking()).await;
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use tempfile::tempdir;
 

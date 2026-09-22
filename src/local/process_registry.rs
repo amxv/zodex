@@ -383,7 +383,7 @@ fn persist_records(
             parent.display()
         )
     })?;
-    set_user_only_directory_permissions(parent)?;
+    super::private_fs::set_user_only_directory(parent)?;
 
     let document = LocalProcessRegistryDocument {
         schema_version: LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION,
@@ -420,7 +420,7 @@ fn persist_records(
                 path.display()
             )
         })?;
-        set_user_only_file_permissions(path)?;
+        super::private_fs::set_user_only_file(path)?;
         Ok(())
     })();
 
@@ -428,30 +428,6 @@ fn persist_records(
         let _ = fs::remove_file(&temp);
     }
     result
-}
-
-#[cfg(unix)]
-fn set_user_only_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("failed to set 0700 permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_user_only_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_user_only_file_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_user_only_file_permissions(_path: &Path) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

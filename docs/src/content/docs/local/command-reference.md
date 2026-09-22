@@ -3,7 +3,7 @@ title: "Command reference"
 description: "A compact reference for every public zodex local command, argument, option, and common example."
 order: 7
 category: Local
-summary: "The public Local CLI: setup, start, status, menu bar controls, watch, history, config, logs, and stop."
+summary: "The public Local CLI: setup, start, status, watch, history, config, logs, stop, plus macOS menu-bar controls."
 ---
 
 Use this page when you already understand [Local](/docs/local) and just need the exact command surface.
@@ -44,7 +44,11 @@ printf '%s\n' "$OPENAI_TUNNEL_RUNTIME_KEY" \
 
 `--runtime-key-stdin`, `--runtime-key-env`, and `--runtime-key-fd` are mutually exclusive.
 
+`--runtime-key-fd` is Unix-only. Windows automation should use stdin or an environment variable.
+
 On macOS, setup enables and opens the lightweight Zodex menu bar app by default. It is registered to return when you next log in, but it does not start the Zodex Local runtime. Pass `--no-menu-bar` to leave the bundled menu app disabled and unopened.
+
+On Windows, setup stores the runtime key in Windows Credential Manager, installs the Windows tunnel-client bundle, and ignores the menu-bar option.
 
 ## `zodex local start`
 
@@ -109,7 +113,7 @@ zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-Plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI. `--no-open` keeps that host in the foreground without launching a browser. The terminal viewer is explicit. See [Watch and Liveboard](/docs/local/watch) for both interfaces and [Local observability API](/docs/local/observability-api) to build another client.
+On macOS, plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI; `--no-open` keeps that host in the foreground. On Windows, plain `watch` uses the terminal viewer and `--no-open` is not applicable. See [Watch and Liveboard](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
 
 ## `zodex local menu`
 
@@ -117,7 +121,7 @@ Plain `watch` starts the temporary same-origin Liveboard host and opens the brow
 zodex local menu
 ```
 
-On Apple Silicon macOS, this opens the lightweight Zodex menu bar app. Choose a persistent **Start Folder** once, then use **Start Zodex**, **Stop Zodex**, **Open Liveboard**, and the operator update controls without returning to a terminal. The app checks `zodex local status --json` when its menu opens and immediately after relevant user actions; it does not run a background polling timer. Update availability comes from `zodex upgrade --check --format json`, so release comparison, Local safety, installation, and progress remain owned by the CLI rather than duplicated in Swift.
+On Apple Silicon macOS, this opens the lightweight Zodex menu bar app. Windows does not provide this macOS-only control surface; use `zodex local start`, `watch`, `status`, and `stop` from PowerShell/Windows Terminal.
 
 **Launch at Login** is enabled by default after `zodex local setup`. Turn that checked menu item off if you no longer want the menu app to return after logout or restart. Choosing **Quit** only exits the current menu app session; it does not start or stop Zodex Local and does not make the app relaunch before the next login.
 
