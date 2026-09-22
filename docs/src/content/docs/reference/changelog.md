@@ -8,7 +8,7 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
-## Unreleased
+## 0.4.0 — 2026-09-23
 
 - Added first-class x86_64 Windows support for Zodex Local, including Windows-native path discovery, PowerShell command execution, pipe-backed long-running sessions, process birth-identity/tree cleanup, Windows Credential Manager storage, and managed Windows OpenAI tunnel-client assets.
 - Added detached Windows Local start/stop lifecycle, terminal-watch defaults with `clip.exe` clipboard support, and preserved the existing macOS Liveboard/menu-bar experience as a macOS-specific control surface.
