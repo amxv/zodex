@@ -22,13 +22,30 @@ fn normalize_github_repos(repos: &[String]) -> Result<Vec<String>> {
     Ok(normalized)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn operator_sprites_registry_path_from_home(home: &Path) -> PathBuf {
     home.join(OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH)
 }
 
 fn operator_sprites_registry_path() -> Result<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_data) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(app_data).join("zodex/sprites.json"));
+        }
+        let profile = env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .context(
+                "APPDATA or USERPROFILE must be set to use the zodex Sprite registry on Windows",
+            )?;
+        return Ok(PathBuf::from(profile).join("AppData/Roaming/zodex/sprites.json"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     let home = env::var("HOME").context("HOME must be set to use the zodex Sprite registry")?;
     Ok(operator_sprites_registry_path_from_home(Path::new(&home)))
+    }
 }
 
 fn load_operator_sprite_registry_from_path(path: &Path) -> Result<OperatorSpriteRegistry> {
