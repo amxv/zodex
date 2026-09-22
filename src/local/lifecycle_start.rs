@@ -86,7 +86,8 @@ pub async fn start_via_windows_process(
             .spawn();
         if let Err(error) = spawn {
             return Err(with_cleanup_error(
-                error.context("failed to start detached Zodex Local Windows runtime"),
+                anyhow::Error::new(error)
+                    .context("failed to start detached Zodex Local Windows runtime"),
                 cleanup_partial_start(paths, &controller),
             ));
         }

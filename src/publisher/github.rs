@@ -11,13 +11,13 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 
+#[cfg(unix)]
+use super::ASKPASS_MODE;
 use super::api::{
     CreatePullRequestPayload, CreatePullRequestResponse, GithubAppClaims,
     InstallationTokenResponse, MintedInstallationToken, PublishPrResponse,
 };
-use super::{
-    ASKPASS_MODE, ASKPASS_SCRIPT_NAME, DEFAULT_USER_AGENT, GITHUB_API_BASE, GITHUB_API_VERSION,
-};
+use super::{ASKPASS_SCRIPT_NAME, DEFAULT_USER_AGENT, GITHUB_API_BASE, GITHUB_API_VERSION};
 
 pub(super) fn github_repo_https_url(repo: &str) -> String {
     format!("https://github.com/{repo}.git")

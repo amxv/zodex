@@ -1,4 +1,6 @@
-use std::ffi::{OsStr, OsString};
+#[cfg(not(target_os = "windows"))]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

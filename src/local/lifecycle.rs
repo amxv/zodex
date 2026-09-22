@@ -26,19 +26,21 @@ use super::lifecycle_context::{
 };
 use super::lifecycle_lock::LocalLifecycleLock;
 
+#[cfg(not(target_os = "windows"))]
+use super::LocalLaunchdJob;
 #[cfg(target_os = "macos")]
 use super::liveboard::{
     LocalLiveboardDiscovery, remove_liveboard_discovery, write_liveboard_discovery,
 };
 use super::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION, LaunchdController,
-    LocalConfig, LocalHostRuntime, LocalHostRuntimeOptions, LocalLaunchdJob,
-    LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery, LocalRuntimeHealth,
-    LocalRuntimeLifecycle, LocalRuntimeState, LocalTunnelProfile, ManagedTunnelChild, RuntimeKey,
-    StaleTunnelCleanup, cleanup_stale_tunnel_child, consume_environment_handoff,
-    load_runtime_discovery, load_runtime_state, probe_tunnel_health, spawn_tunnel_client,
-    start_local_host_runtime, terminate_matching_stale_processes, write_environment_handoff,
-    write_mcp_token, write_runtime_discovery, write_runtime_state, write_tunnel_profile,
+    LocalConfig, LocalHostRuntime, LocalHostRuntimeOptions, LocalObservabilityDiscovery,
+    LocalPaths, LocalRuntimeDiscovery, LocalRuntimeHealth, LocalRuntimeLifecycle,
+    LocalRuntimeState, LocalTunnelProfile, ManagedTunnelChild, RuntimeKey, StaleTunnelCleanup,
+    cleanup_stale_tunnel_child, consume_environment_handoff, load_runtime_discovery,
+    load_runtime_state, probe_tunnel_health, spawn_tunnel_client, start_local_host_runtime,
+    terminate_matching_stale_processes, write_environment_handoff, write_mcp_token,
+    write_runtime_discovery, write_runtime_state, write_tunnel_profile,
 };
 
 pub const LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION: u32 = 1;
