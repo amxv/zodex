@@ -1,14 +1,21 @@
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow, bail};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{Result, anyhow, bail};
 use rand::distr::{Alphanumeric, SampleString};
 
 use crate::config::{Config, PublishTarget};
 
+#[cfg(unix)]
 use super::GITHUB_MODE_STATE_PATH;
-use super::api::{DirectPushRequest, GithubModeRecord, GithubYoloRepoGrant, PublishPrRequest};
+use super::api::PublishPrRequest;
+#[cfg(unix)]
+use super::api::{DirectPushRequest, GithubModeRecord, GithubYoloRepoGrant};
 
 pub fn validate_publish_request(
     config: &Config,
@@ -80,6 +87,7 @@ fn sanitize_branch_prefix(prefix: &str) -> String {
         cleaned
     }
 }
+#[cfg(unix)]
 pub(super) fn validate_publisher_config(config: &Config) -> Result<()> {
     let app_id = config.publisher_app_id.ok_or_else(|| {
         anyhow!("publisher_app_id must be configured before starting the publisher daemon")
@@ -123,6 +131,7 @@ pub(super) fn validate_publisher_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub(super) fn validate_direct_push_request(
     config: &Config,
     request: &DirectPushRequest,
@@ -156,6 +165,7 @@ pub(super) fn validate_direct_push_request(
         .ok_or_else(|| anyhow!("repo {repo} is not covered by publisher installation config"))
 }
 
+#[cfg(unix)]
 pub(super) fn validate_git_object_id(raw: &str) -> Result<()> {
     let valid_hex_len = raw.len() == 40 || raw.len() == 64;
     if !valid_hex_len || !raw.chars().all(|ch| ch.is_ascii_hexdigit()) {
@@ -164,6 +174,7 @@ pub(super) fn validate_git_object_id(raw: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn load_active_github_yolo_mode(path: &Path) -> Result<GithubModeRecord> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read GitHub mode state at {}", path.display()))?;
@@ -178,6 +189,7 @@ fn load_active_github_yolo_mode(path: &Path) -> Result<GithubModeRecord> {
     Ok(record)
 }
 
+#[cfg(unix)]
 fn github_yolo_all_installed_active(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
     if !record.all_installed {
         return false;
@@ -188,6 +200,7 @@ fn github_yolo_all_installed_active(record: &GithubModeRecord, now_epoch_seconds
     )
 }
 
+#[cfg(unix)]
 fn github_yolo_repo_grant_active(grant: &GithubYoloRepoGrant, now_epoch_seconds: u64) -> bool {
     !matches!(
         grant.expires_at_epoch_seconds,
@@ -195,6 +208,7 @@ fn github_yolo_repo_grant_active(grant: &GithubYoloRepoGrant, now_epoch_seconds:
     )
 }
 
+#[cfg(unix)]
 fn github_yolo_active_legacy_repos(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
     record.repo_grants.is_empty()
         && !record.all_installed
@@ -205,6 +219,7 @@ fn github_yolo_active_legacy_repos(record: &GithubModeRecord, now_epoch_seconds:
         && !record.repos.is_empty()
 }
 
+#[cfg(unix)]
 pub(super) fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: u64) -> bool {
     !github_yolo_all_installed_active(record, now_epoch_seconds)
         && !record
@@ -214,6 +229,7 @@ pub(super) fn github_mode_expired(record: &GithubModeRecord, now_epoch_seconds: 
         && !github_yolo_active_legacy_repos(record, now_epoch_seconds)
 }
 
+#[cfg(unix)]
 pub(super) fn github_mode_allows_repo(record: &GithubModeRecord, repo: &str) -> bool {
     let Ok(now_epoch_seconds) = current_epoch_seconds() else {
         return false;
@@ -247,6 +263,7 @@ pub(super) fn resolve_publisher_target(config: &Config, repo: &str) -> Option<Pu
     })
 }
 
+#[cfg(unix)]
 fn normalize_github_repo(path: &str) -> Option<String> {
     let trimmed = path.trim_matches('/');
     let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
@@ -259,6 +276,7 @@ fn normalize_github_repo(path: &str) -> Option<String> {
     Some(format!("{owner}/{repo}"))
 }
 
+#[cfg(unix)]
 fn current_epoch_seconds() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
