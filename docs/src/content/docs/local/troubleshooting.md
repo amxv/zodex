@@ -1,9 +1,9 @@
 ---
 title: "Troubleshooting"
-description: "Diagnose Zodex Local setup, tunnel, ChatGPT app, Keychain, startup, macOS privacy, Agent, history, and shutdown problems."
+description: "Diagnose Zodex Local setup, tunnel, ChatGPT app, credential storage, startup, host permissions, Agent, history, and shutdown problems."
 order: 8
 category: Local
-summary: "A symptom-first checklist for getting the Mac runtime and Secure MCP Tunnel healthy again."
+summary: "A symptom-first checklist for getting the Local runtime and Secure MCP Tunnel healthy again."
 ---
 
 Start with these three commands:
@@ -82,13 +82,13 @@ zodex local logs --lines 500
 Common causes:
 
 - setup was never completed;
-- the Keychain runtime key is missing or invalid;
+- the macOS Keychain / Windows Credential Manager runtime key is missing or invalid;
 - the configured tunnel no longer exists or the key lost Use permission;
 - the start directory does not exist or macOS blocks access;
 - a stale runtime/tunnel state needs cleanup;
 - outbound HTTPS to OpenAI is blocked.
 
-When repeatedly installing locally compiled builds, a Keychain password prompt after each rebuild means the ad-hoc code signature changed. Maintainers can enroll the stable local signer described in [Development](/docs/reference/development#stable-keychain-access-for-source-builds). Normal signed release upgrades do not need this development setup.
+On macOS, when repeatedly installing locally compiled builds, a Keychain password prompt after each rebuild means the ad-hoc code signature changed. Maintainers can enroll the stable local signer described in [Development](/docs/reference/development#stable-keychain-access-for-source-builds). Normal signed release upgrades do not need this development setup. Windows uses Credential Manager and does not use this macOS code-signing workaround.
 
 Try a clean stop/start:
 

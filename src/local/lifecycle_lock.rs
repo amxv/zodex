@@ -1,12 +1,12 @@
 use std::fs::{self, File, OpenOptions};
 
-use anyhow::{Context, Result, anyhow};
-use nix::fcntl::{Flock, FlockArg};
+use anyhow::{Context, Result};
+use fs2::FileExt as _;
 
 use super::LocalPaths;
 
 pub(super) struct LocalLifecycleLock {
-    _file: Flock<File>,
+    _file: File,
 }
 
 impl LocalLifecycleLock {
@@ -21,13 +21,7 @@ impl LocalLifecycleLock {
                 parent.display()
             )
         })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).with_context(|| {
-                format!("failed to set 0700 permissions on {}", parent.display())
-            })?;
-        }
+        super::private_fs::set_user_only_directory(parent)?;
 
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
@@ -39,19 +33,11 @@ impl LocalLifecycleLock {
         let file = options
             .open(&path)
             .with_context(|| format!("failed to open Local lifecycle lock {}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))?;
-        }
-        let locked = Flock::lock(file, FlockArg::LockExclusive).map_err(|(_, error)| {
-            anyhow!(
-                "failed to acquire Local lifecycle lock {}: {error}",
-                path.display()
-            )
+        super::private_fs::set_user_only_file(&path)?;
+        file.lock_exclusive().with_context(|| {
+            format!("failed to acquire Local lifecycle lock {}", path.display())
         })?;
-        Ok(Self { _file: locked })
+        Ok(Self { _file: file })
     }
 }
 

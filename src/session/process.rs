@@ -1,6 +1,6 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::collections::HashMap;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use std::collections::VecDeque;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
@@ -26,6 +26,7 @@ pub struct ProcessIdentity {
 pub enum ProcessBirthIdentity {
     LinuxProcStartTicks { ticks: u64 },
     MacOsStartTime { seconds: u64, microseconds: u64 },
+    WindowsCreationTime { ticks_100ns: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +112,18 @@ pub(crate) fn signal_process_group(pid: i32, signal: ProcessSignal) -> Result<()
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+pub(crate) fn signal_process_group(pid: i32, signal: ProcessSignal) -> Result<()> {
+    let inspector = SystemProcessInspector;
+    let mut descendants = system_descendant_identities(pid, 1024)?;
+    descendants.reverse();
+    for descendant in descendants {
+        let _ = signal_process_if_matching(&inspector, &descendant, signal);
+    }
+    signal_process(pid, signal)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 pub(crate) fn signal_process_group(_pid: i32, _signal: ProcessSignal) -> Result<()> {
     Err(anyhow!(
         "process-group signaling is unsupported on this host"
@@ -130,7 +142,22 @@ fn signal_process(pid: i32, signal: ProcessSignal) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn signal_process(pid: i32, _signal: ProcessSignal) -> Result<()> {
+    use sysinfo::{Pid as SysPid, System};
+
+    let system = System::new_all();
+    let Some(process) = system.process(SysPid::from_u32(pid as u32)) else {
+        return Ok(());
+    };
+    if process.kill() {
+        Ok(())
+    } else {
+        Err(anyhow!("failed to terminate Windows PID {pid}"))
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn signal_process(_pid: i32, _signal: ProcessSignal) -> Result<()> {
     Err(anyhow!("process signaling is unsupported on this host"))
 }
@@ -463,29 +490,135 @@ fn system_process_group_members(pgid: i32, limit: usize) -> Result<Vec<ProcessId
     Ok(result)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+fn system_process_identity(pid: i32) -> Result<Option<ProcessIdentity>> {
+    use std::mem::MaybeUninit;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid <= 0 {
+        return Ok(None);
+    }
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+    if handle.is_null() {
+        return Ok(None);
+    }
+    let mut creation = MaybeUninit::<FILETIME>::zeroed();
+    let mut exit = MaybeUninit::<FILETIME>::zeroed();
+    let mut kernel = MaybeUninit::<FILETIME>::zeroed();
+    let mut user = MaybeUninit::<FILETIME>::zeroed();
+    let ok = unsafe {
+        GetProcessTimes(
+            handle,
+            creation.as_mut_ptr(),
+            exit.as_mut_ptr(),
+            kernel.as_mut_ptr(),
+            user.as_mut_ptr(),
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    if ok == 0 {
+        return Ok(None);
+    }
+    let creation = unsafe { creation.assume_init() };
+    let ticks_100ns = ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
+    Ok(Some(ProcessIdentity {
+        pid,
+        birth: ProcessBirthIdentity::WindowsCreationTime { ticks_100ns },
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system() -> sysinfo::System {
+    sysinfo::System::new_all()
+}
+
+#[cfg(target_os = "windows")]
+fn system_live_cwd(pid: i32) -> Option<String> {
+    use sysinfo::Pid as SysPid;
+
+    windows_system()
+        .process(SysPid::from_u32(pid as u32))
+        .and_then(|process| process.cwd())
+        .map(|cwd| cwd.display().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn system_descendant_identities(pid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let system = windows_system();
+    let mut children_by_parent = HashMap::<u32, Vec<u32>>::new();
+    for (process_pid, process) in system.processes() {
+        let Some(parent) = process.parent() else {
+            continue;
+        };
+        children_by_parent
+            .entry(parent.as_u32())
+            .or_default()
+            .push(process_pid.as_u32());
+    }
+    let mut queue = VecDeque::from([pid as u32]);
+    let mut result = Vec::new();
+    while let Some(parent) = queue.pop_front() {
+        let Some(children) = children_by_parent.get(&parent) else {
+            continue;
+        };
+        for child in children {
+            if result.len() >= limit {
+                return Ok(result);
+            }
+            if let Some(identity) = system_process_identity(*child as i32)? {
+                result.push(identity);
+                queue.push_back(*child);
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(target_os = "windows")]
+fn system_process_group_members(pid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    if let Some(leader) = system_process_identity(pid)? {
+        result.push(leader);
+    }
+    if result.len() < limit {
+        result.extend(system_descendant_identities(pid, limit - result.len())?);
+    }
+    Ok(result)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn system_process_identity(_pid: i32) -> Result<Option<ProcessIdentity>> {
     Ok(None)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn system_live_cwd(_pid: i32) -> Option<String> {
     None
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn system_descendant_identities(_pid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
     Ok(Vec::new())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn system_process_group_members(_pgid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
     Ok(Vec::new())
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     use super::ProcessBirthIdentity;
     use super::{ProcessInspector, SystemProcessInspector};
 
@@ -503,5 +636,23 @@ mod tests {
             ProcessBirthIdentity::LinuxProcStartTicks { ticks } if ticks > 0
         ));
         assert!(inspector.live_cwd(pid).is_some());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_current_process_uses_creation_time_identity() {
+        let inspector = SystemProcessInspector;
+        let pid = std::process::id() as i32;
+        let identity = inspector.identity(pid).unwrap().expect("process identity");
+        assert!(matches!(
+            identity.birth,
+            ProcessBirthIdentity::WindowsCreationTime { ticks_100ns } if ticks_100ns > 0
+        ));
+        assert!(
+            inspector
+                .process_group_members(pid, 64)
+                .unwrap()
+                .contains(&identity)
+        );
     }
 }

@@ -8,7 +8,7 @@ const localFeatures = [
     index: "01",
     marker: "MAC",
     title: "Your real environment",
-    body: "ChatGPT works as your logged-in macOS user with the shell, Git, Homebrew, language toolchains, credentials, and files you already use."
+    body: "ChatGPT works as your logged-in macOS or Windows user with the shell, Git, language toolchains, credentials, and files you already use."
   },
   {
     index: "02",
@@ -67,9 +67,9 @@ const modes = [
   {
     index: "L",
     title: "Local",
-    subtitle: "Trusted Apple Silicon Mac",
+    subtitle: "Trusted macOS or Windows host",
     href: "/docs/local",
-    body: "Direct trusted-host execution through an OpenAI Secure MCP Tunnel. Your Mac, your developer environment, your credentials, your normal shell.",
+    body: "Direct trusted-host execution through an OpenAI Secure MCP Tunnel. Your machine, your developer environment, your credentials.",
     facts: ["Secure MCP Tunnel", "explicit start / stop", "optional runtime TTL", "Liveboard + durable history"]
   },
   {
@@ -104,14 +104,14 @@ const docsLinks = [
         <span class="live-dot" aria-hidden="true"></span>
         Zodex Local
         <span class="z-hero__eyebrow-rule" aria-hidden="true"></span>
-        ChatGPT × your Mac
+        ChatGPT × your machine
       </div>
 
       <div class="z-hero__copy">
         <p class="z-overline reveal reveal--2">A real terminal on a real machine</p>
-        <h1 class="reveal reveal--3">Give ChatGPT<br />your <em>Mac.</em></h1>
+        <h1 class="reveal reveal--3">Give ChatGPT<br />your <em>machine.</em></h1>
         <p class="z-hero__lede reveal reveal--4">
-          Zodex gives ChatGPT the command, stdin, and patch primitives coding agents already know—directly on your trusted Apple Silicon Mac, through an OpenAI Secure MCP Tunnel.
+          Zodex gives ChatGPT the command, stdin, and patch primitives coding agents already know—directly on your trusted macOS or Windows machine, through an OpenAI Secure MCP Tunnel.
         </p>
         <div class="z-hero__actions reveal reveal--5">
           <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>
@@ -214,7 +214,12 @@ const docsLinks = [
             <span>one-time setup</span>
             <button class="copy-button" type="button" data-copy-code aria-label="Copy Zodex Local setup"><span data-copy-label>copy</span></button>
           </div>
-          <pre><code>{`curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+          <pre><code>{`# macOS
+curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+
+# Windows PowerShell
+irm https://zodex.ashray.xyz/install.ps1 | iex
+
 zodex local setup`}</code></pre>
         </div>
       </div>
@@ -244,7 +249,7 @@ zodex local setup`}</code></pre>
       <div class="trust-note">
         <span>TRUST MODEL</span>
         <p>
-          Local runs as your logged-in macOS user. It can generally do what that user can do. The start folder is guidance, <em>not a filesystem boundary</em>, and normal macOS privacy controls remain authoritative.
+          Local runs as your logged-in host user. It can generally do what that user can do. The start folder is guidance, <em>not a filesystem boundary</em>, and normal host permissions remain authoritative.
         </p>
         <a class="text-link" href="/docs/local#the-local-trust-model">Understand Local security <span aria-hidden="true">→</span></a>
       </div>
@@ -284,7 +289,7 @@ zodex local setup`}</code></pre>
         </div>
         <div class="z-section__intro">
           <p>
-            Local is the direct path to the Mac you already use. Sprite is the isolated remote path. ChatGPT sees the same three tools either way.
+            Local is the direct path to the macOS or Windows machine you already use. Sprite is the isolated remote path. ChatGPT sees the same three tools either way.
           </p>
           <a class="text-link" href="/docs/reference/architecture">Compare architecture <span aria-hidden="true">↗</span></a>
         </div>
@@ -330,7 +335,7 @@ zodex local setup`}</code></pre>
     <section class="z-final shell">
       <div class="z-final__signal" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
       <p class="z-overline">ZODEX LOCAL / READY</p>
-      <h2>Put ChatGPT on<br />your Mac.</h2>
+      <h2>Put ChatGPT on<br />your machine.</h2>
       <p>A real shell. Your real tools. Three familiar MCP primitives. Every action visible.</p>
       <div class="z-final__actions">
         <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>

@@ -1,12 +1,12 @@
 ---
 title: "Daily use"
-description: "Start, inspect, observe, and stop Zodex Local while one or more ChatGPT conversations work on your Mac."
+description: "Start, inspect, observe, and stop Zodex Local while one or more ChatGPT conversations work on your trusted macOS or Windows host."
 order: 3
 category: Local
 summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, durable history, logs, and clean shutdown."
 ---
 
-Once [Local setup](/docs/local/setup) is complete, most days can be controlled from the Zodex menu bar app or with the equivalent CLI commands.
+Once [Local setup](/docs/local/setup) is complete, use the CLI on either platform. macOS also offers the optional Zodex menu bar app.
 
 On macOS, `zodex local setup` enables the small menu bar app by default. It returns automatically when you next log in, while the Zodex Local runtime itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
 
@@ -90,17 +90,17 @@ Local does not restrict an Agent to its first workdir. A new declared workdir is
 
 ## Watch live activity
 
-Open the first-party browser Liveboard:
+On macOS, open the first-party browser Liveboard:
 
 ```bash
 zodex local watch
 ```
 
-The CLI stays in the foreground while the temporary Liveboard host is running. It prints the capability URL and asks macOS to open it in your default browser. `Ctrl-C` closes the viewer host but does not stop Local.
+The CLI stays in the foreground while the temporary Liveboard host is running. `Ctrl-C` closes the viewer host but does not stop Local.
 
 Liveboard gives each visible Agent an independent timeline. Use **All Agents** to manage the board, **Columns** for a 1–8 column cap, the Cmd/Diff controls for global expansion defaults, and the Agent headers to alias, reorder, resize, or hide columns. Those preferences are UI-only and do not change Agent identity or permissions.
 
-For a terminal-only workflow, opt into the TUI:
+On Windows, plain `zodex local watch` uses the TUI by default. On macOS, opt into the TUI explicitly:
 
 ```bash
 zodex local watch --tui

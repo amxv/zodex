@@ -82,7 +82,7 @@ enum Commands {
         /// Output human-readable text or the stable JSON event contract.
         #[arg(long, value_enum, default_value_t = UpgradeFormat::Human)]
         format: UpgradeFormat,
-        /// Explicitly stop a blocking macOS Local runtime before installing.
+        /// Explicitly stop a blocking Local runtime before installing.
         #[arg(long, conflicts_with = "check")]
         stop_local: bool,
         /// Ignore the short latest-release cache when checking.
@@ -94,7 +94,7 @@ enum Commands {
         #[command(subcommand)]
         command: SpriteCommand,
     },
-    /// Run and inspect Zodex directly on the logged-in Mac.
+    /// Run and inspect Zodex directly on the logged-in macOS or Windows host.
     Local {
         #[command(subcommand)]
         command: LocalCommand,

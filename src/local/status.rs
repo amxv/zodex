@@ -290,12 +290,7 @@ pub(super) fn write_user_only_json_atomic(path: &Path, value: &impl Serialize) -
             parent.display()
         )
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("failed to set 0700 permissions on {}", parent.display()))?;
-    }
+    super::private_fs::set_user_only_directory(parent)?;
     let encoded =
         serde_json::to_vec_pretty(value).context("failed to encode Local runtime JSON")?;
     let temp = parent.join(format!(
@@ -323,12 +318,7 @@ pub(super) fn write_user_only_json_atomic(path: &Path, value: &impl Serialize) -
             .with_context(|| format!("failed to sync temporary Local state {}", temp.display()))?;
         fs::rename(&temp, path)
             .with_context(|| format!("failed to publish Local state {}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-                .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))?;
-        }
+        super::private_fs::set_user_only_file(path)?;
         Ok(())
     })();
     if result.is_err() {

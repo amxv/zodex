@@ -45,6 +45,7 @@ const fixture = () => {
   git(root, 'config', 'user.email', 'zodex-test@local.invalid')
   write(root, 'docs/index.md', 'docs v1\n')
   write(root, 'scripts/install.sh', '#!/bin/sh\necho v1\n')
+  write(root, 'scripts/install.ps1', 'Write-Host "v1"\n')
   write(root, 'src/lib.rs', 'pub fn v1() {}\n')
   const base = commit(root, 'base')
   return { root, docs: join(root, 'docs'), base }
@@ -79,6 +80,13 @@ describe('Vercel docs affected-path check', () => {
     const repo = fixture()
     write(repo.root, 'scripts/install.sh', '#!/bin/sh\necho v2\n')
     const head = commit(repo.root, 'installer edit')
+    expect(decision({ ...repo, head })).toBe(1)
+  })
+
+  test('builds when the canonical Windows installer changes', () => {
+    const repo = fixture()
+    write(repo.root, 'scripts/install.ps1', 'Write-Host "v2"\n')
+    const head = commit(repo.root, 'windows installer edit')
     expect(decision({ ...repo, head })).toBe(1)
   })
 

@@ -13,13 +13,42 @@ pub struct LocalPaths {
 
 impl LocalPaths {
     pub fn discover() -> Result<Self> {
-        let home = env::var_os("HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
-        let config_root = xdg_root("XDG_CONFIG_HOME", home.as_deref(), ".config")?;
-        let data_root = xdg_root("XDG_DATA_HOME", home.as_deref(), ".local/share")?;
-        let state_root = xdg_root("XDG_STATE_HOME", home.as_deref(), ".local/state")?;
-        Self::from_roots(config_root, data_root, state_root)
+        #[cfg(target_os = "windows")]
+        {
+            let home = env::var_os("USERPROFILE")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from);
+            let config_root = windows_root(
+                "XDG_CONFIG_HOME",
+                "APPDATA",
+                home.as_deref(),
+                "AppData/Roaming",
+            )?;
+            let data_root = windows_root(
+                "XDG_DATA_HOME",
+                "LOCALAPPDATA",
+                home.as_deref(),
+                "AppData/Local",
+            )?;
+            let state_root = windows_root(
+                "XDG_STATE_HOME",
+                "LOCALAPPDATA",
+                home.as_deref(),
+                "AppData/Local",
+            )?;
+            return Self::from_roots(config_root, data_root, state_root);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let home = env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from);
+            let config_root = xdg_root("XDG_CONFIG_HOME", home.as_deref(), ".config")?;
+            let data_root = xdg_root("XDG_DATA_HOME", home.as_deref(), ".local/share")?;
+            let state_root = xdg_root("XDG_STATE_HOME", home.as_deref(), ".local/state")?;
+            Self::from_roots(config_root, data_root, state_root)
+        }
     }
 
     pub fn from_roots(
@@ -53,11 +82,15 @@ impl LocalPaths {
     }
 
     pub fn managed_tunnel_client(&self) -> PathBuf {
-        self.data_root.join("zodex/bin/tunnel-client")
+        self.data_root
+            .join("zodex/bin")
+            .join(format!("tunnel-client{}", env::consts::EXE_SUFFIX))
     }
 
     pub fn managed_cloudflared(&self) -> PathBuf {
-        self.data_root.join("zodex/bin/cloudflared")
+        self.data_root
+            .join("zodex/bin")
+            .join(format!("cloudflared{}", env::consts::EXE_SUFFIX))
     }
 
     pub fn managed_cloudflared_manifest(&self) -> PathBuf {
@@ -152,6 +185,10 @@ impl LocalPaths {
         self.runtime_dir().join("tunnel-process.json")
     }
 
+    pub fn stop_request_file(&self) -> PathBuf {
+        self.runtime_dir().join("stop-request")
+    }
+
     pub fn diagnostic_log_file(&self) -> PathBuf {
         self.logs_dir().join("local-runtime.log")
     }
@@ -165,6 +202,7 @@ impl LocalPaths {
         ] {
             fs::create_dir_all(&path)
                 .with_context(|| format!("failed to create {}", path.display()))?;
+            super::private_fs::set_user_only_directory(&path)?;
         }
         Ok(())
     }
@@ -211,6 +249,27 @@ fn xdg_root(variable: &str, home: Option<&Path>, fallback: &str) -> Result<PathB
     Ok(home.join(fallback))
 }
 
+#[cfg(target_os = "windows")]
+fn windows_root(
+    xdg_variable: &str,
+    windows_variable: &str,
+    home: Option<&Path>,
+    fallback: &str,
+) -> Result<PathBuf> {
+    if let Some(value) = env::var_os(xdg_variable).filter(|value| !value.is_empty()) {
+        return require_absolute(xdg_variable, PathBuf::from(value));
+    }
+    if let Some(value) = env::var_os(windows_variable).filter(|value| !value.is_empty()) {
+        return require_absolute(windows_variable, PathBuf::from(value));
+    }
+    let home = home.with_context(|| {
+        format!(
+            "USERPROFILE must be set when {xdg_variable} and {windows_variable} are unavailable"
+        )
+    })?;
+    Ok(home.join(fallback))
+}
+
 fn require_absolute(label: &str, path: PathBuf) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("{label} must be an absolute path: {}", path.display());
@@ -235,15 +294,13 @@ mod tests {
         .unwrap();
 
         assert!(paths.config_file().ends_with("zodex/local.toml"));
-        assert!(
-            paths
-                .managed_tunnel_client()
-                .ends_with("zodex/bin/tunnel-client")
+        assert_eq!(
+            paths.managed_tunnel_client().file_name().unwrap(),
+            format!("tunnel-client{}", std::env::consts::EXE_SUFFIX).as_str()
         );
-        assert!(
-            paths
-                .managed_cloudflared()
-                .ends_with("zodex/bin/cloudflared")
+        assert_eq!(
+            paths.managed_cloudflared().file_name().unwrap(),
+            format!("cloudflared{}", std::env::consts::EXE_SUFFIX).as_str()
         );
         assert!(
             paths

@@ -66,11 +66,11 @@ pub(super) fn request_termination(inner: &mut SessionInner) {
     }
 
     inner.terminate_started_at = Some(Instant::now());
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         let _ = process::signal_process_group(inner.pid, ProcessSignal::Terminate);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = inner.child.start_kill();
     }
@@ -105,14 +105,14 @@ pub(super) fn maybe_force_kill(
     }
 
     inner.force_killed = true;
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         if inner.reaped_exit_code.is_none() {
             let _ = process::signal_process_group(inner.pid, ProcessSignal::Kill);
         }
         let _ = signal_owned_group_members(inner, inspector, ProcessSignal::Kill)?;
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = inner.child.start_kill();
     }

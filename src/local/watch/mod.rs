@@ -13,10 +13,10 @@ mod sse;
 #[cfg(test)]
 mod test_support;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::io::Write as _;
 use std::io::{self, IsTerminal as _};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -515,9 +515,33 @@ async fn copy_to_clipboard(text: &str) -> Result<()> {
     .context("clipboard worker failed")?
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+async fn copy_to_clipboard(text: &str) -> Result<()> {
+    let text = text.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut child = Command::new("clip.exe")
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("failed to start clip.exe")?;
+        child
+            .stdin
+            .as_mut()
+            .context("clip.exe stdin was unavailable")?
+            .write_all(text.as_bytes())
+            .context("failed to write clipboard content")?;
+        let status = child.wait().context("failed to wait for clip.exe")?;
+        if !status.success() {
+            bail!("clip.exe exited with {status}")
+        }
+        Ok(())
+    })
+    .await
+    .context("clipboard worker failed")?
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn copy_to_clipboard(_text: &str) -> Result<()> {
-    bail!("clipboard copy is available in the supported macOS Local runtime")
+    bail!("clipboard copy is available in the supported macOS and Windows Local runtimes")
 }
 
 #[cfg(test)]

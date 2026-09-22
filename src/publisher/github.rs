@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,6 +59,7 @@ esac
 "#,
     )
     .with_context(|| format!("failed to write {}", script_path.display()))?;
+    #[cfg(unix)]
     fs::set_permissions(&script_path, fs::Permissions::from_mode(ASKPASS_MODE))
         .with_context(|| format!("failed to chmod {}", script_path.display()))?;
     Ok(script_path)

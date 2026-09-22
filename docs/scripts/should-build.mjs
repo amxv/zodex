@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'node:child_process'
 
-const relevantPaths = ['docs', 'scripts/install.sh']
+const relevantPaths = ['docs', 'scripts/install.sh', 'scripts/install.ps1']
 
 let gitCwd
 const git = (args, cwd = gitCwd) =>

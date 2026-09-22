@@ -84,4 +84,4 @@ dist
 
 When the docs site is deployed behind a custom domain, keep the repository link pointed at `https://github.com/amxv/zodex`.
 
-The Vercel project root is `docs/`, but the published `/install.sh` route reads the canonical repository-level `scripts/install.sh`. Vercel outside-root source access must remain enabled. Automatic production deploys should run when `docs/**` or `scripts/install.sh` changes and skip unrelated repository-only changes.
+The Vercel project root is `docs/`, but the published `/install.sh` and `/install.ps1` routes read the canonical repository-level `scripts/install.sh` and `scripts/install.ps1`. Vercel outside-root source access must remain enabled. Automatic production deploys should run when `docs/**` or either installer changes and skip unrelated repository-only changes.

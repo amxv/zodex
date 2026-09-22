@@ -110,7 +110,7 @@ pub(super) fn prepare_local_launch_at(
     runtime_id: String,
 ) -> Result<PreparedLocalLaunch> {
     if !executable.is_absolute() {
-        bail!("installed Zodex executable path must be absolute for launchd");
+        bail!("installed Zodex executable path must be absolute");
     }
     let start_directory = canonicalize_start_directory(requested_start_directory)?;
     let started_at = format_timestamp(started)?;
@@ -149,6 +149,7 @@ pub(super) fn prepare_local_launch_at(
     let bootstrap_path = paths.runtime_bootstrap_file();
     write_private_json(&bootstrap_path, &bootstrap)?;
     let plist_path = paths.launchd_plist_file();
+    #[cfg(not(target_os = "windows"))]
     write_private_bytes(
         &plist_path,
         LocalLaunchdJob::new(executable, &bootstrap_path)?
@@ -255,6 +256,64 @@ pub async fn stop_via_launchd(
     launchd.bootout()?;
     paths.clear_runtime_state()?;
     Ok(outcome)
+}
+
+#[cfg(target_os = "windows")]
+pub async fn stop_via_windows_process(paths: &LocalPaths) -> Result<LocalStopOutcome> {
+    struct NoopLifecycleController;
+    impl LaunchdController for NoopLifecycleController {
+        fn is_loaded(&self) -> Result<bool> {
+            Ok(false)
+        }
+        fn bootstrap(&self, _plist: &Path) -> Result<()> {
+            Ok(())
+        }
+        fn bootout(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+    let inspector = SystemProcessInspector;
+    let mut requested_process = None;
+    {
+        let _lifecycle_lock = LocalLifecycleLock::acquire(paths)?;
+        if let Some(state) = load_runtime_state(paths)?
+            && let Some(process) = state.process.as_ref()
+        {
+            if identity_matches(&inspector, process)? {
+                write_private_bytes(
+                    paths.stop_request_file().as_path(),
+                    state.runtime_id.as_bytes(),
+                )?;
+                requested_process = Some(process.clone());
+            } else if inspector.identity(process.pid)?.is_some() {
+                bail!(
+                    "refusing to request shutdown from stale Zodex Local runtime PID {} because its process birth identity no longer matches",
+                    process.pid
+                );
+            }
+        }
+    }
+
+    let mut forced_fallback = false;
+    if let Some(process) = requested_process.as_ref() {
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline && identity_matches(&inspector, process)? {
+            tokio::time::sleep(STOP_POLL).await;
+        }
+        forced_fallback = identity_matches(&inspector, process)?;
+    }
+
+    let cleanup = stop_via_launchd(paths, &NoopLifecycleController).await?;
+    let _ = fs::remove_file(paths.stop_request_file());
+    if requested_process.is_some() {
+        Ok(if forced_fallback {
+            LocalStopOutcome::Forced
+        } else {
+            LocalStopOutcome::Graceful
+        })
+    } else {
+        Ok(cleanup)
+    }
 }
 
 pub fn cleanup_stale_runtime(paths: &LocalPaths, launchd: &dyn LaunchdController) -> Result<()> {
@@ -612,6 +671,10 @@ async fn supervise_runtime(
     loop {
         tokio::select! {
             _ = ttl_tick.tick() => {
+                #[cfg(target_os = "windows")]
+                if windows_stop_requested(context.paths, &context.bootstrap.runtime_id)? {
+                    return Ok(());
+                }
                 #[cfg(target_os = "macos")]
                 if liveboard_published && _host.liveboard_is_finished() {
                     liveboard_published = false;
@@ -686,6 +749,24 @@ async fn supervise_runtime(
             }
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_stop_requested(paths: &LocalPaths, runtime_id: &str) -> Result<bool> {
+    let path = paths.stop_request_file();
+    let requested = match fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read Local Windows stop request {}",
+                    path.display()
+                )
+            });
+        }
+    };
+    Ok(requested == runtime_id)
 }
 
 async fn coordinated_hidden_shutdown(
@@ -952,7 +1033,14 @@ async fn shutdown_signal() -> Result<()> {
             _ = interrupt.recv() => Ok(()),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => Ok(()),
+            Err(_) => std::future::pending::<Result<()>>().await,
+        }
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         tokio::signal::ctrl_c()
             .await

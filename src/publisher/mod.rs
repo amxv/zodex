@@ -1,6 +1,7 @@
 mod api;
 mod git;
 mod github;
+#[cfg(unix)]
 mod server;
 mod validation;
 
@@ -17,6 +18,7 @@ pub use github::{
     mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
     resolve_repo_installation_id,
 };
+#[cfg(unix)]
 pub use server::{serve_publisher, submit_direct_push_request, submit_publish_request};
 pub use validation::{build_publish_branch_name, validate_publish_request};
 

@@ -16,6 +16,8 @@ const MAX_PLATFORM_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 pub enum TunnelArchitecture {
     DarwinArm64,
     DarwinAmd64,
+    WindowsArm64,
+    WindowsAmd64,
 }
 
 impl TunnelArchitecture {
@@ -27,10 +29,20 @@ impl TunnelArchitecture {
         }
     }
 
+    pub fn current_windows() -> Result<Self> {
+        match std::env::consts::ARCH {
+            "aarch64" => Ok(Self::WindowsArm64),
+            "x86_64" => Ok(Self::WindowsAmd64),
+            arch => bail!("unsupported Windows architecture for tunnel-client: {arch}"),
+        }
+    }
+
     fn asset_suffix(self) -> &'static str {
         match self {
             Self::DarwinArm64 => "-darwin-arm64.zip",
             Self::DarwinAmd64 => "-darwin-amd64.zip",
+            Self::WindowsArm64 => "-windows-arm64.zip",
+            Self::WindowsAmd64 => "-windows-amd64.zip",
         }
     }
 }
@@ -331,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn architecture_selectors_track_current_macos_asset_suffixes() {
+    fn architecture_selectors_track_platform_asset_suffixes() {
         assert_eq!(
             TunnelArchitecture::DarwinArm64.asset_suffix(),
             "-darwin-arm64.zip"
@@ -339,6 +351,14 @@ mod tests {
         assert_eq!(
             TunnelArchitecture::DarwinAmd64.asset_suffix(),
             "-darwin-amd64.zip"
+        );
+        assert_eq!(
+            TunnelArchitecture::WindowsArm64.asset_suffix(),
+            "-windows-arm64.zip"
+        );
+        assert_eq!(
+            TunnelArchitecture::WindowsAmd64.asset_suffix(),
+            "-windows-amd64.zip"
         );
     }
 

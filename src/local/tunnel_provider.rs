@@ -139,6 +139,9 @@ pub(crate) fn provider_environment(
 #[cfg(target_os = "macos")]
 pub struct MacDittoArchiveExtractor;
 
+#[cfg(target_os = "windows")]
+pub struct WindowsTarArchiveExtractor;
+
 #[cfg(target_os = "macos")]
 impl ArchiveExtractor for MacDittoArchiveExtractor {
     fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()> {
@@ -184,10 +187,55 @@ impl ArchiveExtractor for MacDittoArchiveExtractor {
     }
 }
 
+#[cfg(target_os = "windows")]
+impl ArchiveExtractor for WindowsTarArchiveExtractor {
+    fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()> {
+        use std::fs;
+
+        let parent = bundle_dir
+            .parent()
+            .context("staged tunnel-client bundle path must have a parent directory")?;
+        let extracted = tempfile::Builder::new()
+            .prefix("extract-")
+            .tempdir_in(parent)
+            .context("failed to create tunnel-client extraction directory")?;
+        let output = Command::new("tar")
+            .arg("-xf")
+            .arg(archive_path)
+            .arg("-C")
+            .arg(extracted.path())
+            .output()
+            .context("failed to invoke Windows tar for tunnel-client archive")?;
+        if !output.status.success() {
+            bail!(
+                "Windows tar failed to extract the verified tunnel-client archive: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        fs::create_dir_all(bundle_dir).context("failed to create staged tunnel-client bundle")?;
+        for name in [
+            "tunnel-client.exe",
+            "cloudflared.exe",
+            "cloudflared-manifest.json",
+        ] {
+            let source = extracted.path().join(name);
+            if !source.is_file() {
+                bail!("verified tunnel-client archive did not contain the expected `{name}` file");
+            }
+            fs::copy(&source, bundle_dir.join(name)).with_context(|| {
+                format!("failed to stage extracted tunnel-client file `{name}`")
+            })?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
@@ -195,6 +243,7 @@ mod tests {
     use super::{ProcessTunnelMetadataValidator, TunnelMetadataValidator};
     use crate::local::RuntimeKey;
 
+    #[cfg(unix)]
     #[test]
     fn provider_subprocess_get_uses_only_runtime_key_and_allowlisted_environment() {
         let dir = tempdir().unwrap();

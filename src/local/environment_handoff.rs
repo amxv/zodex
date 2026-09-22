@@ -37,19 +37,17 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
             parent.display()
         )
     })?;
-    set_user_only_directory_permissions(parent)?;
+    super::private_fs::set_user_only_directory(parent)?;
 
     let mut encoded_bytes = 0usize;
     let mut entries = Vec::with_capacity(environment.len());
     for (key, value) in environment {
+        validate_environment_name(key)
+            .context("captured Local developer environment contains an invalid variable name")?;
+        validate_environment_value(value)
+            .context("captured Local developer environment contains an invalid NUL byte")?;
         let key = os_string_bytes(key);
         let value = os_string_bytes(value);
-        if key.is_empty() || key.contains(&0) || key.contains(&b'=') {
-            bail!("captured Local developer environment contains an invalid variable name");
-        }
-        if value.contains(&0) {
-            bail!("captured Local developer environment contains an invalid NUL byte");
-        }
         encoded_bytes = encoded_bytes
             .checked_add(key.len())
             .and_then(|size| size.checked_add(value.len()))
@@ -95,12 +93,12 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
             path.display()
         )
     })?;
-    set_user_only_file_permissions(path)?;
+    super::private_fs::set_user_only_file(path)?;
     Ok(())
 }
 
 pub fn consume_environment_handoff(path: &Path) -> Result<Vec<(OsString, OsString)>> {
-    verify_user_only_file_permissions(path)?;
+    super::private_fs::verify_user_only_file(path)?;
     let encoded = fs::read(path).with_context(|| {
         format!(
             "failed to read Local environment handoff {}",
@@ -137,9 +135,6 @@ pub fn consume_environment_handoff(path: &Path) -> Result<Vec<(OsString, OsStrin
         let value = BASE64
             .decode(entry.value_base64)
             .context("Local environment handoff contains invalid value encoding")?;
-        if key.is_empty() || key.contains(&0) || key.contains(&b'=') || value.contains(&0) {
-            bail!("Local environment handoff contains an invalid environment entry");
-        }
         decoded_bytes = decoded_bytes
             .checked_add(key.len())
             .and_then(|size| size.checked_add(value.len()))
@@ -147,7 +142,15 @@ pub fn consume_environment_handoff(path: &Path) -> Result<Vec<(OsString, OsStrin
         if decoded_bytes > MAX_ENVIRONMENT_BYTES {
             bail!("Local environment handoff is too large");
         }
-        environment.push((os_string_from_bytes(key), os_string_from_bytes(value)));
+        let key = os_string_from_bytes(key)
+            .context("Local environment handoff contains an invalid variable-name encoding")?;
+        let value = os_string_from_bytes(value)
+            .context("Local environment handoff contains an invalid variable-value encoding")?;
+        validate_environment_name(&key)
+            .context("Local environment handoff contains an invalid variable name")?;
+        validate_environment_value(&value)
+            .context("Local environment handoff contains an invalid variable value")?;
+        environment.push((key, value));
     }
 
     fs::remove_file(path).with_context(|| {
@@ -166,70 +169,102 @@ fn os_string_bytes(value: &OsString) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-fn os_string_from_bytes(value: Vec<u8>) -> OsString {
+fn os_string_from_bytes(value: Vec<u8>) -> Result<OsString> {
     use std::os::unix::ffi::OsStringExt as _;
-    OsString::from_vec(value)
+    Ok(OsString::from_vec(value))
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn os_string_bytes(value: &OsString) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    value
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>()
+}
+
+#[cfg(target_os = "windows")]
+fn os_string_from_bytes(value: Vec<u8>) -> Result<OsString> {
+    use std::os::windows::ffi::OsStringExt as _;
+
+    if value.len() % 2 != 0 {
+        bail!("UTF-16 environment value has an odd byte length");
+    }
+    let wide = value
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    Ok(OsString::from_wide(&wide))
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn os_string_bytes(value: &OsString) -> Vec<u8> {
     value.to_string_lossy().as_bytes().to_vec()
 }
 
-#[cfg(not(unix))]
-fn os_string_from_bytes(value: Vec<u8>) -> OsString {
-    OsString::from(String::from_utf8_lossy(&value).into_owned())
+#[cfg(not(any(unix, target_os = "windows")))]
+fn os_string_from_bytes(value: Vec<u8>) -> Result<OsString> {
+    Ok(OsString::from(
+        String::from_utf8(value).context("environment handoff value is not valid UTF-8")?,
+    ))
 }
 
 #[cfg(unix)]
-fn set_user_only_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("failed to set 0700 permissions on {}", path.display()))
-}
+fn validate_environment_name(value: &OsString) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
 
-#[cfg(not(unix))]
-fn set_user_only_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_user_only_file_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_user_only_file_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn verify_user_only_file_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let metadata = fs::symlink_metadata(path).with_context(|| {
-        format!(
-            "failed to inspect Local environment handoff {}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("Local environment handoff must be a regular file");
-    }
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        bail!(
-            "Local environment handoff permissions are too broad ({mode:o}); expected user-only access"
-        );
+    let bytes = value.as_os_str().as_bytes();
+    if bytes.is_empty() || bytes.contains(&0) || bytes.contains(&b'=') {
+        bail!("environment variable names must be non-empty and contain neither NUL nor `=`");
     }
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn verify_user_only_file_permissions(path: &Path) -> Result<()> {
-    if !path.is_file() {
-        bail!("Local environment handoff must be a regular file");
+#[cfg(unix)]
+fn validate_environment_value(value: &OsString) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    if value.as_os_str().as_bytes().contains(&0) {
+        bail!("environment variable values must not contain NUL");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn validate_environment_name(value: &OsString) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let units = value.encode_wide().collect::<Vec<_>>();
+    if units.is_empty() || units.contains(&0) || units.contains(&('=' as u16)) {
+        bail!("environment variable names must be non-empty and contain neither NUL nor `=`");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn validate_environment_value(value: &OsString) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    if value.encode_wide().any(|unit| unit == 0) {
+        bail!("environment variable values must not contain NUL");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn validate_environment_name(value: &OsString) -> Result<()> {
+    let value = value.to_string_lossy();
+    if value.is_empty() || value.contains('\0') || value.contains('=') {
+        bail!("environment variable names must be non-empty and contain neither NUL nor `=`");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn validate_environment_value(value: &OsString) -> Result<()> {
+    if value.to_string_lossy().contains('\0') {
+        bail!("environment variable values must not contain NUL");
     }
     Ok(())
 }
@@ -287,6 +322,34 @@ mod tests {
             path.exists(),
             "failed consumption leaves evidence for stale cleanup"
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_environment_handoff_preserves_utf16_values() {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runtime/environment.json");
+        let value = OsString::from_wide(&[
+            b'C' as u16,
+            b':' as u16,
+            b'\\' as u16,
+            0x5de5,
+            0x5177,
+            b'\\' as u16,
+            0xd83d,
+            0xde42,
+        ]);
+        let environment = vec![
+            (OsString::from("USERPROFILE"), value),
+            (
+                OsString::from("Path"),
+                OsString::from(r"C:\Windows\System32"),
+            ),
+        ];
+        write_environment_handoff(&path, &environment).unwrap();
+        assert_eq!(consume_environment_handoff(&path).unwrap(), environment);
     }
 
     #[cfg(unix)]

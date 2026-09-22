@@ -76,7 +76,7 @@ impl<'a> LocalSetupService<'a> {
             )?;
 
         let old_secret = self.secrets.get().context(
-            "failed to snapshot the current Keychain runtime key before Local setup mutation",
+            "failed to snapshot the current secure runtime key before Local setup mutation",
         )?;
         let snapshots = SetupSnapshots::capture(self.paths)?;
         let binary_updated = prepared.is_staged();
@@ -146,8 +146,9 @@ impl<'a> LocalSetupService<'a> {
         self.extractor
             .extract_tunnel_bundle(&archive_path, &bundle_dir)
             .context("failed to extract verified tunnel-client archive")?;
-        let binary_path = bundle_dir.join("tunnel-client");
-        let cloudflared_path = bundle_dir.join("cloudflared");
+        let binary_path = bundle_dir.join(format!("tunnel-client{}", std::env::consts::EXE_SUFFIX));
+        let cloudflared_path =
+            bundle_dir.join(format!("cloudflared{}", std::env::consts::EXE_SUFFIX));
         let cloudflared_manifest_path = bundle_dir.join("cloudflared-manifest.json");
         if !binary_path.is_file() {
             bail!("tunnel-client extractor did not produce a regular binary file");
@@ -190,10 +191,10 @@ impl<'a> LocalSetupService<'a> {
             };
             return match restore {
                 Ok(()) => Err(error.context(
-                    "failed to store OpenAI tunnel runtime key; prior Keychain state was restored",
+                    "failed to store OpenAI tunnel runtime key; prior secure credential state was restored",
                 )),
                 Err(restore_error) => Err(anyhow!(
-                    "failed to store OpenAI tunnel runtime key and failed to restore the prior Keychain state: {error:#}; restore: {restore_error:#}"
+                    "failed to store OpenAI tunnel runtime key and failed to restore the prior secure credential state: {error:#}; restore: {restore_error:#}"
                 )),
             };
         }
@@ -263,7 +264,7 @@ impl<'a> LocalSetupService<'a> {
             None => self.secrets.delete(),
         };
         if let Err(error) = secret_restore {
-            failures.push(format!("Keychain runtime key: {error:#}"));
+            failures.push(format!("secure runtime key: {error:#}"));
         }
 
         if failures.is_empty() {
@@ -367,7 +368,9 @@ fn reusable_managed_binary(
         || metadata.asset_name != release.asset_name
         || metadata.archive_sha256 != release.archive_sha256
         || !destination.is_file()
-        || !destination.with_file_name("cloudflared").is_file()
+        || !destination
+            .with_file_name(format!("cloudflared{}", std::env::consts::EXE_SUFFIX))
+            .is_file()
         || !destination
             .with_file_name("cloudflared-manifest.json")
             .is_file()
@@ -377,7 +380,10 @@ fn reusable_managed_binary(
     if sha256_file(destination)? != metadata.binary_sha256 {
         return Ok(None);
     }
-    if sha256_file(&destination.with_file_name("cloudflared"))? != metadata.cloudflared_sha256 {
+    if sha256_file(
+        &destination.with_file_name(format!("cloudflared{}", std::env::consts::EXE_SUFFIX)),
+    )? != metadata.cloudflared_sha256
+    {
         return Ok(None);
     }
     if sha256_file(&destination.with_file_name("cloudflared-manifest.json"))?
@@ -466,7 +472,7 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
 }
 
 fn set_user_only_permissions(path: &Path) -> Result<()> {
-    set_mode(path, 0o600)
+    super::private_fs::set_user_only_file(path)
 }
 
 #[cfg(unix)]
@@ -477,8 +483,8 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
-    Ok(())
+fn set_mode(path: &Path, _mode: u32) -> Result<()> {
+    super::private_fs::set_user_only_file(path)
 }
 
 #[cfg(unix)]
@@ -498,6 +504,7 @@ fn file_mode(_path: &Path) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
@@ -519,14 +526,17 @@ mod tests {
         assert!(ensure_observability_bearer(&paths, false).unwrap());
         let path = paths.observability_bearer_file();
         let first = std::fs::read_to_string(&path).unwrap();
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
 
+        #[cfg(unix)]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(!ensure_observability_bearer(&paths, false).unwrap());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -534,6 +544,7 @@ mod tests {
 
         assert!(ensure_observability_bearer(&paths, true).unwrap());
         assert_ne!(std::fs::read_to_string(&path).unwrap(), first);
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600

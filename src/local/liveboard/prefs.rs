@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 
-use anyhow::{Context, Result, anyhow, bail};
-use nix::fcntl::{Flock, FlockArg};
+use anyhow::{Context, Result, bail};
+use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 
 use super::super::LocalPaths;
@@ -290,7 +290,7 @@ fn validate_editor_command(value: &str) -> Result<()> {
 }
 
 struct LiveboardPreferenceLock {
-    _file: Flock<File>,
+    _file: File,
 }
 
 impl LiveboardPreferenceLock {
@@ -331,13 +331,13 @@ impl LiveboardPreferenceLock {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
                 .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))?;
         }
-        let locked = Flock::lock(file, FlockArg::LockExclusive).map_err(|(_, error)| {
-            anyhow!(
-                "failed to acquire Liveboard preference lock {}: {error}",
+        file.lock_exclusive().with_context(|| {
+            format!(
+                "failed to acquire Liveboard preference lock {}",
                 path.display()
             )
         })?;
-        Ok(Self { _file: locked })
+        Ok(Self { _file: file })
     }
 }
 

@@ -8,7 +8,7 @@ mod lifecycle_artifacts;
 mod lifecycle_context;
 mod lifecycle_lock;
 mod lifecycle_start;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod lifecycle_tests;
 mod liveboard;
 mod mcp_context;
@@ -17,6 +17,7 @@ mod observer_client;
 mod parse;
 mod paths;
 mod presentation;
+mod private_fs;
 mod process_registry;
 mod runtime;
 mod secret;
@@ -43,6 +44,8 @@ pub use history::{
 pub use launchd::{
     LOCAL_LAUNCHD_LABEL, LaunchdController, LocalLaunchdJob, SystemLaunchdController,
 };
+#[cfg(target_os = "windows")]
+pub use lifecycle::stop_via_windows_process;
 pub use lifecycle::{
     LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION, LocalRuntimeBootstrap, LocalStopOutcome,
     PreparedLocalLaunch, cleanup_stale_runtime, load_runtime_bootstrap, prepare_local_launch,
@@ -51,6 +54,8 @@ pub use lifecycle::{
 pub use lifecycle_context::{
     paths_from_runtime_bootstrap, resolve_developer_shell, validate_runtime_start_directory,
 };
+#[cfg(target_os = "windows")]
+pub use lifecycle_start::start_via_windows_process;
 pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
 pub use liveboard::{run_local_liveboard, run_local_liveboard_without_open};
 pub use observability::{
@@ -72,6 +77,8 @@ pub use process_registry::{
 pub use runtime::{LocalHostRuntime, LocalHostRuntimeOptions, start_local_host_runtime};
 #[cfg(target_os = "macos")]
 pub use secret::MacKeychainRuntimeKeyStore;
+#[cfg(target_os = "windows")]
+pub use secret::WindowsCredentialRuntimeKeyStore;
 pub use secret::{RuntimeKey, RuntimeKeyStore};
 pub use setup::{
     LocalSetupRequest, LocalSetupResult, LocalSetupService, ensure_observability_bearer,
@@ -91,6 +98,8 @@ pub use tunnel::{
 };
 #[cfg(target_os = "macos")]
 pub use tunnel_provider::MacDittoArchiveExtractor;
+#[cfg(target_os = "windows")]
+pub use tunnel_provider::WindowsTarArchiveExtractor;
 pub use tunnel_provider::{
     ArchiveExtractor, ProcessTunnelMetadataValidator, TunnelMetadataValidator,
 };
