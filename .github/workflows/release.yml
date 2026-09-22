@@ -132,7 +132,8 @@ jobs:
           & $zodex upgrade --help | Out-Null
 
           $installDir = Join-Path $smoke "installed"
-          $env:ZODEX_ASSET_URL = ([Uri](Resolve-Path "dist/$archiveName.tar.gz")).AbsoluteUri
+          $assetPath = (Resolve-Path -LiteralPath "dist/$archiveName.tar.gz").Path
+          $env:ZODEX_ASSET_URL = [Uri]::new($assetPath).AbsoluteUri
           $env:ZODEX_INSTALL_DIR = $installDir
           & "$env:GITHUB_WORKSPACE/scripts/install.ps1"
           if ($LASTEXITCODE -ne 0) { throw "Windows installer smoke test failed" }
