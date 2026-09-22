@@ -106,6 +106,7 @@ fn runtime_shell_comes_from_captured_environment() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn permission_denial_has_actionable_macos_privacy_hint() {
     let error = start_directory_error(
@@ -117,6 +118,20 @@ fn permission_denial_has_actionable_macos_privacy_hint() {
     assert!(message.contains("Privacy & Security"));
     assert!(message.contains("Files & Folders"));
     assert!(message.contains("Full Disk Access"));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn permission_denial_has_actionable_platform_hint() {
+    let error = start_directory_error(
+        Path::new("/example/project"),
+        "read",
+        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    );
+    let message = error.to_string();
+    assert!(message.contains("operating system denied permission"));
+    assert!(message.contains("Grant the Zodex process access to this workspace"));
+    assert!(!message.contains("Privacy & Security"));
 }
 
 #[test]
