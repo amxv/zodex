@@ -48,7 +48,7 @@ One Local runtime can serve several independent ChatGPT conversations. Agent-awa
 
 Local also exposes a separate authenticated read-only localhost observability API. It owns the canonical Agent/presentation timeline, durable output/audit resources, and live SSE contract independently of the MCP execution listener.
 
-On macOS, `zodex local watch` starts the first-party Liveboard by default. On Linux and Windows, it starts the terminal viewer. Both consume the same read-only observer contract; macOS can explicitly select the terminal presentation with `--tui`.
+On Linux, macOS, and Windows, `zodex local watch` opens the first-party Liveboard by default. All three platforms can explicitly select the terminal presentation with `--tui`. Both consume the same read-only observer contract.
 
 Read [Local](/docs/local), [Daily use](/docs/local/daily-use), [Watch and Liveboard](/docs/local/watch), and [Local observability API](/docs/local/observability-api).
 

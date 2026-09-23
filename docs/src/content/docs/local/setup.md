@@ -124,7 +124,7 @@ On success, Zodex:
 
 Setup is idempotent, so running it again is also the repair/update path.
 
-The macOS menu app is only a control surface. Linux and Windows use the CLI and terminal viewer instead. Enabling the macOS app at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app on macOS, opt out during setup:
+The macOS menu app is only a control surface. Linux and Windows use the CLI instead; all three platforms can open the browser Liveboard with `zodex local watch` or the terminal viewer with `zodex local watch --tui`. Enabling the macOS app at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app on macOS, opt out during setup:
 
 ```bash
 zodex local setup --no-menu-bar

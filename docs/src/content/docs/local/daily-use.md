@@ -90,7 +90,7 @@ Local does not restrict an Agent to its first workdir. A new declared workdir is
 
 ## Watch live activity
 
-On macOS, open the first-party browser Liveboard:
+On Linux, macOS, or Windows, open the first-party browser Liveboard:
 
 ```bash
 zodex local watch

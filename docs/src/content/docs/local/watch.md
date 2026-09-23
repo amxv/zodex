@@ -1,14 +1,14 @@
 ---
 title: "Watch"
-description: "Open the macOS Local Liveboard in your browser or use the terminal viewer on Linux, macOS, and Windows."
+description: "Open the Local Liveboard in your browser or use the terminal viewer on Linux, macOS, and Windows."
 order: 4
 category: Local
-summary: "The first-party read-only Local viewer: multi-Agent browser Liveboard on macOS and terminal TUI on Linux and Windows."
+summary: "The first-party read-only Local viewer: multi-Agent browser Liveboard and terminal TUI on Linux, macOS, and Windows."
 ---
 
 `zodex local watch` is the first-party real-time viewer for Zodex Local. It shows what ChatGPT is doing through the Local MCP server without giving the viewer command/control authority.
 
-On macOS, the default viewer is **Liveboard**, a browser UI built on the same public [Local observability API](/docs/local/observability-api) available to custom clients. On Linux and Windows, the default viewer is the terminal UI. macOS can also opt into that TUI with `--tui`.
+On Linux, macOS, and Windows, the default viewer is **Liveboard**, a browser UI built on the same public [Local observability API](/docs/local/observability-api) available to custom clients. The terminal UI remains available with `--tui`.
 
 ## Open Liveboard
 
@@ -16,15 +16,18 @@ On macOS, the default viewer is **Liveboard**, a browser UI built on the same pu
 zodex local watch
 ```
 
-On macOS, Zodex exposes Liveboard at the stable local-only address `http://127.0.0.1:64973/`, prints that URL, and opens it in your default browser. The browser-visible address stays stable across Local restarts; Zodex still keeps the internal read-only API behind a per-run private capability path. Keep the `watch` command running while you use the board.
+Zodex exposes Liveboard at the stable local-only address `http://127.0.0.1:64973/`, prints that URL, and opens it in your default browser. The browser-visible address stays stable across Local restarts; Zodex still keeps the internal read-only API behind a per-run private capability path. The Liveboard host is owned by the Local runtime, so the `watch` command does not need to stay running.
 
-Linux and Windows do not host the embedded macOS Liveboard. `zodex local watch` opens the terminal viewer directly; `zodex local watch --tui` is equivalent and useful in cross-platform scripts.
+To print or copy the same stable URL without opening a browser:
 
-On macOS, use `zodex local watch --no-open` when you want the same Liveboard host without launching a browser. This is useful for local frontend development and other workflows that need to attach their own browser surface to the read-only host. Linux and Windows do not expose this browser-host mode.
+```bash
+zodex local watch url
+zodex local watch copyurl
+```
 
 If the browser cannot be opened automatically, the CLI prints the URL so you can open it manually.
 
-Press `Ctrl-C` in the `watch` process to close the viewer. This does **not** stop the Local runtime or revoke ChatGPT access. Use `zodex local stop` for that.
+Closing the browser does **not** stop the Local runtime or revoke ChatGPT access. Use `zodex local stop` for that.
 
 ## What Liveboard shows
 
@@ -88,7 +91,7 @@ If Local restarts, its `runtime_id` changes. Liveboard treats that as a runtime 
 
 ## Use the terminal viewer
 
-On Linux and Windows, `zodex local watch` already starts the terminal UI. On macOS, opt into it explicitly:
+Use the terminal viewer explicitly on any supported OS:
 
 ```bash
 zodex local watch --tui
@@ -101,7 +104,7 @@ zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-`--agent` opens or waits for one four-character Agent ID. `--all` combines current Agent activity in one terminal viewer. They are intentionally not web-Liveboard flags.
+`--agent` opens or waits for one four-character Agent ID. In web mode it creates a focused Liveboard URL; in TUI mode it focuses the terminal viewer. `--all` combines current Agent activity in one terminal viewer.
 
 ### TUI keyboard controls
 
@@ -133,7 +136,7 @@ The TUI remains a client of the public observer; it does not receive private exe
 
 The observability listener requires a managed Bearer token and deliberately does not enable arbitrary-origin CORS. Liveboard does not weaken that contract.
 
-Instead, `zodex local watch` starts a separate loopback **same-origin capability host**. That host reads discovery and the observer bearer on the native side, proxies only the allowlisted read-only observer resources Liveboard needs, serves the embedded frontend, and keeps the bearer out of browser JavaScript.
+Instead, the Local runtime owns a separate loopback **same-origin capability host**. That host reads the observer bearer on the native side, proxies only the allowlisted read-only observer resources Liveboard needs, serves the embedded frontend, and keeps the bearer out of browser JavaScript. `zodex local watch` only resolves that runtime-owned host and opens, prints, or copies its URL.
 
 The browser-visible root is the stable `http://127.0.0.1:64973/` address. A random per-run capability path is injected into the page internally for asset and API requests, so it does not need to appear in the address bar or copied Liveboard links.
 

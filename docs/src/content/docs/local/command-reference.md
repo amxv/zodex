@@ -91,31 +91,40 @@ zodex local status --json
 ## `zodex local watch`
 
 ```text
-zodex local watch [OPTIONS]
+zodex local watch [OPTIONS] [COMMAND]
 ```
 
 Options:
 
 ```text
 --tui            use the terminal viewer instead of the default web Liveboard
---no-open        serve Liveboard without opening the default browser
---agent <AGENT>  in TUI mode, watch/wait for one four-character Agent ID
+--agent <AGENT>  focus one four-character Agent ID in web or TUI mode
 --all            in TUI mode, combine all Agents
 ```
 
-`--no-open` is web-Liveboard only and cannot be combined with `--tui`. `--agent` requires `--tui` and cannot be combined with `--all`. `--all` also requires `--tui`.
+Commands:
+
+```text
+url      print the stable Liveboard URL
+copyurl  copy the stable Liveboard URL to the system clipboard
+```
+
+`url` and `copyurl` cannot be combined with `--tui`. `--agent` cannot be combined with `--all`. `--all` requires `--tui`.
 
 Examples:
 
 ```bash
 zodex local watch
-zodex local watch --no-open
+zodex local watch url
+zodex local watch copyurl
+zodex local watch --agent k7m2
+zodex local watch url --agent k7m2
 zodex local watch --tui
 zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-On macOS, plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI; `--no-open` keeps that host in the foreground. On Linux and Windows, plain `watch` uses the terminal viewer and `--no-open` is not applicable. See [Watch and Liveboard](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
+On Linux, macOS, and Windows, plain `watch` opens the runtime-owned same-origin Liveboard in the default browser. See [Watch and Liveboard](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
 
 ## `zodex local menu`
 

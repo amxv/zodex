@@ -16,12 +16,13 @@ fn main() {
         env::var(EMBED_REQUIRED_ENV).ok().as_deref(),
         Some("1" | "true" | "yes")
     );
-    let required = target_os == "macos" && (profile == "release" || explicitly_required);
+    let supported = matches!(target_os.as_str(), "linux" | "macos" | "windows");
+    let required = supported && (profile == "release" || explicitly_required);
 
-    if target_os != "macos" {
+    if !supported {
         write_unavailable(
             &generated,
-            "Liveboard is only embedded in macOS operator builds",
+            "Liveboard is only embedded in Linux, macOS, and Windows operator builds",
         );
         return;
     }
@@ -30,7 +31,7 @@ fn main() {
     if !dist.join("index.html").is_file() {
         if required {
             panic!(
-                "Liveboard assets are required for this macOS build but apps/liveboard/dist/index.html is missing. Run `cd apps/liveboard && bun install --frozen-lockfile && bun run build` before Cargo."
+                "Liveboard assets are required for this build but apps/liveboard/dist/index.html is missing. Run `cd apps/liveboard && bun install --frozen-lockfile && bun run build` before Cargo."
             );
         }
         write_unavailable(

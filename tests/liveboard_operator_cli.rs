@@ -12,13 +12,13 @@ fn local_watch_rejects_invalid_web_agent_id_before_runtime_lookup() {
 }
 
 #[test]
-fn local_watch_no_open_is_web_only() {
+fn local_watch_exposes_url_and_copyurl_subcommands() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["local", "watch", "--tui", "--no-open"])
+        .args(["local", "watch", "--help"])
         .output()
-        .expect("run zodex local watch --tui --no-open");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--no-open"));
-    assert!(stderr.contains("--tui"));
+        .expect("run zodex local watch --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("url"));
+    assert!(stdout.contains("copyurl"));
 }

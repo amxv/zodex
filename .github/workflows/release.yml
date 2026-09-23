@@ -51,13 +51,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Bun for Liveboard
-        if: contains(matrix.target, 'apple-darwin')
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.11
 
       - name: Build Liveboard assets
-        if: contains(matrix.target, 'apple-darwin')
         working-directory: apps/liveboard
         run: |
           bun install --frozen-lockfile
@@ -67,7 +65,7 @@ jobs:
         if: ${{ !matrix.windows }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
-          ZODEX_LIVEBOARD_EMBED_REQUIRED: ${{ contains(matrix.target, 'apple-darwin') && '1' || '0' }}
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: |
           cargo build --locked --release --target "${{ matrix.target }}" \
             --bin zodex \
@@ -78,6 +76,8 @@ jobs:
 
       - name: Build Windows operator
         if: ${{ matrix.windows }}
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin zodex
 
       - name: Build macOS menu bar app

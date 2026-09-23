@@ -1,4 +1,3 @@
-use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::Command;
@@ -7,7 +6,6 @@ use std::process::Command;
 use std::fs;
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
 
 use super::RuntimeKey;
 
@@ -42,104 +40,6 @@ const WINDOWS_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
 
 pub trait ArchiveExtractor: Send + Sync {
     fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()>;
-}
-
-pub trait TunnelMetadataValidator: Send + Sync {
-    fn validate(&self, binary_path: &Path, tunnel_id: &str, runtime_key: &RuntimeKey)
-    -> Result<()>;
-}
-
-pub struct ProcessTunnelMetadataValidator {
-    inherited_environment: Vec<(OsString, OsString)>,
-}
-
-impl ProcessTunnelMetadataValidator {
-    pub fn new() -> Self {
-        Self {
-            inherited_environment: env::vars_os().collect(),
-        }
-    }
-
-    #[cfg(all(test, unix))]
-    pub(crate) fn with_environment(environment: Vec<(OsString, OsString)>) -> Self {
-        Self {
-            inherited_environment: environment,
-        }
-    }
-}
-
-impl Default for ProcessTunnelMetadataValidator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TunnelMetadataValidator for ProcessTunnelMetadataValidator {
-    fn validate(
-        &self,
-        binary_path: &Path,
-        tunnel_id: &str,
-        runtime_key: &RuntimeKey,
-    ) -> Result<()> {
-        if !binary_path.is_absolute() {
-            bail!("managed tunnel-client validation path must be absolute");
-        }
-
-        let mut command = Command::new(binary_path);
-        command
-            .args(["admin", "--json", "tunnels", "get", tunnel_id])
-            .env_clear();
-        apply_provider_environment(&mut command, &self.inherited_environment, runtime_key);
-
-        let output = command.output().with_context(|| {
-            format!(
-                "failed to run managed tunnel-client at {}",
-                binary_path.display()
-            )
-        })?;
-        if !output.status.success() {
-            let provider_output = if output.stderr.is_empty() {
-                &output.stdout
-            } else {
-                &output.stderr
-            };
-            let provider_diagnostic = redact_runtime_key(provider_output, runtime_key);
-            if !provider_diagnostic.is_empty() {
-                bail!(
-                    "OpenAI tunnel metadata validation failed ({}); verify the tunnel ID, runtime key, and Tunnels Read permission; tunnel-client: {}",
-                    output.status,
-                    provider_diagnostic
-                );
-            }
-            bail!(
-                "OpenAI tunnel metadata validation failed ({}); verify the tunnel ID, runtime key, and Tunnels Read permission",
-                output.status
-            );
-        }
-
-        let metadata: Value = serde_json::from_slice(&output.stdout)
-            .context("tunnel-client metadata validation returned invalid JSON")?;
-        let returned_id = metadata
-            .get("id")
-            .and_then(Value::as_str)
-            .context("tunnel-client metadata response did not contain a tunnel id")?;
-        if returned_id != tunnel_id {
-            bail!(
-                "tunnel-client metadata response returned an unexpected tunnel id; refusing setup"
-            );
-        }
-        Ok(())
-    }
-}
-
-fn apply_provider_environment(
-    command: &mut Command,
-    inherited: &[(OsString, OsString)],
-    runtime_key: &RuntimeKey,
-) {
-    for (key, value) in provider_environment(inherited, runtime_key) {
-        command.env(key, value);
-    }
 }
 
 pub(crate) fn provider_environment(
@@ -185,17 +85,6 @@ fn provider_environment_for_target(
         OsString::from(runtime_key.expose()),
     ));
     environment
-}
-
-fn redact_runtime_key(output: &[u8], runtime_key: &RuntimeKey) -> String {
-    let mut diagnostic = String::from_utf8_lossy(output)
-        .trim()
-        .replace(runtime_key.expose(), "<redacted-runtime-key>");
-    if diagnostic.len() > 4096 {
-        diagnostic.truncate(4096);
-        diagnostic.push('…');
-    }
-    diagnostic
 }
 
 #[cfg(target_os = "macos")]
@@ -336,116 +225,12 @@ impl ArchiveExtractor for LinuxZipArchiveExtractor {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    use super::provider_environment_for_target;
+    use crate::local::RuntimeKey;
     use std::collections::HashMap;
     use std::ffi::OsString;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
-
-    use tempfile::tempdir;
-
-    use super::{
-        ProcessTunnelMetadataValidator, TunnelMetadataValidator, provider_environment_for_target,
-    };
-    use crate::local::RuntimeKey;
-
-    #[test]
-    fn provider_subprocess_get_uses_only_runtime_key_and_allowlisted_environment() {
-        let dir = tempdir().unwrap();
-        let binary = dir.path().join("fake-tunnel-client");
-        let capture = dir.path().join("environment.txt");
-        let tunnel_id = "tunnel_0123456789abcdef0123456789abcdef";
-        let script = format!(
-            "#!/bin/sh\n/usr/bin/env > '{}'\nprintf '{{\"id\":\"{}\"}}'\n",
-            capture.display(),
-            tunnel_id
-        );
-        fs::write(&binary, script).unwrap();
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let validator = ProcessTunnelMetadataValidator::with_environment(vec![
-            (
-                OsString::from("OPENAI_ADMIN_KEY"),
-                OsString::from("admin-secret"),
-            ),
-            (
-                OsString::from("OPENAI_API_KEY"),
-                OsString::from("fallback-secret"),
-            ),
-            (
-                OsString::from("UNRELATED_SECRET"),
-                OsString::from("unrelated-secret"),
-            ),
-            (
-                OsString::from("HTTPS_PROXY"),
-                OsString::from("http://proxy.example"),
-            ),
-            (
-                OsString::from("CONTROL_PLANE_API_KEY"),
-                OsString::from("ambient-runtime"),
-            ),
-        ]);
-        let key = RuntimeKey::new("intended-runtime-secret").unwrap();
-        validator.validate(&binary, tunnel_id, &key).unwrap();
-
-        let environment = fs::read_to_string(capture).unwrap();
-        assert!(environment.contains("CONTROL_PLANE_API_KEY=intended-runtime-secret"));
-        assert!(environment.contains("HTTPS_PROXY=http://proxy.example"));
-        for forbidden in [
-            "OPENAI_ADMIN_KEY",
-            "OPENAI_API_KEY",
-            "UNRELATED_SECRET",
-            "admin-secret",
-            "fallback-secret",
-            "unrelated-secret",
-            "ambient-runtime",
-        ] {
-            assert!(
-                !environment.contains(forbidden),
-                "leaked {forbidden}: {environment}"
-            );
-        }
-    }
-
-    #[test]
-    fn provider_subprocess_failure_does_not_echo_runtime_key() {
-        let dir = tempdir().unwrap();
-        let binary = dir.path().join("fake-tunnel-client");
-        fs::write(&binary, "#!/bin/sh\necho provider-failed >&2\nexit 7\n").unwrap();
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let validator = ProcessTunnelMetadataValidator::with_environment(Vec::new());
-        let key = RuntimeKey::new("never-print-me").unwrap();
-        let error = validator
-            .validate(&binary, "tunnel_0123456789abcdef0123456789abcdef", &key)
-            .unwrap_err();
-        let rendered = format!("{error:#}");
-        assert!(rendered.contains("metadata validation failed"));
-        assert!(!rendered.contains("never-print-me"));
-        assert!(rendered.contains("provider-failed"));
-    }
-
-    #[test]
-    fn provider_subprocess_failure_redacts_runtime_key_from_provider_error() {
-        let dir = tempdir().unwrap();
-        let binary = dir.path().join("fake-tunnel-client");
-        fs::write(
-            &binary,
-            "#!/bin/sh\necho 'provider rejected never-print-me' >&2\nexit 7\n",
-        )
-        .unwrap();
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-
-        let validator = ProcessTunnelMetadataValidator::with_environment(Vec::new());
-        let key = RuntimeKey::new("never-print-me").unwrap();
-        let error = validator
-            .validate(&binary, "tunnel_0123456789abcdef0123456789abcdef", &key)
-            .unwrap_err();
-        let rendered = format!("{error:#}");
-        assert!(rendered.contains("provider rejected <redacted-runtime-key>"));
-        assert!(!rendered.contains("never-print-me"));
-    }
 
     #[test]
     fn windows_provider_environment_restores_required_os_context_only() {

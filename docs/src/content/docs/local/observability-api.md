@@ -110,7 +110,7 @@ Then reread discovery and the token file.
 
 A normal browser page should not receive the observer Bearer just to work around CORS. `EventSource` also cannot set the required Authorization header.
 
-The first-party Liveboard solves this with a temporary same-origin loopback capability host started by `zodex local watch`. Native code reads discovery + Bearer, proxies only allowlisted observer resources, and serves the embedded frontend. **The Bearer is not injected into Liveboard JavaScript.**
+The first-party Liveboard solves this with a runtime-owned same-origin loopback capability host. Native code reads the Bearer, proxies only allowlisted observer resources, and serves the embedded frontend. `zodex local watch` resolves that host and opens, prints, or copies its stable URL. **The Bearer is not injected into Liveboard JavaScript.**
 
 A custom browser UI should use an equivalent trusted localhost/native wrapper rather than weakening the observer itself.
 

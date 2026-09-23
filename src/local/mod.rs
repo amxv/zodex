@@ -61,7 +61,7 @@ pub use lifecycle_start::start_via_linux_process;
 #[cfg(target_os = "windows")]
 pub use lifecycle_start::start_via_windows_process;
 pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
-pub use liveboard::{run_local_liveboard, run_local_liveboard_without_open};
+pub use liveboard::{copy_local_liveboard_url, local_liveboard_url, run_local_liveboard};
 pub use observability::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
 };
@@ -102,15 +102,13 @@ pub use tunnel::{
     TunnelProcessState, cleanup_stale_tunnel_child, load_tunnel_process_state, probe_tunnel_health,
     spawn_tunnel_client, write_mcp_token, write_tunnel_process_state, write_tunnel_profile,
 };
+pub use tunnel_provider::ArchiveExtractor;
 #[cfg(target_os = "linux")]
 pub use tunnel_provider::LinuxZipArchiveExtractor;
 #[cfg(target_os = "macos")]
 pub use tunnel_provider::MacDittoArchiveExtractor;
 #[cfg(target_os = "windows")]
 pub use tunnel_provider::WindowsTarArchiveExtractor;
-pub use tunnel_provider::{
-    ArchiveExtractor, ProcessTunnelMetadataValidator, TunnelMetadataValidator,
-};
 pub use tunnel_release::{
     OfficialTunnelReleaseClient, ResolvedTunnelRelease, TunnelArchitecture, sha256_hex,
     validate_tunnel_id,

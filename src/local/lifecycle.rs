@@ -30,7 +30,6 @@ use super::lifecycle_lock::LocalLifecycleLock;
 
 #[cfg(target_os = "macos")]
 use super::LocalLaunchdJob;
-#[cfg(target_os = "macos")]
 use super::liveboard::{
     LocalLiveboardDiscovery, remove_liveboard_discovery, write_liveboard_discovery,
 };
@@ -408,7 +407,6 @@ pub async fn run_hidden_runtime(
         // discovery, terminate only birth-identity-matching children, and
         // leave a diagnostic state record for the parent `start` poller.
         let _ = fs::remove_file(paths.discovery_file());
-        #[cfg(target_os = "macos")]
         remove_liveboard_discovery(&paths);
         let inspector = SystemProcessInspector;
         let _ = cleanup_stale_tunnel_child(&paths, &inspector);
@@ -571,7 +569,6 @@ async fn run_hidden_runtime_inner(
     state.health.tunnel_ready = true;
     state.health.last_error = None;
     write_runtime_state(&paths, &state)?;
-    #[cfg(target_os = "macos")]
     if let Some(base_url) = host.liveboard_url() {
         match LocalLiveboardDiscovery::new(bootstrap.runtime_id.clone(), base_url)
             .and_then(|discovery| write_liveboard_discovery(&paths, &discovery))
@@ -686,7 +683,6 @@ async fn supervise_runtime(
     health_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stop_signal = shutdown_signal();
     tokio::pin!(stop_signal);
-    #[cfg(target_os = "macos")]
     let mut liveboard_published = _host.liveboard_url().is_some();
 
     loop {
@@ -696,9 +692,9 @@ async fn supervise_runtime(
                 if windows_stop_requested(context.paths, &context.bootstrap.runtime_id)? {
                     return Ok(());
                 }
-                #[cfg(target_os = "macos")]
                 if liveboard_published && _host.liveboard_is_finished() {
                     liveboard_published = false;
+                    #[cfg(target_os = "macos")]
                     _host.disable_liveboard_notifier();
                     remove_liveboard_discovery(context.paths);
                     let _ = append_lifecycle_diagnostic(
@@ -805,7 +801,6 @@ async fn coordinated_hidden_shutdown(
     // finally the listeners.
     host.close_admission().await;
     let _ = fs::remove_file(paths.discovery_file());
-    #[cfg(target_os = "macos")]
     remove_liveboard_discovery(&paths);
     let tunnel_shutdown = tunnel.terminate().await;
     let _ = fs::remove_file(paths.tunnel_process_state_file());

@@ -69,6 +69,17 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Bun for Liveboard
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Build Liveboard assets
+        working-directory: apps/liveboard
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Validate product and MCP contract
         run: bash scripts/check-product-contract.sh
 
@@ -85,6 +96,8 @@ jobs:
 
       - name: Run repository validation
         shell: bash
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: |
           set -euo pipefail
           log="$(mktemp)"
@@ -182,15 +195,33 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Bun for Liveboard
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Build Liveboard assets
+        working-directory: apps/liveboard
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Check Windows operator and Local runtime
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: cargo check --locked --lib --bin zodex
 
       - name: Compile Windows test targets
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: cargo test --locked --lib --bin zodex --no-run
 
       - name: Run Windows-relevant unit tests
         shell: pwsh
         run: |
+          cargo test --locked --lib local::liveboard::server_tests -- --nocapture
+          cargo test --locked --lib local::liveboard::launch::tests::supported_platform_has_browser_and_clipboard_attempts -- --exact
           cargo test --locked --lib local::environment_handoff::tests::environment_handoff_round_trips_and_is_consumed -- --exact
           cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_preserves_utf16_values -- --exact
           cargo test --locked --lib local::lifecycle_context::windows_tests::windows_resolves_builtin_powershell_from_captured_system_root -- --exact

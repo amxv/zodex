@@ -14,7 +14,7 @@ Run it directly on a trusted Apple Silicon Mac, 64-bit Linux machine, or x86_64 
 
 Local puts ChatGPT on your trusted Linux, macOS, or Windows host through an **OpenAI Secure MCP Tunnel**. There is no public inbound port, proxy server, container, or separate remote machine between the model and the development environment you already use.
 
-One Local runtime can serve multiple ChatGPT conversations at once. Zodex gives each conversation its own short Agent identity, keeps durable execution history, and lets you watch every command and file change in real time through the macOS **Liveboard** or the cross-platform terminal viewer.
+One Local runtime can serve multiple ChatGPT conversations at once. Zodex gives each conversation its own short Agent identity, keeps durable execution history, and lets you watch every command and file change in real time through the cross-platform browser **Liveboard** or terminal viewer.
 
 - **Your real environment** — shell, Git, language toolchains, credentials, and files run as your logged-in user. Linux and macOS use the captured login shell; Windows Local executes commands through Windows PowerShell with the captured user environment.
 - **Three MCP tools** — `exec_command`, `write_stdin`, and `apply_patch`.
@@ -22,7 +22,7 @@ One Local runtime can serve multiple ChatGPT conversations at once. Zodex gives 
 - **Live observability** — commands, output, diffs, process state, and Agent timelines in the browser Liveboard or terminal TUI.
 - **Durable history** — inspect previous tool activity even after the viewer or Local runtime stops.
 - **Explicit lifecycle** — start access when you want it, optionally give it a TTL, and stop it cleanly.
-- **Host-native controls** — macOS includes an optional menu-bar app and browser Liveboard; Linux and Windows use the terminal viewer. Linux stores the tunnel key in a user-only credential file and Windows uses Windows Credential Manager.
+- **Host-native controls** — Linux, macOS, and Windows include the browser Liveboard and terminal viewer; macOS additionally includes an optional menu-bar app. Linux stores the tunnel key in a user-only credential file and Windows uses Windows Credential Manager.
 
 Local is intentionally a **trusted-host mode, not a sandbox**. ChatGPT receives the same filesystem and developer-tool access your logged-in user has, subject to the host operating system's normal permissions.
 
@@ -54,7 +54,7 @@ cd ~/code/my-project
 zodex local start --ttl 4h
 ```
 
-Watch the Agents work. macOS opens Liveboard; Linux and Windows open the terminal viewer:
+Watch the Agents work. Linux, macOS, and Windows open Liveboard by default:
 
 ```bash
 zodex local watch
@@ -79,7 +79,7 @@ The model-facing interface stays the same. You choose where it runs and which tr
 | Trust model | Trusted host; your logged-in user | Restricted Agent account + isolated GitHub writer boundary |
 | Lifecycle | Explicit start/stop, optional TTL | Automatic wake/sleep |
 | GitHub access | Your existing local credentials | Review-first PRs, temporary push grants, or scoped YOLO |
-| Observability | macOS Liveboard + TUI; Linux/Windows TUI; durable history + HTTP/SSE API | Sprite service and operator diagnostics |
+| Observability | Linux/macOS/Windows Liveboard + TUI; durable history + HTTP/SSE API | Sprite service and operator diagnostics |
 
 For an isolated remote workspace instead of trusted-host execution:
 

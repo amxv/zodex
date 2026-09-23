@@ -15,11 +15,9 @@ use crate::session::{
 };
 
 #[cfg(target_os = "macos")]
-use super::liveboard::{
-    LiveboardLinkNotifier, LocalLiveboardDiscovery, LocalLiveboardHost, start_liveboard_host,
-};
+use super::liveboard::{LiveboardLinkNotifier, LocalLiveboardDiscovery};
+use super::liveboard::{LocalLiveboardHost, start_liveboard_host};
 use super::mcp_context::LocalMcpContextProvider;
-#[cfg(target_os = "macos")]
 use super::observer_client::LocalObserverClient;
 use super::{
     LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalObservabilityServer,
@@ -41,7 +39,6 @@ pub struct LocalHostRuntime {
     mcp_server: LocalMcpServer,
     observability_server: LocalObservabilityServer,
     history: Arc<LocalHistoryRuntime>,
-    #[cfg(target_os = "macos")]
     liveboard_host: Option<LocalLiveboardHost>,
     #[cfg(target_os = "macos")]
     liveboard_notifier: Option<LiveboardLinkNotifier>,
@@ -115,12 +112,10 @@ impl LocalHostRuntime {
         self.history.runtime_id()
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn liveboard_url(&self) -> Option<&str> {
         self.liveboard_host.as_ref().map(LocalLiveboardHost::url)
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn liveboard_is_finished(&self) -> bool {
         self.liveboard_host
             .as_ref()
@@ -150,13 +145,11 @@ impl LocalHostRuntime {
             mcp_server,
             observability_server,
             history,
-            #[cfg(target_os = "macos")]
             liveboard_host,
             #[cfg(target_os = "macos")]
             liveboard_notifier,
         } = self;
         let mut first_error = None;
-        #[cfg(target_os = "macos")]
         if let Some(host) = liveboard_host.as_ref() {
             host.request_shutdown();
         }
@@ -193,7 +186,6 @@ impl LocalHostRuntime {
         {
             first_error = Some(error.context("failed to stop Local observability listener"));
         }
-        #[cfg(target_os = "macos")]
         if let Some(host) = liveboard_host
             && let Err(error) = host.shutdown().await
             && first_error.is_none()
@@ -286,7 +278,6 @@ pub async fn start_local_host_runtime(
                 return Err(error.context("failed to start Local observability server"));
             }
         };
-    #[cfg(target_os = "macos")]
     let liveboard_host = match LocalObserverClient::attach(
         &observability_server.base_url(),
         bearer.trim(),
@@ -347,7 +338,6 @@ pub async fn start_local_host_runtime(
         mcp_server,
         observability_server,
         history,
-        #[cfg(target_os = "macos")]
         liveboard_host,
         #[cfg(target_os = "macos")]
         liveboard_notifier,
@@ -408,7 +398,6 @@ mod tests {
         assert!(runtime.observability_addr().ip().is_loopback());
         assert_ne!(runtime.mcp_addr(), runtime.observability_addr());
         assert_ne!(runtime.mcp_url(), runtime.observability_url());
-        #[cfg(target_os = "macos")]
         if let Some(liveboard_url) = runtime.liveboard_url() {
             let url = reqwest::Url::parse(liveboard_url).unwrap();
             let liveboard_addr =

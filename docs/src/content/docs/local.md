@@ -76,7 +76,7 @@ zodex local setup
 
 Zodex prompts for the tunnel ID and runtime key. It stores the runtime key in macOS Keychain, a user-only Linux credential file, or Windows Credential Manager, installs and verifies the matching managed OpenAI tunnel client, and creates the Local state it needs. Setup does **not** leave the Local runtime running when it exits.
 
-On macOS, setup also enables the lightweight Zodex menu bar app by default. Linux and Windows do not install the macOS menu app; use the CLI and terminal watch UI there. Use `zodex local setup --no-menu-bar` on macOS if you prefer to leave the bundled menu app disabled.
+On macOS, setup also enables the lightweight Zodex menu bar app by default. Linux and Windows do not install the macOS menu app; use the CLI there. Use `zodex local setup --no-menu-bar` on macOS if you prefer to leave the bundled menu app disabled.
 
 For automation, use one of the non-argv secret inputs:
 
@@ -195,7 +195,7 @@ Local exposes a **first-class localhost observability API** for viewing ChatGPT 
 zodex local watch
 ```
 
-On macOS, `watch` starts a temporary loopback capability host and opens the read-only multi-Agent Liveboard in your browser. On Linux and Windows, plain `watch` opens the terminal viewer instead. Both views use the same read-only observability model and durable history.
+On Linux, macOS, and Windows, `watch` opens the read-only multi-Agent Liveboard in your default browser. Use `zodex local watch url` to print the stable local URL or `zodex local watch copyurl` to copy it to the system clipboard.
 
 The terminal viewer remains available explicitly:
 
@@ -205,7 +205,7 @@ zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-`--agent` and `--all` are TUI-only filters. Liveboard manages visible Agents through its **All Agents** drawer instead.
+`--agent` can focus either the web Liveboard or the TUI on one Agent. `--all` remains TUI-only. Liveboard also manages visible Agents through its **All Agents** drawer.
 
 `watch` is only a viewer. Opening or closing it does not start, stop, or extend Local. The browser never receives the observer Bearer: native Zodex proxies an allowlisted read-only surface through the temporary same-origin capability URL.
 
@@ -246,7 +246,7 @@ cd ~/code/my-project
 zodex local start --ttl 4h
 
 # Use one or more ChatGPT conversations.
-# Optional: open the viewer (browser Liveboard on macOS, TUI on Linux/Windows).
+# Optional: open the browser Liveboard on Linux, macOS, or Windows.
 zodex local watch
 
 # When finished:
@@ -262,5 +262,5 @@ You only need `zodex local setup` again when you want to replace tunnel credenti
 - [Configuration](/docs/local/configuration) — retention and non-secret Local settings.
 - [Local command reference](/docs/local/command-reference) — every `zodex local` command and flag.
 - [Local troubleshooting](/docs/local/troubleshooting) — tunnel, startup, credential-store, host-permission, Agent, and history problems.
-- [Watch and Liveboard](/docs/local/watch) — macOS browser Liveboard, the Linux/macOS/Windows terminal TUI, output/diff behavior, and recovery.
+- [Watch and Liveboard](/docs/local/watch) — cross-platform browser Liveboard, terminal TUI, output/diff behavior, and recovery.
 - [Local observability API](/docs/local/observability-api) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.

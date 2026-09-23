@@ -2,16 +2,15 @@ use std::io::IsTerminal as _;
 
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
-    LocalStatusState, RuntimeKey, build_presentation, clear_local_history, ensure_offline_mutation,
-    parse_human_duration, render_presentation, run_local_liveboard,
-    run_local_liveboard_without_open, run_local_watch, validate_tunnel_id, WatchOptions,
+    LocalStatusState, RuntimeKey, WatchOptions, build_presentation, clear_local_history,
+    copy_local_liveboard_url, ensure_offline_mutation, local_liveboard_url, parse_human_duration,
+    render_presentation, run_local_liveboard, run_local_watch, validate_tunnel_id,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use zodex::local::{
     LocalSetupRequest, LocalSetupService, OfficialTunnelReleaseClient,
-    ProcessTunnelMetadataValidator, RuntimeKeyStore, TunnelArchitecture,
-    paths_from_runtime_bootstrap, run_hidden_runtime,
+    RuntimeKeyStore, TunnelArchitecture, paths_from_runtime_bootstrap, run_hidden_runtime,
 };
 #[cfg(target_os = "macos")]
 use zodex::local::{
@@ -81,21 +80,20 @@ enum LocalCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Open Local activity (web Liveboard on macOS, terminal viewer on Linux/Windows).
-    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local watch --no-open --agent k7m2\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
+    /// Open Local activity in the web Liveboard, print/copy its URL, or use the terminal viewer.
+    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch url\n  zodex local watch copyurl\n  zodex local watch --agent k7m2\n  zodex local watch url --agent k7m2\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
     Watch {
-        /// Use the terminal viewer (the default mode on Linux/Windows).
+        /// Use the terminal viewer instead of the web Liveboard.
         #[arg(long)]
         tui: bool,
-        /// Print the Liveboard URL without opening the default browser.
-        #[arg(long, conflicts_with = "tui")]
-        no_open: bool,
         /// Focus one four-character Agent ID in web or TUI mode.
-        #[arg(long, conflicts_with = "all")]
+        #[arg(long, global = true, conflicts_with = "all")]
         agent: Option<String>,
         /// In TUI mode, watch combined activity from all Agents.
         #[arg(long, requires = "tui")]
         all: bool,
+        #[command(subcommand)]
+        command: Option<LocalWatchCommand>,
     },
     #[cfg(target_os = "macos")]
     /// Open the lightweight macOS menu bar controls for Local.
@@ -146,6 +144,14 @@ enum LocalCommand {
         #[arg(long, hide = true)]
         bootstrap: PathBuf,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum LocalWatchCommand {
+    /// Print the stable Liveboard URL.
+    Url,
+    /// Copy the stable Liveboard URL to the system clipboard.
+    Copyurl,
 }
 
 #[derive(Debug, Subcommand)]
@@ -215,29 +221,32 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
         LocalCommand::Status { json } => print_local_status(&paths, json),
         LocalCommand::Watch {
             tui,
-            no_open,
             agent,
             all,
+            command,
         } => {
             if let Some(agent) = agent.as_deref() {
                 validate_agent_id(agent)?;
             }
             ensure_local_runtime_host()?;
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
-            if !tui {
-                if no_open {
-                    bail!(
-                        "this Local host does not provide the macOS web Liveboard; use `zodex local watch --tui`"
-                    );
-                }
-                return run_local_watch(&paths, WatchOptions { agent, all: false }).await;
+            if tui && command.is_some() {
+                bail!("`zodex local watch url` and `copyurl` cannot be combined with `--tui`");
             }
             if tui {
                 run_local_watch(&paths, WatchOptions { agent, all }).await
-            } else if no_open {
-                run_local_liveboard_without_open(&paths, agent.as_deref()).await
             } else {
-                run_local_liveboard(&paths, agent.as_deref()).await
+                match command {
+                    None => run_local_liveboard(&paths, agent.as_deref()).await,
+                    Some(LocalWatchCommand::Url) => {
+                        println!("{}", local_liveboard_url(&paths, agent.as_deref()).await?);
+                        Ok(())
+                    }
+                    Some(LocalWatchCommand::Copyurl) => {
+                        let url = copy_local_liveboard_url(&paths, agent.as_deref()).await?;
+                        println!("Copied Liveboard URL: {url}");
+                        Ok(())
+                    }
+                }
             }
         }
         #[cfg(target_os = "macos")]
@@ -430,7 +439,7 @@ async fn run_native_local_start(
         &launchd,
     )
     .await?;
-    print_local_start_outcome(&outcome);
+    print_local_start_outcome(paths, &outcome).await;
     Ok(())
 }
 
@@ -463,7 +472,7 @@ async fn run_native_local_start(
         &environment,
     )
     .await?;
-    print_local_start_outcome(&outcome);
+    print_local_start_outcome(paths, &outcome).await;
     Ok(())
 }
 
@@ -494,7 +503,7 @@ async fn run_native_local_start(
         &environment,
     )
     .await?;
-    print_local_start_outcome(&outcome);
+    print_local_start_outcome(paths, &outcome).await;
     Ok(())
 }
 
@@ -508,7 +517,10 @@ async fn run_native_local_start(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn print_local_start_outcome(outcome: &zodex::local::LocalStartOutcome) {
+async fn print_local_start_outcome(
+    paths: &LocalPaths,
+    outcome: &zodex::local::LocalStartOutcome,
+) {
     let discovery = &outcome.discovery;
     println!(
         "Zodex Local is {}.",
@@ -526,8 +538,12 @@ fn print_local_start_outcome(outcome: &zodex::local::LocalStartOutcome) {
         outcome.active_process_count,
         if outcome.active_process_count == 1 { "" } else { "es" }
     );
+    match local_liveboard_url(paths, None).await {
+        Ok(url) => println!("Liveboard: {url}"),
+        Err(error) => eprintln!("warning: Liveboard URL is unavailable: {error:#}"),
+    }
     println!("ChatGPT: refresh the Zodex Local app in app settings to load this start directory.");
-    println!("Inspect: zodex local status | zodex local watch --tui");
+    println!("Inspect: zodex local status | zodex local watch | zodex local watch --tui");
     println!("Stop: zodex local stop");
 }
 
@@ -705,9 +721,8 @@ async fn run_native_local_setup(
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = MacDittoArchiveExtractor;
-    let validator = ProcessTunnelMetadataValidator::new();
     let secrets = MacKeychainRuntimeKeyStore;
-    let service = LocalSetupService::new(paths, &releases, &extractor, &validator, &secrets);
+    let service = LocalSetupService::new(paths, &releases, &extractor, &secrets);
     let result = service
         .run(LocalSetupRequest {
             tunnel_id,
@@ -726,7 +741,7 @@ async fn run_native_local_setup(
         if result.binary_updated { "updated" } else { "verified/reused" }
     );
     println!("OpenAI runtime key: stored in macOS Keychain");
-    println!("Tunnel metadata: read access verified; Tunnels Use/readiness is verified by `zodex local start`");
+    println!("Tunnel access/readiness: verified by `zodex local start`");
     println!(
         "Observability bearer: {}",
         if result.observability_bearer_rotated {
@@ -761,9 +776,8 @@ async fn run_native_local_setup(
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = WindowsTarArchiveExtractor;
-    let validator = ProcessTunnelMetadataValidator::new();
     let secrets = WindowsCredentialRuntimeKeyStore;
-    let service = LocalSetupService::new(paths, &releases, &extractor, &validator, &secrets);
+    let service = LocalSetupService::new(paths, &releases, &extractor, &secrets);
     let result = service
         .run(LocalSetupRequest {
             tunnel_id,
@@ -781,7 +795,7 @@ async fn run_native_local_setup(
         if result.binary_updated { "updated" } else { "verified/reused" }
     );
     println!("OpenAI runtime key: stored in Windows Credential Manager");
-    println!("Tunnel metadata: read access verified; Tunnels Use/readiness is verified by `zodex local start`");
+    println!("Tunnel access/readiness: verified by `zodex local start`");
     println!(
         "Observability bearer: {}",
         if result.observability_bearer_rotated { "generated/rotated" } else { "verified/reused" }
@@ -800,9 +814,8 @@ async fn run_native_local_setup(
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = LinuxZipArchiveExtractor;
-    let validator = ProcessTunnelMetadataValidator::new();
     let secrets = LinuxFileRuntimeKeyStore::new(paths);
-    let service = LocalSetupService::new(paths, &releases, &extractor, &validator, &secrets);
+    let service = LocalSetupService::new(paths, &releases, &extractor, &secrets);
     let result = service
         .run(LocalSetupRequest {
             tunnel_id,
@@ -823,7 +836,7 @@ async fn run_native_local_setup(
         "OpenAI runtime key: stored in a user-only credential file at {}",
         paths.runtime_key_file().display()
     );
-    println!("Tunnel metadata: read access verified; Tunnels Use/readiness is verified by `zodex local start`");
+    println!("Tunnel access/readiness: verified by `zodex local start`");
     println!(
         "Observability bearer: {}",
         if result.observability_bearer_rotated { "generated/rotated" } else { "verified/reused" }

@@ -192,9 +192,15 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(prefs["show_raw_button"], false);
     assert_eq!(prefs["editor_command"], "zed");
 
+    let editor_command = if cfg!(target_os = "windows") {
+        "cmd.exe"
+    } else {
+        "/usr/bin/true"
+    };
+
     let patched = client
         .patch(capability_url(host.private_url(), "preferences"))
-        .json(&json!({"theme":"dark","max_visible_agents":5,"show_raw_button":true,"editor_command":"/usr/bin/true"}))
+        .json(&json!({"theme":"dark","max_visible_agents":5,"show_raw_button":true,"editor_command":editor_command}))
         .send()
         .await
         .unwrap();
@@ -203,7 +209,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(patched["theme"], "dark");
     assert_eq!(patched["max_visible_agents"], 5);
     assert_eq!(patched["show_raw_button"], true);
-    assert_eq!(patched["editor_command"], "/usr/bin/true");
+    assert_eq!(patched["editor_command"], editor_command);
     assert!(!patched.to_string().contains(BEARER));
 
     let open_path = dir.path().join("open-me.txt");

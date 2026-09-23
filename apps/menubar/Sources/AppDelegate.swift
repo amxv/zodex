@@ -317,76 +317,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openLiveboard() {
         liveboardItem.isEnabled = false
-        runZodex(["local", "watch", "--no-open"]) { [weak self] result in
+        runZodex(["local", "watch"]) { [weak self] result in
             guard let self else { return }
             self.refreshStatus()
             guard result.exitCode == 0 else {
                 self.showCommandError("Open Liveboard failed", result: result)
                 return
             }
-            guard let url = Self.liveboardURL(in: result.output) else {
-                self.showError(
-                    "Open Liveboard failed",
-                    detail: "Zodex did not return a valid runtime-owned Liveboard URL."
-                )
-                return
-            }
-            NSWorkspace.shared.open(url)
         }
     }
 
     @objc private func copyLiveboardLink() {
         copyLiveboardItem.isEnabled = false
-        runZodex(["local", "watch", "--no-open"]) { [weak self] result in
+        runZodex(["local", "watch", "copyurl"]) { [weak self] result in
             guard let self else { return }
             self.refreshStatus()
             guard result.exitCode == 0 else {
                 self.showCommandError("Copy Liveboard Link failed", result: result)
                 return
             }
-            guard let url = Self.liveboardURL(in: result.output) else {
-                self.showError(
-                    "Copy Liveboard Link failed",
-                    detail: "Zodex did not return a valid runtime-owned Liveboard URL."
-                )
-                return
-            }
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            guard pasteboard.setString(url.absoluteString, forType: .string) else {
-                self.showError(
-                    "Copy Liveboard Link failed",
-                    detail: "The system clipboard is unavailable."
-                )
-                return
-            }
             self.copyLiveboardItem.title = "Liveboard Link Copied"
         }
-    }
-
-    private static func liveboardURL(in output: String) -> URL? {
-        for line in output.split(whereSeparator: \.isNewline) {
-            let text = String(line)
-            guard text.hasPrefix("Liveboard: ") else {
-                continue
-            }
-            let value = String(text.dropFirst("Liveboard: ".count))
-            guard let components = URLComponents(string: value),
-                  components.scheme == "http",
-                  components.host == "127.0.0.1",
-                  components.port != nil,
-                  components.user == nil,
-                  components.password == nil,
-                  components.query == nil,
-                  components.fragment == nil,
-                  components.path == "/",
-                  let url = components.url
-            else {
-                continue
-            }
-            return url
-        }
-        return nil
     }
 
     @objc private func changeStartFolder() {

@@ -41,7 +41,7 @@ The signing private key remains in the user's login Keychain. The tunnel runtime
 
 ## Liveboard checks
 
-Liveboard is an isolated frontend app under `apps/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
+Liveboard is an isolated frontend app under `apps/liveboard`. Its production assets are embedded into the Linux, macOS, and Windows `zodex` operator binaries by `build.rs`.
 
 For visual development against the real currently running Local runtime, use the attached dev server:
 
@@ -50,7 +50,7 @@ cd apps/liveboard
 bun run dev:live
 ```
 
-The launcher builds a repo-local Zodex viewer once, starts `zodex local watch --no-open` against the active Local observer, and runs Vite with HMR. Vite proxies Liveboard API, SSE, and preference requests through that temporary same-origin capability host, so the observability bearer remains outside browser JavaScript. It does not restart or replace the running Local runtime.
+The launcher builds a repo-local Zodex viewer once, resolves the active runtime with `zodex local watch url`, and runs Vite with HMR. Vite proxies Liveboard API, SSE, and preference requests through that runtime-owned same-origin capability host, so the observability bearer remains outside browser JavaScript. It does not restart or replace the running Local runtime.
 
 ```bash
 cd apps/liveboard
@@ -65,13 +65,13 @@ bun run build
 
 Do not commit `apps/liveboard/node_modules/` or `apps/liveboard/dist/`.
 
-For an embed-required macOS validation, build the frontend first and then run Cargo with:
+For an embed-required operator validation, build the frontend first and then run Cargo with:
 
 ```bash
 ZODEX_LIVEBOARD_EMBED_REQUIRED=1 cargo test
 ```
 
-CI does this only on the native macOS lane. Linux and Windows have native operator/Local validation paths, while the Linux lane also keeps the Sprite/runtime checks. Release builds install Bun/build Liveboard only for the Apple target; Windows packages the `zodex.exe` operator and Linux stays independent of the frontend toolchain.
+CI builds the frontend for native Linux, macOS, and Windows operator validation. Release jobs also embed the same Liveboard assets into every supported Local operator artifact.
 
 ## Docs site checks
 

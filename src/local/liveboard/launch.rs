@@ -1,70 +1,12 @@
-#[cfg(target_os = "macos")]
-use std::process::Command;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
-#[cfg(target_os = "macos")]
-use anyhow::{Context, anyhow};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
-use super::super::LocalPaths;
-#[cfg(target_os = "macos")]
-use super::super::{LocalRuntimeLifecycle, load_runtime_discovery, load_runtime_state};
-#[cfg(target_os = "macos")]
+use super::super::{LocalPaths, LocalRuntimeLifecycle, load_runtime_discovery, load_runtime_state};
 use super::discovery::{load_liveboard_discovery, validate_agent_id};
 
-#[cfg(target_os = "macos")]
-pub(crate) trait BrowserLauncher: Send + Sync {
-    fn open(&self, url: &str) -> Result<()>;
-}
-
-#[cfg(target_os = "macos")]
-struct SystemBrowserLauncher;
-
-#[cfg(target_os = "macos")]
-impl BrowserLauncher for SystemBrowserLauncher {
-    fn open(&self, url: &str) -> Result<()> {
-        let status = Command::new("/usr/bin/open")
-            .arg(url)
-            .status()
-            .context("failed to launch the default browser with /usr/bin/open")?;
-        if !status.success() {
-            bail!("/usr/bin/open exited with status {status}");
-        }
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub async fn run_local_liveboard(paths: &LocalPaths, agent_id: Option<&str>) -> Result<()> {
-    run_local_liveboard_with_launcher(paths, agent_id, Some(&SystemBrowserLauncher)).await
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn run_local_liveboard(_paths: &LocalPaths, _agent_id: Option<&str>) -> Result<()> {
-    bail!("Zodex Local Liveboard is only available on macOS")
-}
-
-#[cfg(target_os = "macos")]
-pub async fn run_local_liveboard_without_open(
-    paths: &LocalPaths,
-    agent_id: Option<&str>,
-) -> Result<()> {
-    run_local_liveboard_with_launcher(paths, agent_id, None).await
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn run_local_liveboard_without_open(
-    _paths: &LocalPaths,
-    _agent_id: Option<&str>,
-) -> Result<()> {
-    bail!("Zodex Local Liveboard is only available on macOS")
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) async fn run_local_liveboard_with_launcher(
-    paths: &LocalPaths,
-    agent_id: Option<&str>,
-    launcher: Option<&dyn BrowserLauncher>,
-) -> Result<()> {
+pub async fn local_liveboard_url(paths: &LocalPaths, agent_id: Option<&str>) -> Result<String> {
     if let Some(agent_id) = agent_id {
         validate_agent_id(agent_id)?;
     }
@@ -84,11 +26,13 @@ pub(crate) async fn run_local_liveboard_with_launcher(
         None => liveboard.base_url.clone(),
     };
     probe_liveboard(&url).await?;
+    Ok(url)
+}
 
+pub async fn run_local_liveboard(paths: &LocalPaths, agent_id: Option<&str>) -> Result<()> {
+    let url = local_liveboard_url(paths, agent_id).await?;
     println!("Liveboard: {url}");
-    if let Some(launcher) = launcher
-        && let Err(error) = launcher.open(&url)
-    {
+    if let Err(error) = open_browser(&url) {
         eprintln!(
             "warning: could not open the default browser automatically: {error:#}. Use the Liveboard URL printed above."
         );
@@ -96,7 +40,116 @@ pub(crate) async fn run_local_liveboard_with_launcher(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+pub async fn copy_local_liveboard_url(
+    paths: &LocalPaths,
+    agent_id: Option<&str>,
+) -> Result<String> {
+    let url = local_liveboard_url(paths, agent_id).await?;
+    copy_to_clipboard(&url)?;
+    Ok(url)
+}
+
+fn open_browser(url: &str) -> Result<()> {
+    let attempts = browser_open_attempts(url);
+    let mut last_error = None;
+    for (program, args) in attempts {
+        match Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => last_error = Some(anyhow!("{program} exited with {status}")),
+            Err(error) => {
+                last_error = Some(anyhow!(error).context(format!("failed to start {program}")))
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("no supported browser launcher is available")))
+}
+
+fn browser_open_attempts(url: &str) -> Vec<(&'static str, Vec<String>)> {
+    #[cfg(target_os = "macos")]
+    {
+        return vec![("/usr/bin/open", vec![url.to_string()])];
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return vec![(
+            "cmd.exe",
+            vec!["/C".into(), "start".into(), "".into(), url.to_string()],
+        )];
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return vec![
+            ("xdg-open", vec![url.to_string()]),
+            ("gio", vec!["open".into(), url.to_string()]),
+        ];
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    let attempts = clipboard_copy_attempts();
+    let mut last_error = None;
+    for (program, args) in attempts {
+        let mut child = match Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                last_error = Some(anyhow!(error).context(format!("failed to start {program}")));
+                continue;
+            }
+        };
+        if let Some(stdin) = child.stdin.as_mut()
+            && let Err(error) = stdin.write_all(text.as_bytes())
+        {
+            last_error = Some(anyhow!(error).context(format!("failed to write to {program}")));
+            let _ = child.kill();
+            let _ = child.wait();
+            continue;
+        }
+        match child.wait() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => last_error = Some(anyhow!("{program} exited with {status}")),
+            Err(error) => {
+                last_error = Some(anyhow!(error).context(format!("failed to wait for {program}")))
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("no supported clipboard helper is available")))
+}
+
+fn clipboard_copy_attempts() -> Vec<(&'static str, Vec<&'static str>)> {
+    #[cfg(target_os = "macos")]
+    {
+        return vec![("/usr/bin/pbcopy", vec![])];
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return vec![("clip.exe", vec![])];
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return vec![
+            ("wl-copy", vec![]),
+            ("xclip", vec!["-selection", "clipboard"]),
+            ("xsel", vec!["--clipboard", "--input"]),
+        ];
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
 async fn probe_liveboard(url: &str) -> Result<()> {
     let response = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -112,39 +165,19 @@ async fn probe_liveboard(url: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
-    use anyhow::Result;
-
-    use super::BrowserLauncher;
-
-    struct RecordingLauncher {
-        urls: Mutex<Vec<String>>,
-        fail: bool,
-    }
-
-    impl BrowserLauncher for RecordingLauncher {
-        fn open(&self, url: &str) -> Result<()> {
-            self.urls.lock().unwrap().push(url.to_string());
-            if self.fail {
-                anyhow::bail!("browser unavailable")
-            }
-            Ok(())
-        }
-    }
+    use super::{browser_open_attempts, clipboard_copy_attempts};
 
     #[test]
-    fn browser_launcher_abstraction_records_capability_url_and_can_fail_without_panicking() {
-        let launcher = RecordingLauncher {
-            urls: Mutex::new(Vec::new()),
-            fail: true,
-        };
-        assert!(launcher.open("http://127.0.0.1:1234/capability/").is_err());
-        assert_eq!(
-            launcher.urls.lock().unwrap().as_slice(),
-            ["http://127.0.0.1:1234/capability/"]
-        );
+    fn supported_platform_has_browser_and_clipboard_attempts() {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )) {
+            assert!(!browser_open_attempts("http://127.0.0.1:64973/").is_empty());
+            assert!(!clipboard_copy_attempts().is_empty());
+        }
     }
 }

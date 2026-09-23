@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use super::{
     ArchiveExtractor, LocalConfig, LocalPaths, LocalSetupRequest, LocalSetupService,
     LocalStatusDocument, OfficialTunnelReleaseClient, RuntimeKey, RuntimeKeyStore,
-    TunnelArchitecture, TunnelMetadataValidator, sha256_hex,
+    TunnelArchitecture, sha256_hex,
 };
 
 const TUNNEL_ID: &str = "tunnel_0123456789abcdef0123456789abcdef";
@@ -31,7 +31,6 @@ async fn setup_installs_verified_release_without_serializing_secret() {
     assert!(result.observability_bearer_rotated);
     assert_eq!(result.release_version, "v9.9.9");
     assert_eq!(server.asset_hits(), 1);
-    assert_eq!(fixture.validator.calls(), 1);
     assert_eq!(fixture.secrets.current().unwrap(), key);
     assert_eq!(
         fs::read(fixture.paths.managed_tunnel_client()).unwrap(),
@@ -100,7 +99,6 @@ async fn setup_same_release_reuses_verified_binary_and_bearer() {
         "same verified release should not redownload archive"
     );
     assert_eq!(server.latest_hits(), 2);
-    assert_eq!(fixture.validator.calls(), 2);
     assert_eq!(
         fs::read(fixture.paths.managed_tunnel_client()).unwrap(),
         binary_before
@@ -178,28 +176,6 @@ async fn checksum_failure_preserves_prior_binary_config_secret_and_bearer() {
         .unwrap_err();
 
     assert!(format!("{error:#}").contains("checksum mismatch"));
-    assert_eq!(
-        fixture.validator.calls(),
-        1,
-        "only the healthy seed reached validation"
-    );
-    fixture.assert_snapshot(&before);
-}
-
-#[tokio::test]
-async fn provider_validation_failure_preserves_prior_setup() {
-    let fixture = SetupFixture::new().await;
-    fixture.seed_healthy().await;
-    let before = fixture.snapshot();
-    fixture.validator.fail_next();
-
-    let server = FakeReleaseServer::start("v9.9.10", b"provider-reject".to_vec(), None).await;
-    let error = fixture
-        .run(&server, RuntimeKey::new("new-secret").unwrap())
-        .await
-        .unwrap_err();
-
-    assert!(format!("{error:#}").contains("metadata validation failed"));
     fixture.assert_snapshot(&before);
 }
 
@@ -249,7 +225,6 @@ struct SetupFixture {
     _root: TempDir,
     paths: LocalPaths,
     extractor: FixtureExtractor,
-    validator: FixtureValidator,
     secrets: MemorySecretStore,
 }
 
@@ -266,7 +241,6 @@ impl SetupFixture {
             _root: root,
             paths,
             extractor: FixtureExtractor,
-            validator: FixtureValidator::default(),
             secrets: MemorySecretStore::default(),
         }
     }
@@ -277,20 +251,14 @@ impl SetupFixture {
         runtime_key: RuntimeKey,
     ) -> Result<super::LocalSetupResult> {
         let releases = OfficialTunnelReleaseClient::with_latest_release_url(server.latest_url())?;
-        LocalSetupService::new(
-            &self.paths,
-            &releases,
-            &self.extractor,
-            &self.validator,
-            &self.secrets,
-        )
-        .run(LocalSetupRequest {
-            tunnel_id: TUNNEL_ID.to_string(),
-            runtime_key,
-            architecture: TunnelArchitecture::DarwinArm64,
-            rotate_observability_bearer: false,
-        })
-        .await
+        LocalSetupService::new(&self.paths, &releases, &self.extractor, &self.secrets)
+            .run(LocalSetupRequest {
+                tunnel_id: TUNNEL_ID.to_string(),
+                runtime_key,
+                architecture: TunnelArchitecture::DarwinArm64,
+                rotate_observability_bearer: false,
+            })
+            .await
     }
 
     async fn seed_healthy(&self) {
@@ -381,41 +349,6 @@ impl ArchiveExtractor for FixtureExtractor {
             fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))?;
             fs::set_permissions(&cloudflared_path, fs::Permissions::from_mode(0o755))?;
             fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o644))?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct FixtureValidator {
-    calls: AtomicUsize,
-    fail_next: AtomicBool,
-    paths: Mutex<Vec<PathBuf>>,
-}
-
-impl FixtureValidator {
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    fn fail_next(&self) {
-        self.fail_next.store(true, Ordering::SeqCst);
-    }
-}
-
-impl TunnelMetadataValidator for FixtureValidator {
-    fn validate(
-        &self,
-        binary_path: &Path,
-        tunnel_id: &str,
-        runtime_key: &RuntimeKey,
-    ) -> Result<()> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.paths.lock().unwrap().push(binary_path.to_path_buf());
-        assert_eq!(tunnel_id, TUNNEL_ID);
-        assert!(!runtime_key.expose().is_empty());
-        if self.fail_next.swap(false, Ordering::SeqCst) {
-            bail!("injected provider metadata validation failure");
         }
         Ok(())
     }

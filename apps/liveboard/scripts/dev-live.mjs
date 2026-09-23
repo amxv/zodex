@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
@@ -9,7 +8,6 @@ const liveboardDir = resolve(scriptDir, '..')
 const repoRoot = resolve(liveboardDir, '../..')
 const zodex = resolve(repoRoot, 'target/debug/zodex')
 
-let viewer
 let vite
 let shuttingDown = false
 
@@ -51,42 +49,34 @@ async function ensureViewerBinary() {
   })
 }
 
-function startViewer() {
+function resolveViewerUrl() {
   return new Promise((resolvePromise, reject) => {
-    viewer = spawn(zodex, ['local', 'watch', '--no-open'], {
+    const child = spawn(zodex, ['local', 'watch', 'url'], {
       cwd: repoRoot,
       env: process.env,
       stdio: ['ignore', 'pipe', 'inherit'],
     })
-
-    const lines = createInterface({ input: viewer.stdout })
-    let settled = false
-    lines.on('line', (line) => {
-      console.log(`[zodex] ${line}`)
-      const match = /^Liveboard:\s+(http:\/\/\S+)$/.exec(line.trim())
-      if (match && !settled) {
-        settled = true
-        resolvePromise(match[1])
-      }
+    let stdout = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
     })
-    viewer.on('error', (error) => {
-      if (!settled) {
-        settled = true
-        reject(error)
-      }
-    })
-    viewer.on('exit', (code, signal) => {
-      if (!settled) {
-        settled = true
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      if (code !== 0) {
         reject(
           new Error(
-            `repo Liveboard viewer exited before startup ${signal ? `from ${signal}` : `with ${code}`}`,
+            `repo Liveboard URL lookup exited ${signal ? `from ${signal}` : `with ${code}`}`,
           ),
         )
-      } else if (!shuttingDown) {
-        console.error('[liveboard] capability host exited; stopping Vite')
-        shutdown(code ?? 1)
+        return
       }
+      const url = stdout.trim()
+      if (!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(url)) {
+        reject(new Error(`repo Liveboard URL lookup returned an invalid URL: ${url}`))
+        return
+      }
+      console.log(`[zodex] Liveboard: ${url}`)
+      resolvePromise(url)
     })
   })
 }
@@ -127,7 +117,6 @@ function shutdown(exitCode = 0) {
   if (shuttingDown) return
   shuttingDown = true
   vite?.kill('SIGINT')
-  viewer?.kill('SIGINT')
   setTimeout(() => process.exit(exitCode), 250).unref()
 }
 
@@ -136,7 +125,7 @@ process.on('SIGTERM', () => shutdown(0))
 
 try {
   await ensureViewerBinary()
-  const publicUrl = await startViewer()
+  const publicUrl = await resolveViewerUrl()
   const upstream = await resolvePrivateUpstream(publicUrl)
   startVite(upstream)
 } catch (error) {

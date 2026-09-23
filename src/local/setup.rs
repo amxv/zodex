@@ -10,8 +10,7 @@ use tempfile::{NamedTempFile, TempDir};
 use super::{
     ArchiveExtractor, LocalConfig, LocalPaths, ManagedTunnelClientRelease,
     OfficialTunnelReleaseClient, ResolvedTunnelRelease, RuntimeKey, RuntimeKeyStore,
-    TunnelArchitecture, TunnelMetadataValidator, ensure_offline_mutation, sha256_hex,
-    validate_tunnel_id,
+    TunnelArchitecture, ensure_offline_mutation, sha256_hex, validate_tunnel_id,
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +34,6 @@ pub struct LocalSetupService<'a> {
     paths: &'a LocalPaths,
     releases: &'a OfficialTunnelReleaseClient,
     extractor: &'a dyn ArchiveExtractor,
-    validator: &'a dyn TunnelMetadataValidator,
     secrets: &'a dyn RuntimeKeyStore,
 }
 
@@ -44,14 +42,12 @@ impl<'a> LocalSetupService<'a> {
         paths: &'a LocalPaths,
         releases: &'a OfficialTunnelReleaseClient,
         extractor: &'a dyn ArchiveExtractor,
-        validator: &'a dyn TunnelMetadataValidator,
         secrets: &'a dyn RuntimeKeyStore,
     ) -> Self {
         Self {
             paths,
             releases,
             extractor,
-            validator,
             secrets,
         }
     }
@@ -64,16 +60,6 @@ impl<'a> LocalSetupService<'a> {
         let old_config = LocalConfig::load(&self.paths.config_file())?;
         let release = self.releases.resolve_latest(request.architecture).await?;
         let prepared = self.prepare_tunnel_client(&old_config, &release).await?;
-
-        self.validator
-            .validate(
-                prepared.validation_path(),
-                &request.tunnel_id,
-                &request.runtime_key,
-            )
-            .context(
-                "read-only tunnel metadata validation failed; no Local setup state was changed",
-            )?;
 
         let old_secret = self.secrets.get().context(
             "failed to snapshot the current secure runtime key before Local setup mutation",
@@ -119,10 +105,7 @@ impl<'a> LocalSetupService<'a> {
     ) -> Result<PreparedTunnelClient> {
         let destination = self.paths.managed_tunnel_client();
         if let Some(metadata) = reusable_managed_binary(config, &destination, release)? {
-            return Ok(PreparedTunnelClient::Existing {
-                path: destination,
-                metadata,
-            });
+            return Ok(PreparedTunnelClient::Existing { metadata });
         }
 
         let archive = self.releases.download_verified_archive(release).await?;
@@ -277,7 +260,6 @@ impl<'a> LocalSetupService<'a> {
 
 enum PreparedTunnelClient {
     Existing {
-        path: PathBuf,
         metadata: ManagedTunnelClientRelease,
     },
     Staged {
@@ -290,12 +272,6 @@ enum PreparedTunnelClient {
 }
 
 impl PreparedTunnelClient {
-    fn validation_path(&self) -> &Path {
-        match self {
-            Self::Existing { path, .. } | Self::Staged { path, .. } => path,
-        }
-    }
-
     fn metadata(&self) -> &ManagedTunnelClientRelease {
         match self {
             Self::Existing { metadata, .. } | Self::Staged { metadata, .. } => metadata,
