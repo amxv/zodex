@@ -170,6 +170,12 @@ fn verify_windows_user_only_acl(path: &Path) -> Result<()> {
                 )
             });
         }
+        if security_descriptor.is_null() || dacl.is_null() {
+            bail!(
+                "private Local file has broader Windows ACLs than expected: {}",
+                path.display()
+            );
+        }
         let _security_descriptor = LocalAllocation(security_descriptor.cast());
 
         let mut control = 0u16;
