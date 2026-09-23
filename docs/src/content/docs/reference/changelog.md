@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.1 — 2026-09-23
+
+- Fixed Windows private Local file and directory permissions by replacing PowerShell ACL mutation with native Win32 security APIs and reapplying the user-only ACL whenever a private path is secured.
+- Added regression coverage for deleting and recreating private Windows files/directories at the same path, plus defensive validation for malformed or missing Windows security descriptors.
+
 ## 0.5.0 — 2026-09-23
 
 - Added first-class x86_64 and aarch64 Linux support for Zodex Local, including detached Unix-session lifecycle, captured login-shell execution, user-only runtime-key storage, managed Linux OpenAI tunnel-client assets, terminal-watch defaults, and Linux-aware self-upgrade safety.
