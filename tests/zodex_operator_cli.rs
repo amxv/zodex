@@ -368,7 +368,7 @@ fn zodex_local_history_queries_exact_offline_evidence_and_clear_removes_store() 
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[test]
 fn zodex_local_runtime_actions_fail_cleanly_on_unsupported_host() {
     let fixture = LocalCliFixture::new();

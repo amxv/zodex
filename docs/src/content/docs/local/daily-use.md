@@ -1,12 +1,12 @@
 ---
 title: "Daily use"
-description: "Start, inspect, observe, and stop Zodex Local while one or more ChatGPT conversations work on your trusted macOS or Windows host."
+description: "Start, inspect, observe, and stop Zodex Local while one or more ChatGPT conversations work on your trusted Linux, macOS, or Windows host."
 order: 3
 category: Local
 summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, durable history, logs, and clean shutdown."
 ---
 
-Once [Local setup](/docs/local/setup) is complete, use the CLI on either platform. macOS also offers the optional Zodex menu bar app.
+Once [Local setup](/docs/local/setup) is complete, use the CLI on any supported platform. macOS also offers the optional Zodex menu bar app.
 
 On macOS, `zodex local setup` enables the small menu bar app by default. It returns automatically when you next log in, while the Zodex Local runtime itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
 
@@ -100,7 +100,7 @@ The CLI stays in the foreground while the temporary Liveboard host is running. `
 
 Liveboard gives each visible Agent an independent timeline. Use **All Agents** to manage the board, **Columns** for a 1–8 column cap, the Cmd/Diff controls for global expansion defaults, and the Agent headers to alias, reorder, resize, or hide columns. Those preferences are UI-only and do not change Agent identity or permissions.
 
-On Windows, plain `zodex local watch` uses the TUI by default. On macOS, opt into the TUI explicitly:
+On Linux and Windows, plain `zodex local watch` uses the TUI by default. On macOS, opt into the TUI explicitly:
 
 ```bash
 zodex local watch --tui
@@ -228,13 +228,13 @@ zodex upgrade --version 0.3.4
 
 `zodex upgrade` first resolves the target version. If the installed version is already current it exits without downloading the release archive. During an update it prints progress while downloading, verifying, and installing. A five-minute cache is used only by `--check`; pass `--refresh` to force a fresh check.
 
-On macOS, an update that would replace a running Local runtime is refused before the release archive is downloaded. Stop Local yourself, or explicitly authorize the upgrade command to do it:
+On Linux, macOS, and Windows, an update that would replace a running Local runtime is refused before the release archive is downloaded. Stop Local yourself, or explicitly authorize the upgrade command to do it:
 
 ```bash
 zodex upgrade --stop-local
 ```
 
-The release checksum is verified before installation. Your Local configuration, Keychain credential, durable history, Liveboard preferences, menu-bar Start Folder, and Launch at Login preference are preserved. If the menu bar app is open, it restarts into the new version; if you had intentionally quit it, the upgrade leaves it quit.
+The release checksum is verified before installation. Your Local configuration, platform credential storage, durable history, and platform-specific viewer/control preferences are preserved. On macOS, if the menu bar app is open, it restarts into the new version; if you had intentionally quit it, the upgrade leaves it quit.
 
 The menu bar uses this same CLI upgrade contract. It checks for updates when you open the menu, shows **Update to v…** when one is available, and offers **Stop and Update** only when the CLI reports that Local is blocking the update.
 

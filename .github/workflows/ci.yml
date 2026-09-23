@@ -72,6 +72,17 @@ jobs:
       - name: Validate product and MCP contract
         run: bash scripts/check-product-contract.sh
 
+      - name: Smoke-test Linux Local surface
+        run: |
+          cargo test --locked --lib \
+            local::secret::linux_tests::linux_runtime_key_store_is_user_only_and_round_trips \
+            -- --exact
+          cargo build --locked --bin zodex
+          target/debug/zodex local --help
+          target/debug/zodex local setup --help
+          target/debug/zodex local start --help
+          target/debug/zodex local watch --help
+
       - name: Run repository validation
         shell: bash
         run: |

@@ -32,11 +32,11 @@ Useful operator-upgrade options:
 ```text
 --check              check without installing
 --refresh            bypass the short latest-release check cache
---stop-local         explicitly stop blocking macOS Local state before installing
+--stop-local         explicitly stop blocking Linux/macOS/Windows Local state before installing
 --format human|json  human output or the stable JSON event stream
 ```
 
-The current version is compared before downloading the release archive, so an already-current `zodex upgrade` is a fast no-op. On macOS, active/stale Local state blocks replacement before the archive download unless `--stop-local` was explicitly supplied.
+The current version is compared before downloading the release archive, so an already-current `zodex upgrade` is a fast no-op. On Linux, macOS, and Windows, active/stale Local state blocks replacement before the archive download unless `--stop-local` was explicitly supplied.
 
 ## Sprite lifecycle and setup
 

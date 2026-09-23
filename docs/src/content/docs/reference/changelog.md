@@ -10,6 +10,7 @@ This changelog tracks code and product changes in zodex. It intentionally skips 
 
 ## 0.4.0 — 2026-09-23
 
+- Added first-class x86_64 and aarch64 Linux support for Zodex Local, including detached Unix-session lifecycle, captured login-shell execution, user-only runtime-key storage, managed Linux OpenAI tunnel-client assets, terminal-watch defaults, and Linux-aware self-upgrade safety.
 - Added first-class x86_64 Windows support for Zodex Local, including Windows-native path discovery, PowerShell command execution, pipe-backed long-running sessions, process birth-identity/tree cleanup, Windows Credential Manager storage, and managed Windows OpenAI tunnel-client assets.
 - Added detached Windows Local start/stop lifecycle, terminal-watch defaults with `clip.exe` clipboard support, and preserved the existing macOS Liveboard/menu-bar experience as a macOS-specific control surface.
 - Added Windows operator release artifacts, a checksum-verifying PowerShell installer, Windows-safe self-upgrades, and native Windows CI/package smoke validation.

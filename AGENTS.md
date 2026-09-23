@@ -4,7 +4,7 @@
 
 Zodex is a Rust MCP coding harness with two first-class execution modes:
 
-- **Local** runs directly as the logged-in user on a trusted Apple Silicon Mac or x86_64 Windows machine and connects through an OpenAI Secure MCP Tunnel.
+- **Local** runs directly as the logged-in user on a trusted Apple Silicon Mac, x86_64/aarch64 Linux machine, or x86_64 Windows machine and connects through an OpenAI Secure MCP Tunnel.
 - **Sprite** runs on a wake-on-demand remote Linux Sprite and connects through the canonical Cloudflare Worker front door.
 
 Both modes expose exactly three model-facing tools: `exec_command`, `write_stdin`, and `apply_patch`. Model-visible execution and patch calls require an explicit absolute existing `workdir`; there is no ambient working-directory fallback.

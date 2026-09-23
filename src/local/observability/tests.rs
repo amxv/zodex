@@ -816,6 +816,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
             None,
         );
         complete(&history, &context);
+        history.flush_for_test().unwrap();
     }
     let prompt_started = Instant::now();
     let prompt = begin(

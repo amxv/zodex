@@ -46,7 +46,7 @@ There is no backend cwd/default-workdir substitution when the field is missing. 
 
 In Sprite mode, that path is inside the remote Linux workspace.
 
-In **Local mode**, commands run as the trusted logged-in host user with the captured developer environment. macOS uses the captured login shell; Windows uses Windows PowerShell. The Local start directory is supplied to ChatGPT as guidance for the first explicit workdir, not as a filesystem boundary.
+In **Local mode**, commands run as the trusted logged-in host user with the captured developer environment. Linux and macOS use the captured login shell; Windows uses Windows PowerShell. The Local start directory is supplied to ChatGPT as guidance for the first explicit workdir, not as a filesystem boundary.
 
 Local may add model-visible context to the primary tool result. By default the first result in a ChatGPT conversation includes the user's Codex-style global `AGENTS` instructions and global skill catalog, and the first successful invocation in a workdir may include a one-line `AGENTS.md`/`AGENTS.override.md` hint plus a compact catalog of skills found directly under `<workdir>/.agents/skills`. `exec_command` and `write_stdin` expose this through an optional `zodex_context` structured field; text/error results keep the original result first and append context in the same text block. Stdout, status, cwd, exit code, and stored invocation evidence remain unchanged. See [Local configuration](/docs/local/configuration#automatic-codex-style-context) to change or disable each part.
 

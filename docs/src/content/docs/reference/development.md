@@ -71,7 +71,7 @@ For an embed-required macOS validation, build the frontend first and then run Ca
 ZODEX_LIVEBOARD_EMBED_REQUIRED=1 cargo test
 ```
 
-CI does this only on the native macOS lane. Windows has a separate native operator/Local validation lane, while Linux keeps the Sprite/runtime validation path. Release builds install Bun/build Liveboard only for the Apple target; Windows packages the `zodex.exe` operator and Linux/Sprite targets stay independent of the frontend toolchain.
+CI does this only on the native macOS lane. Linux and Windows have native operator/Local validation paths, while the Linux lane also keeps the Sprite/runtime checks. Release builds install Bun/build Liveboard only for the Apple target; Windows packages the `zodex.exe` operator and Linux stays independent of the frontend toolchain.
 
 ## Docs site checks
 

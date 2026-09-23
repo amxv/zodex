@@ -1,6 +1,12 @@
 use std::fmt;
+#[cfg(target_os = "linux")]
+use std::fs;
+#[cfg(target_os = "linux")]
+use std::io::Write as _;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use anyhow::Context as _;
 use anyhow::{Result, bail};
 
@@ -46,6 +52,20 @@ pub struct MacKeychainRuntimeKeyStore;
 
 #[cfg(target_os = "windows")]
 pub struct WindowsCredentialRuntimeKeyStore;
+
+#[cfg(target_os = "linux")]
+pub struct LinuxFileRuntimeKeyStore {
+    path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxFileRuntimeKeyStore {
+    pub fn new(paths: &super::LocalPaths) -> Self {
+        Self {
+            path: paths.runtime_key_file(),
+        }
+    }
+}
 
 #[cfg(target_os = "macos")]
 impl MacKeychainRuntimeKeyStore {
@@ -135,6 +155,69 @@ impl RuntimeKeyStore for WindowsCredentialRuntimeKeyStore {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl RuntimeKeyStore for LinuxFileRuntimeKeyStore {
+    fn get(&self) -> Result<Option<RuntimeKey>> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        super::private_fs::verify_user_only_file(&self.path)?;
+        let value = fs::read_to_string(&self.path).with_context(|| {
+            format!(
+                "failed to read OpenAI tunnel runtime key from {}",
+                self.path.display()
+            )
+        })?;
+        Ok(Some(RuntimeKey::new(value)?))
+    }
+
+    fn set(&self, key: &RuntimeKey) -> Result<()> {
+        let parent = self
+            .path
+            .parent()
+            .context("Linux runtime-key path has no parent")?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Linux credential directory {}",
+                parent.display()
+            )
+        })?;
+        super::private_fs::set_user_only_directory(parent)?;
+
+        let mut temp = tempfile::NamedTempFile::new_in(parent)
+            .context("failed to create temporary Linux runtime-key file")?;
+        super::private_fs::set_user_only_file(temp.path())?;
+        temp.write_all(key.expose().as_bytes())
+            .context("failed to write Linux runtime-key file")?;
+        temp.as_file()
+            .sync_all()
+            .context("failed to sync Linux runtime-key file")?;
+        temp.persist(&self.path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                format!(
+                    "failed to persist OpenAI tunnel runtime key at {}",
+                    self.path.display()
+                )
+            })?;
+        super::private_fs::set_user_only_file(&self.path)?;
+        Ok(())
+    }
+
+    fn delete(&self) -> Result<()> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "failed to remove OpenAI tunnel runtime key from {}",
+                    self.path.display()
+                )
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::RuntimeKey;
@@ -152,5 +235,43 @@ mod tests {
         for value in ["", "a\nb", "a\rb", "a\0b"] {
             assert!(RuntimeKey::new(value).is_err(), "{value:?} should fail");
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use tempfile::tempdir;
+
+    use super::{LinuxFileRuntimeKeyStore, RuntimeKey, RuntimeKeyStore};
+    use crate::local::LocalPaths;
+
+    #[test]
+    fn linux_runtime_key_store_is_user_only_and_round_trips() {
+        let dir = tempdir().unwrap();
+        let paths = LocalPaths::from_roots(
+            dir.path().join("config"),
+            dir.path().join("data"),
+            dir.path().join("state"),
+        )
+        .unwrap();
+        let store = LinuxFileRuntimeKeyStore::new(&paths);
+        let key = RuntimeKey::new("linux-runtime-secret").unwrap();
+
+        assert!(store.get().unwrap().is_none());
+        store.set(&key).unwrap();
+        assert_eq!(store.get().unwrap(), Some(key));
+        assert_eq!(
+            std::fs::metadata(paths.runtime_key_file())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        store.delete().unwrap();
+        assert!(store.get().unwrap().is_none());
     }
 }

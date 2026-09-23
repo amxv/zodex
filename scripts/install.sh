@@ -273,9 +273,12 @@ ensure_local_stopped_before_operator_replace() {
   local installed_zodex="$1"
 
   # Fresh installs cannot be replacing the executable that owns an active
-  # Local runtime. Linux operator installs have no Local host runtime.
+  # Local runtime.
   [[ -e "${installed_zodex}" ]] || return 0
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  case "$(uname -s)" in
+    Darwin|Linux) ;;
+    *) return 0 ;;
+  esac
 
   local runtime_dir
   runtime_dir="$(operator_local_runtime_dir)"
