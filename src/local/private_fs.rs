@@ -2,11 +2,7 @@ use std::fs;
 use std::path::Path;
 
 #[cfg(target_os = "windows")]
-use std::collections::HashSet;
-#[cfg(target_os = "windows")]
-use std::path::PathBuf;
-#[cfg(target_os = "windows")]
-use std::sync::{Mutex, OnceLock};
+use std::ffi::c_void;
 
 use anyhow::{Context, Result, bail};
 
@@ -62,133 +58,244 @@ pub(crate) fn verify_user_only_file(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_powershell() -> std::path::PathBuf {
-    std::env::var_os("SystemRoot")
-        .map(std::path::PathBuf::from)
-        .map(|root| root.join("System32/WindowsPowerShell/v1.0/powershell.exe"))
-        .unwrap_or_else(|| std::path::PathBuf::from("powershell.exe"))
-}
-
-#[cfg(target_os = "windows")]
 fn set_windows_user_only_acl(path: &Path, directory: bool) -> Result<()> {
-    use std::process::{Command, Stdio};
+    use std::os::windows::ffi::OsStrExt as _;
 
-    static SECURED_PATHS: OnceLock<Mutex<HashSet<(PathBuf, bool)>>> = OnceLock::new();
-    let secured = SECURED_PATHS.get_or_init(|| Mutex::new(HashSet::new()));
-    let cache_key = (path.to_path_buf(), directory);
-    if secured
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Windows private-path ACL cache was poisoned"))?
-        .contains(&cache_key)
-    {
-        return Ok(());
-    }
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, GRANT_ACCESS, SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW,
+        TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 
-    // Construct a protected DACL from scratch instead of only removing
-    // inheritance. That prevents an unrelated explicit ACE from surviving on
-    // runtime files containing captured environment data, bearer tokens, or
-    // process ownership state.
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-$sid = $identity.User
-$path = $env:ZODEX_PRIVATE_PATH
-$isDir = $env:ZODEX_PRIVATE_IS_DIR -eq '1'
-if ($isDir) {
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
-    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-} else {
-    $acl = New-Object System.Security.AccessControl.FileSecurity
-    $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
-}
-$acl.SetOwner($sid)
-$acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $sid,
-    [System.Security.AccessControl.FileSystemRights]::FullControl,
-    $inheritance,
-    [System.Security.AccessControl.PropagationFlags]::None,
-    [System.Security.AccessControl.AccessControlType]::Allow
-)
-[void]$acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $path -AclObject $acl
-"#;
-
-    let output = Command::new(windows_powershell())
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            SCRIPT,
-        ])
-        .env("ZODEX_PRIVATE_PATH", path.as_os_str())
-        .env("ZODEX_PRIVATE_IS_DIR", if directory { "1" } else { "0" })
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("failed to launch Windows ACL helper for {}", path.display()))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        bail!(
-            "failed to restrict Windows permissions on {}{}",
-            path.display(),
-            if detail.is_empty() {
-                String::new()
+    with_current_user_sid(|sid| {
+        let entry = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: if directory {
+                SUB_CONTAINERS_AND_OBJECTS_INHERIT
             } else {
-                format!(": {detail}")
-            }
-        );
-    }
-    secured
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Windows private-path ACL cache was poisoned"))?
-        .insert(cache_key);
-    Ok(())
+                NO_INHERITANCE
+            },
+            Trustee: windows_sys::Win32::Security::Authorization::TRUSTEE_W {
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: sid.cast(),
+                ..Default::default()
+            },
+        };
+
+        let mut acl = std::ptr::null_mut();
+        let result = unsafe { SetEntriesInAclW(1, &entry, std::ptr::null(), &mut acl) };
+        if result != ERROR_SUCCESS {
+            return Err(windows_error(result)).with_context(|| {
+                format!(
+                    "failed to build user-only Windows ACL for {}",
+                    path.display()
+                )
+            });
+        }
+        let _acl = LocalAllocation(acl.cast());
+        let mut wide_path = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            SetNamedSecurityInfoW(
+                wide_path.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            )
+        };
+        if result != ERROR_SUCCESS {
+            return Err(windows_error(result)).with_context(|| {
+                format!(
+                    "failed to restrict Windows permissions on {}",
+                    path.display()
+                )
+            });
+        }
+        Ok(())
+    })
 }
 
 #[cfg(target_os = "windows")]
 fn verify_windows_user_only_acl(path: &Path) -> Result<()> {
-    use std::process::{Command, Stdio};
+    use std::os::windows::ffi::OsStrExt as _;
 
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $env:ZODEX_PRIVATE_PATH
-if (-not $acl.AreAccessRulesProtected) { exit 11 }
-$found = $false
-foreach ($rule in $acl.Access) {
-    $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
-    if ($ruleSid.Value -ne $sid.Value -or $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
-        exit 12
-    }
-    $found = $true
-}
-if (-not $found) { exit 13 }
-"#;
-    let output = Command::new(windows_powershell())
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            SCRIPT,
-        ])
-        .env("ZODEX_PRIVATE_PATH", path.as_os_str())
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to inspect Windows permissions on {}",
-                path.display()
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Security::Authorization::{
+        GRANT_ACCESS, GetExplicitEntriesFromAclW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+        TRUSTEE_IS_SID,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, EqualSid, GetSecurityDescriptorControl, SE_DACL_PROTECTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+    with_current_user_sid(|sid| {
+        let wide_path = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut dacl = std::ptr::null_mut();
+        let mut security_descriptor = std::ptr::null_mut();
+        let result = unsafe {
+            GetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut security_descriptor,
             )
-        })?;
-    if !output.status.success() {
-        bail!(
-            "private Local file has broader Windows ACLs than expected: {}",
-            path.display()
-        );
+        };
+        if result != ERROR_SUCCESS {
+            return Err(windows_error(result)).with_context(|| {
+                format!(
+                    "failed to inspect Windows permissions on {}",
+                    path.display()
+                )
+            });
+        }
+        let _security_descriptor = LocalAllocation(security_descriptor.cast());
+
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        if unsafe { GetSecurityDescriptorControl(security_descriptor, &mut control, &mut revision) }
+            == 0
+            || control & SE_DACL_PROTECTED == 0
+        {
+            bail!(
+                "private Local file has broader Windows ACLs than expected: {}",
+                path.display()
+            );
+        }
+
+        let mut count = 0u32;
+        let mut entries = std::ptr::null_mut();
+        let result = unsafe { GetExplicitEntriesFromAclW(dacl, &mut count, &mut entries) };
+        if result != ERROR_SUCCESS {
+            return Err(windows_error(result)).with_context(|| {
+                format!(
+                    "failed to enumerate Windows permissions on {}",
+                    path.display()
+                )
+            });
+        }
+        let _entries = LocalAllocation(entries.cast());
+        if count != 1 || entries.is_null() {
+            bail!(
+                "private Local file has broader Windows ACLs than expected: {}",
+                path.display()
+            );
+        }
+        let entry = unsafe { &*entries };
+        let trustee_sid: windows_sys::Win32::Security::PSID = entry.Trustee.ptstrName.cast();
+        if entry.grfAccessMode != GRANT_ACCESS
+            || entry.Trustee.TrusteeForm != TRUSTEE_IS_SID
+            || entry.grfAccessPermissions & FILE_ALL_ACCESS != FILE_ALL_ACCESS
+            || trustee_sid.is_null()
+            || unsafe { EqualSid(trustee_sid, sid) } == 0
+        {
+            bail!(
+                "private Local file has broader Windows ACLs than expected: {}",
+                path.display()
+            );
+        }
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn with_current_user_sid<T>(
+    f: impl FnOnce(windows_sys::Win32::Security::PSID) -> Result<T>,
+) -> Result<T> {
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to open current Windows process token");
     }
-    Ok(())
+    let _token = Handle(token);
+
+    let mut bytes = 0u32;
+    unsafe {
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut bytes);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) || bytes == 0 {
+        return Err(error).context("failed to size current Windows user token information");
+    }
+    let word = std::mem::size_of::<usize>();
+    let words = (bytes as usize).div_ceil(word);
+    let mut buffer = vec![0usize; words];
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            bytes,
+            &mut bytes,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("failed to read current Windows user token information");
+    }
+    let token_user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+    if token_user.User.Sid.is_null() {
+        bail!("current Windows process token did not contain a user SID");
+    }
+    f(token_user.User.Sid)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_error(code: u32) -> std::io::Error {
+    std::io::Error::from_raw_os_error(code as i32)
+}
+
+#[cfg(target_os = "windows")]
+struct LocalAllocation(*mut c_void);
+
+#[cfg(target_os = "windows")]
+impl Drop for LocalAllocation {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::LocalFree(self.0);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct Handle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for Handle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.0);
+            }
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -197,7 +304,10 @@ mod windows_tests {
 
     use tempfile::tempdir;
 
-    use super::{set_user_only_directory, set_user_only_file, verify_user_only_file};
+    use super::{
+        set_user_only_directory, set_user_only_file, verify_user_only_file,
+        verify_windows_user_only_acl,
+    };
 
     #[test]
     fn windows_private_file_acl_is_user_only_and_verifiable() {
@@ -210,5 +320,33 @@ mod windows_tests {
         fs::write(&private_file, b"secret").unwrap();
         set_user_only_file(&private_file).unwrap();
         verify_user_only_file(&private_file).unwrap();
+    }
+
+    #[test]
+    fn windows_recreated_private_file_is_resecured() {
+        let temp = tempdir().unwrap();
+        let private_file = temp.path().join("secret.txt");
+        fs::write(&private_file, b"first").unwrap();
+        set_user_only_file(&private_file).unwrap();
+        verify_user_only_file(&private_file).unwrap();
+
+        fs::remove_file(&private_file).unwrap();
+        fs::write(&private_file, b"replacement").unwrap();
+        set_user_only_file(&private_file).unwrap();
+        verify_user_only_file(&private_file).unwrap();
+    }
+
+    #[test]
+    fn windows_recreated_private_directory_is_resecured() {
+        let temp = tempdir().unwrap();
+        let private_dir = temp.path().join("private");
+        fs::create_dir(&private_dir).unwrap();
+        set_user_only_directory(&private_dir).unwrap();
+        verify_windows_user_only_acl(&private_dir).unwrap();
+
+        fs::remove_dir_all(&private_dir).unwrap();
+        fs::create_dir(&private_dir).unwrap();
+        set_user_only_directory(&private_dir).unwrap();
+        verify_windows_user_only_acl(&private_dir).unwrap();
     }
 }
