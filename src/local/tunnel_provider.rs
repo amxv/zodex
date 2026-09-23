@@ -24,6 +24,22 @@ pub(crate) const PROVIDER_ENV_ALLOWLIST: &[&str] = &[
     "SSL_CERT_DIR",
 ];
 
+const WINDOWS_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
+    "SystemRoot",
+    "SYSTEMROOT",
+    "WINDIR",
+    "SystemDrive",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "ComSpec",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+];
+
 pub trait ArchiveExtractor: Send + Sync {
     fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()>;
 }
@@ -82,6 +98,19 @@ impl TunnelMetadataValidator for ProcessTunnelMetadataValidator {
             )
         })?;
         if !output.status.success() {
+            let provider_output = if output.stderr.is_empty() {
+                &output.stdout
+            } else {
+                &output.stderr
+            };
+            let provider_diagnostic = redact_runtime_key(provider_output, runtime_key);
+            if !provider_diagnostic.is_empty() {
+                bail!(
+                    "OpenAI tunnel metadata validation failed ({}); verify the tunnel ID, runtime key, and Tunnels Read permission; tunnel-client: {}",
+                    output.status,
+                    provider_diagnostic
+                );
+            }
             bail!(
                 "OpenAI tunnel metadata validation failed ({}); verify the tunnel ID, runtime key, and Tunnels Read permission",
                 output.status
@@ -117,14 +146,36 @@ pub(crate) fn provider_environment(
     inherited: &[(OsString, OsString)],
     runtime_key: &RuntimeKey,
 ) -> Vec<(OsString, OsString)> {
+    provider_environment_for_target(inherited, runtime_key, cfg!(target_os = "windows"))
+}
+
+fn provider_environment_for_target(
+    inherited: &[(OsString, OsString)],
+    runtime_key: &RuntimeKey,
+    windows: bool,
+) -> Vec<(OsString, OsString)> {
     let mut environment = Vec::new();
     for (key, value) in inherited {
-        if PROVIDER_ENV_ALLOWLIST
+        let allowed_provider_variable = PROVIDER_ENV_ALLOWLIST
             .iter()
-            .any(|allowed| key.as_os_str() == OsStr::new(allowed))
-        {
+            .any(|allowed| key.as_os_str() == OsStr::new(allowed));
+        let allowed_windows_variable = windows
+            && WINDOWS_PROVIDER_ENV_ALLOWLIST
+                .iter()
+                .any(|allowed| key.as_os_str() == OsStr::new(allowed));
+        if allowed_provider_variable || allowed_windows_variable {
             environment.push((key.clone(), value.clone()));
         }
+    }
+    if windows
+        && let Some((_, system_root)) = inherited.iter().find(|(key, _)| {
+            key.as_os_str() == OsStr::new("SystemRoot")
+                || key.as_os_str() == OsStr::new("SYSTEMROOT")
+        })
+    {
+        let mut system32 = system_root.clone();
+        system32.push("\\System32");
+        environment.push((OsString::from("PATH"), system32));
     }
     // Set exactly the runtime credential the operator supplied. The spawning
     // command uses env_clear, so ambient admin/fallback OpenAI credentials are
@@ -134,6 +185,17 @@ pub(crate) fn provider_environment(
         OsString::from(runtime_key.expose()),
     ));
     environment
+}
+
+fn redact_runtime_key(output: &[u8], runtime_key: &RuntimeKey) -> String {
+    let mut diagnostic = String::from_utf8_lossy(output)
+        .trim()
+        .replace(runtime_key.expose(), "<redacted-runtime-key>");
+    if diagnostic.len() > 4096 {
+        diagnostic.truncate(4096);
+        diagnostic.push('…');
+    }
+    diagnostic
 }
 
 #[cfg(target_os = "macos")]
@@ -276,13 +338,16 @@ impl ArchiveExtractor for LinuxZipArchiveExtractor {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::collections::HashMap;
     use std::ffi::OsString;
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
 
-    use super::{ProcessTunnelMetadataValidator, TunnelMetadataValidator};
+    use super::{
+        ProcessTunnelMetadataValidator, TunnelMetadataValidator, provider_environment_for_target,
+    };
     use crate::local::RuntimeKey;
 
     #[test]
@@ -358,6 +423,131 @@ mod tests {
         let rendered = format!("{error:#}");
         assert!(rendered.contains("metadata validation failed"));
         assert!(!rendered.contains("never-print-me"));
-        assert!(!rendered.contains("provider-failed"));
+        assert!(rendered.contains("provider-failed"));
+    }
+
+    #[test]
+    fn provider_subprocess_failure_redacts_runtime_key_from_provider_error() {
+        let dir = tempdir().unwrap();
+        let binary = dir.path().join("fake-tunnel-client");
+        fs::write(
+            &binary,
+            "#!/bin/sh\necho 'provider rejected never-print-me' >&2\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let validator = ProcessTunnelMetadataValidator::with_environment(Vec::new());
+        let key = RuntimeKey::new("never-print-me").unwrap();
+        let error = validator
+            .validate(&binary, "tunnel_0123456789abcdef0123456789abcdef", &key)
+            .unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("provider rejected <redacted-runtime-key>"));
+        assert!(!rendered.contains("never-print-me"));
+    }
+
+    #[test]
+    fn windows_provider_environment_restores_required_os_context_only() {
+        let inherited = vec![
+            (OsString::from("SystemRoot"), OsString::from(r"C:\Windows")),
+            (OsString::from("SYSTEMROOT"), OsString::from(r"C:\Windows")),
+            (OsString::from("WINDIR"), OsString::from(r"C:\Windows")),
+            (OsString::from("SystemDrive"), OsString::from("C:")),
+            (OsString::from("TEMP"), OsString::from(r"C:\Temp")),
+            (OsString::from("TMP"), OsString::from(r"C:\Temp")),
+            (
+                OsString::from("USERPROFILE"),
+                OsString::from(r"C:\Users\ashray"),
+            ),
+            (
+                OsString::from("APPDATA"),
+                OsString::from(r"C:\Users\ashray\AppData\Roaming"),
+            ),
+            (
+                OsString::from("LOCALAPPDATA"),
+                OsString::from(r"C:\Users\ashray\AppData\Local"),
+            ),
+            (
+                OsString::from("PROGRAMDATA"),
+                OsString::from(r"C:\ProgramData"),
+            ),
+            (
+                OsString::from("ComSpec"),
+                OsString::from(r"C:\Windows\System32\cmd.exe"),
+            ),
+            (
+                OsString::from("PATHEXT"),
+                OsString::from(".COM;.EXE;.BAT;.CMD"),
+            ),
+            (
+                OsString::from("PROCESSOR_ARCHITECTURE"),
+                OsString::from("AMD64"),
+            ),
+            (
+                OsString::from("PATH"),
+                OsString::from(r"C:\Users\ashray\bin;C:\Windows\System32"),
+            ),
+            (
+                OsString::from("OPENAI_ADMIN_KEY"),
+                OsString::from("admin-secret"),
+            ),
+            (
+                OsString::from("OPENAI_API_KEY"),
+                OsString::from("fallback-secret"),
+            ),
+            (
+                OsString::from("HTTPS_PROXY"),
+                OsString::from("http://proxy.example"),
+            ),
+        ];
+        let key = RuntimeKey::new("runtime-secret").unwrap();
+        let environment = provider_environment_for_target(&inherited, &key, true);
+        let mapped = environment
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.to_string_lossy().to_string(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        for required in [
+            "SystemRoot",
+            "SYSTEMROOT",
+            "WINDIR",
+            "SystemDrive",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "ComSpec",
+            "PATHEXT",
+            "PROCESSOR_ARCHITECTURE",
+        ] {
+            assert!(mapped.contains_key(required), "missing {required}");
+        }
+        assert_eq!(
+            mapped.get("PATH").map(String::as_str),
+            Some(r"C:\Windows\System32")
+        );
+        assert_eq!(
+            mapped.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://proxy.example")
+        );
+        assert_eq!(
+            mapped.get("CONTROL_PLANE_API_KEY").map(String::as_str),
+            Some("runtime-secret")
+        );
+        assert!(!mapped.contains_key("OPENAI_ADMIN_KEY"));
+        assert!(!mapped.contains_key("OPENAI_API_KEY"));
+        assert!(
+            !mapped
+                .values()
+                .any(|value| value.contains(r"C:\Users\ashray\bin"))
+        );
     }
 }
