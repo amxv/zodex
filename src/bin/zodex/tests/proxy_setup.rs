@@ -26,8 +26,8 @@
         fs::rename(&staged_runner, &runner).expect("publish fake Wrangler");
         (
             ProxyDeployCommandSpec {
-                program: runner.display().to_string(),
-                base_args: Vec::new(),
+                program: "/bin/sh".to_string(),
+                base_args: vec![runner.display().to_string()],
             },
             log,
         )

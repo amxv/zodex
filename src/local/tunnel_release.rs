@@ -16,6 +16,8 @@ const MAX_PLATFORM_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 pub enum TunnelArchitecture {
     DarwinArm64,
     DarwinAmd64,
+    LinuxArm64,
+    LinuxAmd64,
     WindowsArm64,
     WindowsAmd64,
 }
@@ -37,10 +39,20 @@ impl TunnelArchitecture {
         }
     }
 
+    pub fn current_linux() -> Result<Self> {
+        match std::env::consts::ARCH {
+            "aarch64" => Ok(Self::LinuxArm64),
+            "x86_64" => Ok(Self::LinuxAmd64),
+            arch => bail!("unsupported Linux architecture for tunnel-client: {arch}"),
+        }
+    }
+
     fn asset_suffix(self) -> &'static str {
         match self {
             Self::DarwinArm64 => "-darwin-arm64.zip",
             Self::DarwinAmd64 => "-darwin-amd64.zip",
+            Self::LinuxArm64 => "-linux-arm64.zip",
+            Self::LinuxAmd64 => "-linux-amd64.zip",
             Self::WindowsArm64 => "-windows-arm64.zip",
             Self::WindowsAmd64 => "-windows-amd64.zip",
         }
@@ -351,6 +363,14 @@ mod tests {
         assert_eq!(
             TunnelArchitecture::DarwinAmd64.asset_suffix(),
             "-darwin-amd64.zip"
+        );
+        assert_eq!(
+            TunnelArchitecture::LinuxArm64.asset_suffix(),
+            "-linux-arm64.zip"
+        );
+        assert_eq!(
+            TunnelArchitecture::LinuxAmd64.asset_suffix(),
+            "-linux-amd64.zip"
         );
         assert_eq!(
             TunnelArchitecture::WindowsArm64.asset_suffix(),

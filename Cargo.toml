@@ -68,6 +68,9 @@ security-framework = "3.7"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zip = { version = "5.1", default-features = false, features = ["deflate"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = "4.2"
 sysinfo = "0.39"

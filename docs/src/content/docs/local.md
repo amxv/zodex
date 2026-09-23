@@ -1,12 +1,12 @@
 ---
 title: "Quick Start"
-description: "Run ChatGPT directly on your trusted macOS or Windows machine with your normal files, credentials, and developer tools."
+description: "Run ChatGPT directly on your trusted Linux, macOS, or Windows machine with your normal files, credentials, and developer tools."
 order: 1
 category: Local
 summary: "Install Zodex, provision an OpenAI Secure MCP Tunnel, connect ChatGPT, start Local from a repo, and inspect what each ChatGPT Agent does."
 ---
 
-Zodex Local lets ChatGPT work directly on a **trusted Apple Silicon Mac or x86_64 Windows machine**. It uses the same three Zodex tools as Sprite mode, but commands run with the logged-in user's captured environment and normal filesystem permissions.
+Zodex Local lets ChatGPT work directly on a **trusted Apple Silicon Mac, x86_64/aarch64 Linux machine, or x86_64 Windows machine**. It uses the same three Zodex tools as Sprite mode, but commands run with the logged-in user's captured environment and normal filesystem permissions.
 
 Local is intentionally **not a sandbox**. There is **no Zodex confinement boundary** around the repository you start from. If your user account can read, write, execute, or authenticate to something, a Local tool call can generally do the same, subject to the host operating system's normal permissions.
 
@@ -16,7 +16,7 @@ If you want an isolated remote Linux workspace with scoped GitHub write permissi
 
 ### 1. Install the Zodex operator CLI
 
-macOS:
+Linux or macOS:
 
 ```bash
 curl -fsSL https://zodex.ashray.xyz/install.sh | bash
@@ -31,7 +31,7 @@ irm https://zodex.ashray.xyz/install.ps1 | iex
 
 Then verify with `zodex --help` and `zodex local --help`.
 
-Published Local releases support Apple Silicon macOS and x86_64 Windows.
+Published Local releases support Apple Silicon macOS, x86_64/aarch64 Linux, and x86_64 Windows.
 
 The normal non-root install uses `~/.local/bin`; add the PATH line above to your shell profile to keep it available in new terminals. An explicitly root-run install uses `/usr/local/bin` instead.
 
@@ -74,9 +74,9 @@ The easiest setup is interactive:
 zodex local setup
 ```
 
-Zodex prompts for the tunnel ID and runtime key. It stores the runtime key in macOS Keychain or Windows Credential Manager, installs and verifies the matching managed OpenAI tunnel client, and creates the Local state it needs. Setup does **not** leave the Local runtime running when it exits.
+Zodex prompts for the tunnel ID and runtime key. It stores the runtime key in macOS Keychain, a user-only Linux credential file, or Windows Credential Manager, installs and verifies the matching managed OpenAI tunnel client, and creates the Local state it needs. Setup does **not** leave the Local runtime running when it exits.
 
-On macOS, setup also enables the lightweight Zodex menu bar app by default. Windows does not install the macOS menu app; use the CLI and terminal watch UI there. Use `zodex local setup --no-menu-bar` on macOS if you prefer to leave the bundled menu app disabled.
+On macOS, setup also enables the lightweight Zodex menu bar app by default. Linux and Windows do not install the macOS menu app; use the CLI and terminal watch UI there. Use `zodex local setup --no-menu-bar` on macOS if you prefer to leave the bundled menu app disabled.
 
 For automation, use one of the non-argv secret inputs:
 
@@ -153,11 +153,11 @@ See [MCP tools](/docs/reference/tools) for the shared tool contract.
 
 Local is for a machine you intentionally trust ChatGPT to operate.
 
-Commands run as your logged-in user with the environment captured when you run `zodex local start`. On macOS Zodex uses the captured login shell. On Windows it uses Windows PowerShell and preserves the captured Windows environment, including case-insensitive environment variable names.
+Commands run as your logged-in user with the environment captured when you run `zodex local start`. On Linux and macOS Zodex uses the captured login shell. On Windows it uses Windows PowerShell and preserves the captured Windows environment, including case-insensitive environment variable names.
 
 This also means the start directory is **not** a permission boundary. A command can use absolute paths, `cd` elsewhere, read another repo, or use credentials available to your account.
 
-The host OS remains in charge of permissions. On macOS, protected locations may require normal Files & Folders or Full Disk Access grants; Zodex does not edit TCC databases. On Windows, normal NTFS/profile permissions remain authoritative.
+The host OS remains in charge of permissions. On Linux, normal filesystem ownership/mode/ACL rules remain authoritative. On macOS, protected locations may require normal Files & Folders or Full Disk Access grants; Zodex does not edit TCC databases. On Windows, normal NTFS/profile permissions remain authoritative.
 
 If you want remote isolation and a GitHub-specific autonomy boundary, use [Sprite permissions and autonomy](/docs/sprite/permissions) instead.
 
@@ -195,7 +195,7 @@ Local exposes a **first-class localhost observability API** for viewing ChatGPT 
 zodex local watch
 ```
 
-On macOS, `watch` starts a temporary loopback capability host and opens the read-only multi-Agent Liveboard in your browser. On Windows, plain `watch` opens the terminal viewer instead. Both views use the same read-only observability model and durable history.
+On macOS, `watch` starts a temporary loopback capability host and opens the read-only multi-Agent Liveboard in your browser. On Linux and Windows, plain `watch` opens the terminal viewer instead. Both views use the same read-only observability model and durable history.
 
 The terminal viewer remains available explicitly:
 
@@ -246,7 +246,7 @@ cd ~/code/my-project
 zodex local start --ttl 4h
 
 # Use one or more ChatGPT conversations.
-# Optional: open the viewer (browser Liveboard on macOS, TUI on Windows).
+# Optional: open the viewer (browser Liveboard on macOS, TUI on Linux/Windows).
 zodex local watch
 
 # When finished:
@@ -262,5 +262,5 @@ You only need `zodex local setup` again when you want to replace tunnel credenti
 - [Configuration](/docs/local/configuration) — retention and non-secret Local settings.
 - [Local command reference](/docs/local/command-reference) — every `zodex local` command and flag.
 - [Local troubleshooting](/docs/local/troubleshooting) — tunnel, startup, credential-store, host-permission, Agent, and history problems.
-- [Watch and Liveboard](/docs/local/watch) — macOS browser Liveboard, the macOS/Windows terminal TUI, output/diff behavior, and recovery.
+- [Watch and Liveboard](/docs/local/watch) — macOS browser Liveboard, the Linux/macOS/Windows terminal TUI, output/diff behavior, and recovery.
 - [Local observability API](/docs/local/observability-api) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.

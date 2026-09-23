@@ -142,6 +142,9 @@ pub struct MacDittoArchiveExtractor;
 #[cfg(target_os = "windows")]
 pub struct WindowsTarArchiveExtractor;
 
+#[cfg(target_os = "linux")]
+pub struct LinuxZipArchiveExtractor;
+
 #[cfg(target_os = "macos")]
 impl ArchiveExtractor for MacDittoArchiveExtractor {
     fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()> {
@@ -226,6 +229,46 @@ impl ArchiveExtractor for WindowsTarArchiveExtractor {
             fs::copy(&source, bundle_dir.join(name)).with_context(|| {
                 format!("failed to stage extracted tunnel-client file `{name}`")
             })?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ArchiveExtractor for LinuxZipArchiveExtractor {
+    fn extract_tunnel_bundle(&self, archive_path: &Path, bundle_dir: &Path) -> Result<()> {
+        use std::fs;
+        use std::io;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let archive = fs::File::open(archive_path)
+            .context("failed to open verified Linux tunnel-client archive")?;
+        let mut archive = zip::ZipArchive::new(archive)
+            .context("failed to parse verified Linux tunnel-client zip archive")?;
+        fs::create_dir_all(bundle_dir).context("failed to create staged tunnel-client bundle")?;
+
+        for (name, mode) in [
+            ("tunnel-client", 0o755),
+            ("cloudflared", 0o755),
+            ("cloudflared-manifest.json", 0o644),
+        ] {
+            let mut source = archive.by_name(name).with_context(|| {
+                format!("verified tunnel-client archive did not contain the expected `{name}` file")
+            })?;
+            if source.is_dir() {
+                bail!("verified tunnel-client archive entry `{name}` is not a regular file");
+            }
+            let destination = bundle_dir.join(name);
+            let mut output = fs::File::create(&destination)
+                .with_context(|| format!("failed to create staged tunnel-client file `{name}`"))?;
+            io::copy(&mut source, &mut output)
+                .with_context(|| format!("failed to extract staged tunnel-client file `{name}`"))?;
+            output
+                .sync_all()
+                .with_context(|| format!("failed to sync staged tunnel-client file `{name}`"))?;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(mode)).with_context(
+                || format!("failed to set staged tunnel-client file mode for `{name}`"),
+            )?;
         }
         Ok(())
     }

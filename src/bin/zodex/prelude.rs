@@ -96,7 +96,7 @@ enum Commands {
         #[command(subcommand)]
         command: SpriteCommand,
     },
-    /// Run and inspect Zodex directly on the logged-in macOS or Windows host.
+    /// Run and inspect Zodex directly on the logged-in Linux, macOS, or Windows host.
     Local {
         #[command(subcommand)]
         command: LocalCommand,

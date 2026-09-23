@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::path::Path;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -114,10 +114,84 @@ pub async fn start_via_windows_process(
     unreachable!("the bounded Local Windows launch attempt loop always returns")
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "linux")]
+pub async fn start_via_linux_process(
+    paths: &LocalPaths,
+    executable: &Path,
+    requested_start_directory: &Path,
+    ttl_seconds: Option<u64>,
+    environment: &[(OsString, OsString)],
+) -> Result<LocalStartOutcome> {
+    use std::os::unix::process::CommandExt as _;
+
+    let controller = NoopLifecycleController;
+    let _lifecycle_lock = LocalLifecycleLock::acquire(paths)?;
+    if let Some(discovery) = healthy_existing_discovery(paths)? {
+        return outcome(paths, discovery, true);
+    }
+    cleanup_stale_runtime(paths, &controller)?;
+
+    let mut first_timeout = None;
+    for attempt in 0..START_ATTEMPTS {
+        let prepared = prepare_local_launch(
+            paths,
+            executable,
+            requested_start_directory,
+            ttl_seconds,
+            environment,
+        )?;
+        let mut command = Command::new(executable);
+        command
+            .args(["local", "__runtime", "--bootstrap"])
+            .arg(&prepared.bootstrap_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: pre_exec runs in the child immediately before exec. setsid
+        // only detaches the Local runtime from the caller's terminal/session.
+        unsafe {
+            command.pre_exec(|| {
+                nix::unistd::setsid()
+                    .map(|_| ())
+                    .map_err(|error| std::io::Error::from_raw_os_error(error as i32))
+            });
+        }
+        if let Err(error) = command.spawn() {
+            return Err(with_cleanup_error(
+                anyhow::Error::new(error)
+                    .context("failed to start detached Zodex Local Linux runtime"),
+                cleanup_partial_start(paths, &controller),
+            ));
+        }
+
+        match wait_for_runtime_ready(paths, &prepared.runtime_id, START_READY_TIMEOUT).await {
+            Ok(discovery) => return outcome(paths, discovery, false),
+            Err(error) => {
+                let retry =
+                    attempt == 0 && runtime_never_published_process(paths, &prepared.runtime_id)?;
+                if let Err(cleanup_error) = cleanup_partial_start(paths, &controller) {
+                    return Err(with_cleanup_error(error, Err(cleanup_error)));
+                }
+                if retry {
+                    first_timeout = Some(error);
+                    continue;
+                }
+                return match first_timeout {
+                    Some(first) => Err(error.context(format!(
+                        "Local Linux runtime retry also failed after the first process never published readiness: {first:#}"
+                    ))),
+                    None => Err(error),
+                };
+            }
+        }
+    }
+    unreachable!("the bounded Local Linux launch attempt loop always returns")
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 struct NoopLifecycleController;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl LaunchdController for NoopLifecycleController {
     fn is_loaded(&self) -> Result<bool> {
         Ok(false)

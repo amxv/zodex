@@ -3,14 +3,14 @@ title: "Architecture"
 description: "Understand Zodex's two first-class execution modes, their different trust/connection models, and the three-tool MCP contract they share."
 order: 1
 category: Reference
-summary: "Local is trusted direct macOS/Windows execution through OpenAI Secure MCP Tunnel; Sprite is wake-on-demand remote Linux through the canonical Cloudflare Worker."
+summary: "Local is trusted direct Linux/macOS/Windows execution through OpenAI Secure MCP Tunnel; Sprite is wake-on-demand remote Linux through the canonical Cloudflare Worker."
 ---
 
 Zodex has two first-class ways to give ChatGPT a real coding machine:
 
 | | Local | Sprite |
 | --- | --- | --- |
-| Machine | Your Apple Silicon Mac or x86_64 Windows machine | Wake-on-demand remote Linux Sprite |
+| Machine | Your Apple Silicon Mac, x86_64/aarch64 Linux machine, or x86_64 Windows machine | Wake-on-demand remote Linux Sprite |
 | Trust model | Trusted host; commands run as your logged-in user | Restricted agent account plus isolated GitHub writer boundary |
 | ChatGPT connection | OpenAI Secure MCP Tunnel | Canonical Cloudflare Worker → public Sprite wake edge |
 | GitHub permissions | Your existing local user/network credentials | Reader App + isolated writer App + grants/YOLO policy |
@@ -39,16 +39,16 @@ The shared service/session layer provides interactive commands (PTY-backed on Un
 ChatGPT custom app
   → OpenAI Secure MCP Tunnel
   → loopback Zodex Local runtime
-  → your logged-in macOS or Windows user
+  → your logged-in Linux, macOS, or Windows user
 ```
 
-Local is intentionally **trusted-host execution**, not a sandbox. It inherits your host-user filesystem permissions, developer environment, and credentials. macOS privacy controls or Windows filesystem/profile permissions remain authoritative.
+Local is intentionally **trusted-host execution**, not a sandbox. It inherits your host-user filesystem permissions, developer environment, and credentials. Linux filesystem permissions, macOS privacy controls, and Windows filesystem/profile permissions remain authoritative.
 
 One Local runtime can serve several independent ChatGPT conversations. Agent-aware history/observation groups activity for understanding, not for permission isolation.
 
 Local also exposes a separate authenticated read-only localhost observability API. It owns the canonical Agent/presentation timeline, durable output/audit resources, and live SSE contract independently of the MCP execution listener.
 
-On macOS, `zodex local watch` starts the first-party Liveboard by default. On Windows, it starts the terminal viewer. Both consume the same read-only observer contract; macOS can explicitly select the terminal presentation with `--tui`.
+On macOS, `zodex local watch` starts the first-party Liveboard by default. On Linux and Windows, it starts the terminal viewer. Both consume the same read-only observer contract; macOS can explicitly select the terminal presentation with `--tui`.
 
 Read [Local](/docs/local), [Daily use](/docs/local/daily-use), [Watch and Liveboard](/docs/local/watch), and [Local observability API](/docs/local/observability-api).
 

@@ -6,9 +6,9 @@ import "../styles/landing.css";
 const localFeatures = [
   {
     index: "01",
-    marker: "MAC",
+    marker: "HOST",
     title: "Your real environment",
-    body: "ChatGPT works as your logged-in macOS or Windows user with the shell, Git, language toolchains, credentials, and files you already use."
+    body: "ChatGPT works as your logged-in Linux, macOS, or Windows user with the shell, Git, language toolchains, credentials, and files you already use."
   },
   {
     index: "02",
@@ -67,7 +67,7 @@ const modes = [
   {
     index: "L",
     title: "Local",
-    subtitle: "Trusted macOS or Windows host",
+    subtitle: "Trusted Linux, macOS, or Windows host",
     href: "/docs/local",
     body: "Direct trusted-host execution through an OpenAI Secure MCP Tunnel. Your machine, your developer environment, your credentials.",
     facts: ["Secure MCP Tunnel", "explicit start / stop", "optional runtime TTL", "Liveboard + durable history"]
@@ -111,7 +111,7 @@ const docsLinks = [
         <p class="z-overline reveal reveal--2">A real terminal on a real machine</p>
         <h1 class="reveal reveal--3">Give ChatGPT<br />your <em>machine.</em></h1>
         <p class="z-hero__lede reveal reveal--4">
-          Zodex gives ChatGPT the command, stdin, and patch primitives coding agents already know—directly on your trusted macOS or Windows machine, through an OpenAI Secure MCP Tunnel.
+          Zodex gives ChatGPT the command, stdin, and patch primitives coding agents already know—directly on your trusted Linux, macOS, or Windows machine, through an OpenAI Secure MCP Tunnel.
         </p>
         <div class="z-hero__actions reveal reveal--5">
           <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>
@@ -289,7 +289,7 @@ zodex local setup`}</code></pre>
         </div>
         <div class="z-section__intro">
           <p>
-            Local is the direct path to the macOS or Windows machine you already use. Sprite is the isolated remote path. ChatGPT sees the same three tools either way.
+            Local is the direct path to the Linux, macOS, or Windows machine you already use. Sprite is the isolated remote path. ChatGPT sees the same three tools either way.
           </p>
           <a class="text-link" href="/docs/reference/architecture">Compare architecture <span aria-hidden="true">↗</span></a>
         </div>

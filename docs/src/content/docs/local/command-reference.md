@@ -48,6 +48,8 @@ printf '%s\n' "$OPENAI_TUNNEL_RUNTIME_KEY" \
 
 On macOS, setup enables and opens the lightweight Zodex menu bar app by default. It is registered to return when you next log in, but it does not start the Zodex Local runtime. Pass `--no-menu-bar` to leave the bundled menu app disabled and unopened.
 
+On Linux, setup stores the runtime key in a mode-`0600` user-only credential file, installs the Linux tunnel-client bundle, and ignores the menu-bar option.
+
 On Windows, setup stores the runtime key in Windows Credential Manager, installs the Windows tunnel-client bundle, and ignores the menu-bar option.
 
 ## `zodex local start`
@@ -113,7 +115,7 @@ zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-On macOS, plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI; `--no-open` keeps that host in the foreground. On Windows, plain `watch` uses the terminal viewer and `--no-open` is not applicable. See [Watch and Liveboard](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
+On macOS, plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI; `--no-open` keeps that host in the foreground. On Linux and Windows, plain `watch` uses the terminal viewer and `--no-open` is not applicable. See [Watch and Liveboard](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
 
 ## `zodex local menu`
 
@@ -121,7 +123,7 @@ On macOS, plain `watch` starts the temporary same-origin Liveboard host and open
 zodex local menu
 ```
 
-On Apple Silicon macOS, this opens the lightweight Zodex menu bar app. Windows does not provide this macOS-only control surface; use `zodex local start`, `watch`, `status`, and `stop` from PowerShell/Windows Terminal.
+On Apple Silicon macOS, this opens the lightweight Zodex menu bar app. Linux and Windows do not provide this macOS-only control surface; use `zodex local start`, `watch`, `status`, and `stop` from your terminal.
 
 **Launch at Login** is enabled by default after `zodex local setup`. Turn that checked menu item off if you no longer want the menu app to return after logout or restart. Choosing **Quit** only exits the current menu app session; it does not start or stop Zodex Local and does not make the app relaunch before the next login.
 

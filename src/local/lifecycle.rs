@@ -17,8 +17,10 @@ use crate::session::{
     signal_process_if_matching,
 };
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::lifecycle_artifacts::write_private_bytes;
 use super::lifecycle_artifacts::{
-    append_lifecycle_diagnostic, set_user_only_directory, write_private_bytes, write_private_json,
+    append_lifecycle_diagnostic, set_user_only_directory, write_private_json,
 };
 use super::lifecycle_context::{
     canonicalize_start_directory, resolve_developer_shell, start_directory_error,
@@ -26,7 +28,7 @@ use super::lifecycle_context::{
 };
 use super::lifecycle_lock::LocalLifecycleLock;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use super::LocalLaunchdJob;
 #[cfg(target_os = "macos")]
 use super::liveboard::{
@@ -151,7 +153,7 @@ pub(super) fn prepare_local_launch_at(
     let bootstrap_path = paths.runtime_bootstrap_file();
     write_private_json(&bootstrap_path, &bootstrap)?;
     let plist_path = paths.launchd_plist_file();
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     write_private_bytes(
         &plist_path,
         LocalLaunchdJob::new(executable, &bootstrap_path)?
@@ -316,6 +318,23 @@ pub async fn stop_via_windows_process(paths: &LocalPaths) -> Result<LocalStopOut
     } else {
         Ok(cleanup)
     }
+}
+
+#[cfg(target_os = "linux")]
+pub async fn stop_via_linux_process(paths: &LocalPaths) -> Result<LocalStopOutcome> {
+    struct NoopLifecycleController;
+    impl LaunchdController for NoopLifecycleController {
+        fn is_loaded(&self) -> Result<bool> {
+            Ok(false)
+        }
+        fn bootstrap(&self, _plist: &Path) -> Result<()> {
+            Ok(())
+        }
+        fn bootout(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+    stop_via_launchd(paths, &NoopLifecycleController).await
 }
 
 pub fn cleanup_stale_runtime(paths: &LocalPaths, launchd: &dyn LaunchdController) -> Result<()> {

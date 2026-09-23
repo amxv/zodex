@@ -72,6 +72,7 @@ async fn local_mcp_captures_bounded_actual_before_and_after_file_evidence() {
     )
     .await;
     assert_ne!(patch["result"]["isError"], json!(true));
+    history.flush_for_test().unwrap();
 
     server.shutdown().await.unwrap();
     service.shutdown_sessions().await.unwrap();

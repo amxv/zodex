@@ -60,11 +60,16 @@ fn launch_artifacts_keep_environment_out_of_plist_and_bootstrap() {
         "runtime-fixture".to_string(),
     )
     .unwrap();
-    let plist = fs::read_to_string(&prepared.plist_path).unwrap();
     let bootstrap = fs::read_to_string(&prepared.bootstrap_path).unwrap();
-    assert!(!plist.contains("MY_SECRET"));
-    assert!(!plist.contains("top-secret"));
-    assert!(!plist.contains("/secret/toolchain/path"));
+    #[cfg(target_os = "macos")]
+    {
+        let plist = fs::read_to_string(&prepared.plist_path).unwrap();
+        assert!(!plist.contains("MY_SECRET"));
+        assert!(!plist.contains("top-secret"));
+        assert!(!plist.contains("/secret/toolchain/path"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    assert!(!prepared.plist_path.exists());
     assert!(!bootstrap.contains("MY_SECRET"));
     assert!(!bootstrap.contains("top-secret"));
     assert!(paths.environment_handoff_file().exists());

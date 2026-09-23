@@ -56,40 +56,40 @@ impl UpgradeDirection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpgradeLocalState {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Unconfigured,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Stopped,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Running,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Stale,
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     Unsupported,
 }
 
 impl UpgradeLocalState {
     fn as_str(self) -> &'static str {
         match self {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             Self::Unconfigured => "unconfigured",
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             Self::Stopped => "stopped",
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             Self::Running => "running",
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
             Self::Stale => "stale",
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             Self::Unsupported => "unsupported",
         }
     }
 
     fn blocks_upgrade(self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         {
             matches!(self, Self::Running | Self::Stale)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             false
         }
@@ -922,7 +922,7 @@ fn operator_target_triple() -> std::result::Result<&'static str, UpgradeFailure>
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, UpgradeFailure> {
     use zodex::local::{LocalPaths, LocalStatusDocument, LocalStatusState};
 
@@ -940,7 +940,7 @@ fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, Upgr
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn operator_upgrade_local_state() -> std::result::Result<UpgradeLocalState, UpgradeFailure> {
     Ok(UpgradeLocalState::Unsupported)
 }
@@ -978,7 +978,26 @@ async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFai
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFailure> {
+    use zodex::local::{LocalPaths, stop_via_linux_process};
+
+    let paths = LocalPaths::discover().map_err(|error| {
+        UpgradeFailure::new(
+            "local_stop_failed",
+            format!("Could not resolve Zodex Local state: {error:#}"),
+        )
+    })?;
+    stop_via_linux_process(&paths).await.map_err(|error| {
+        UpgradeFailure::new(
+            "local_stop_failed",
+            format!("Could not stop Zodex Local: {error:#}"),
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 async fn stop_local_for_operator_upgrade() -> std::result::Result<(), UpgradeFailure> {
     Ok(())
 }

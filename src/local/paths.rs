@@ -109,6 +109,10 @@ impl LocalPaths {
         self.credentials_dir().join("observability-bearer")
     }
 
+    pub fn runtime_key_file(&self) -> PathBuf {
+        self.credentials_dir().join("openai-tunnel-runtime-key")
+    }
+
     pub fn history_dir(&self) -> PathBuf {
         self.local_state_root().join("history")
     }

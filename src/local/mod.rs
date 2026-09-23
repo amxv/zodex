@@ -44,6 +44,8 @@ pub use history::{
 pub use launchd::{
     LOCAL_LAUNCHD_LABEL, LaunchdController, LocalLaunchdJob, SystemLaunchdController,
 };
+#[cfg(target_os = "linux")]
+pub use lifecycle::stop_via_linux_process;
 #[cfg(target_os = "windows")]
 pub use lifecycle::stop_via_windows_process;
 pub use lifecycle::{
@@ -54,6 +56,8 @@ pub use lifecycle::{
 pub use lifecycle_context::{
     paths_from_runtime_bootstrap, resolve_developer_shell, validate_runtime_start_directory,
 };
+#[cfg(target_os = "linux")]
+pub use lifecycle_start::start_via_linux_process;
 #[cfg(target_os = "windows")]
 pub use lifecycle_start::start_via_windows_process;
 pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
@@ -75,6 +79,8 @@ pub use process_registry::{
     terminate_matching_stale_processes,
 };
 pub use runtime::{LocalHostRuntime, LocalHostRuntimeOptions, start_local_host_runtime};
+#[cfg(target_os = "linux")]
+pub use secret::LinuxFileRuntimeKeyStore;
 #[cfg(target_os = "macos")]
 pub use secret::MacKeychainRuntimeKeyStore;
 #[cfg(target_os = "windows")]
@@ -96,6 +102,8 @@ pub use tunnel::{
     TunnelProcessState, cleanup_stale_tunnel_child, load_tunnel_process_state, probe_tunnel_health,
     spawn_tunnel_client, write_mcp_token, write_tunnel_process_state, write_tunnel_profile,
 };
+#[cfg(target_os = "linux")]
+pub use tunnel_provider::LinuxZipArchiveExtractor;
 #[cfg(target_os = "macos")]
 pub use tunnel_provider::MacDittoArchiveExtractor;
 #[cfg(target_os = "windows")]

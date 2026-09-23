@@ -203,8 +203,8 @@ printf 'human presentation output\n'
         fs::write(&config, "{}").expect("config");
         let result = execute_wrangler_deploy(
             &ProxyDeployCommandSpec {
-                program: runner.display().to_string(),
-                base_args: Vec::new(),
+                program: "/bin/sh".to_string(),
+                base_args: vec![runner.display().to_string()],
             },
             dir.path(),
             &config,
@@ -239,8 +239,8 @@ exit 1
         fs::write(&config, "{}").expect("config");
         let err = execute_wrangler_deploy(
             &ProxyDeployCommandSpec {
-                program: runner.display().to_string(),
-                base_args: Vec::new(),
+                program: "/bin/sh".to_string(),
+                base_args: vec![runner.display().to_string()],
             },
             dir.path(),
             &config,
