@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.2 — 2026-09-23
+
+- Stabilized the macOS Liveboard at the local-only `http://127.0.0.1:64973/` address across Local restarts while keeping the read-only API behind a fresh private capability path for each run.
+- Added **Copy Liveboard Link** to the macOS menu bar app and updated Liveboard development, discovery, status, and regression coverage around the stable browser URL.
+
 ## 0.5.1 — 2026-09-23
 
 - Fixed Windows private Local file and directory permissions by replacing PowerShell ACL mutation with native Win32 security APIs and reapplying the user-only ACL whenever a private path is secured.
