@@ -205,7 +205,7 @@ fn serve_index(private_base_path: &str) -> Response {
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from(html.into_owned()))
+        .body(Body::from(html))
         .expect("Liveboard index response must be valid")
 }
 
