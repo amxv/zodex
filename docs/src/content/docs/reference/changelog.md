@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.3 — 2026-09-23
+
+- Fixed Windows `zodex local setup` tunnel metadata validation by preserving the required Windows process environment while continuing to exclude the user's full `PATH` and ambient OpenAI credentials.
+- Tunnel metadata validation failures now include the underlying `tunnel-client` diagnostic with the supplied runtime key redacted, making permission, credential, and Windows environment failures distinguishable.
+
 ## 0.5.2 — 2026-09-23
 
 - Stabilized the macOS Liveboard at the local-only `http://127.0.0.1:64973/` address across Local restarts while keeping the read-only API behind a fresh private capability path for each run.
