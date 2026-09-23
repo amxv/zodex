@@ -55,6 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         symbol: "arrow.up.right",
         symbolDescription: "Liveboard"
     )
+    private lazy var copyLiveboardItem = menuItem(
+        "Copy Liveboard Link",
+        action: #selector(copyLiveboardLink),
+        symbol: "doc.on.doc",
+        symbolDescription: "Copy Liveboard link"
+    )
     private lazy var startFolderItem: NSMenuItem = {
         let item = NSMenuItem(title: "Start Folder: Not set", action: nil, keyEquivalent: "")
         item.image = menuSymbol("folder.fill", description: "Start folder")
@@ -108,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(startItem)
         menu.addItem(stopItem)
         menu.addItem(liveboardItem)
+        menu.addItem(copyLiveboardItem)
         menu.addItem(.separator())
         menu.addItem(startFolderItem)
         menu.addItem(changeFolderItem)
@@ -125,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        copyLiveboardItem.title = "Copy Liveboard Link"
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         refreshStatus()
@@ -237,16 +245,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             startItem.isEnabled = false
             stopItem.isEnabled = true
             liveboardItem.isEnabled = true
+            copyLiveboardItem.isEnabled = true
         case "stale":
             startItem.title = "Start Zodex"
             startItem.isEnabled = false
             stopItem.isEnabled = true
             liveboardItem.isEnabled = false
+            copyLiveboardItem.isEnabled = false
         case "stopped":
             startItem.title = "Start Zodex"
             startItem.isEnabled = validStartFolder != nil
             stopItem.isEnabled = false
             liveboardItem.isEnabled = false
+            copyLiveboardItem.isEnabled = false
         case "unconfigured":
             startItem.title = "Start Zodex"
             disableRuntimeActions()
@@ -260,12 +271,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startItem.isEnabled = false
         stopItem.isEnabled = false
         liveboardItem.isEnabled = false
+        copyLiveboardItem.isEnabled = false
     }
 
     private func enableFallbackActions() {
         startItem.isEnabled = validStartFolder != nil
         stopItem.isEnabled = true
         liveboardItem.isEnabled = true
+        copyLiveboardItem.isEnabled = true
     }
 
     @objc private func startZodex() {
@@ -322,6 +335,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func copyLiveboardLink() {
+        copyLiveboardItem.isEnabled = false
+        runZodex(["local", "watch", "--no-open"]) { [weak self] result in
+            guard let self else { return }
+            self.refreshStatus()
+            guard result.exitCode == 0 else {
+                self.showCommandError("Copy Liveboard Link failed", result: result)
+                return
+            }
+            guard let url = Self.liveboardURL(in: result.output) else {
+                self.showError(
+                    "Copy Liveboard Link failed",
+                    detail: "Zodex did not return a valid runtime-owned Liveboard URL."
+                )
+                return
+            }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            guard pasteboard.setString(url.absoluteString, forType: .string) else {
+                self.showError(
+                    "Copy Liveboard Link failed",
+                    detail: "The system clipboard is unavailable."
+                )
+                return
+            }
+            self.copyLiveboardItem.title = "Liveboard Link Copied"
+        }
+    }
+
     private static func liveboardURL(in output: String) -> URL? {
         for line in output.split(whereSeparator: \.isNewline) {
             let text = String(line)
@@ -337,8 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   components.password == nil,
                   components.query == nil,
                   components.fragment == nil,
-                  components.path.split(separator: "/").count == 1,
-                  components.path.hasSuffix("/"),
+                  components.path == "/",
                   let url = components.url
             else {
                 continue

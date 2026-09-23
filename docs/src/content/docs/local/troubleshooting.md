@@ -203,9 +203,9 @@ Find current IDs in Liveboard's **All Agents** drawer, `zodex local history`, or
 
 ## Liveboard opens a URL but the browser cannot connect
 
-Keep the `zodex local watch` process running. The printed capability URL belongs to that foreground process; `Ctrl-C` shuts the temporary host down.
+Keep the `zodex local watch` process running. The stable Liveboard address only responds while the Local runtime owns its loopback host.
 
-If the browser did not open automatically, copy the `Liveboard: http://127.0.0.1:.../<capability>/` URL printed by the CLI into your browser. Do not reuse an old capability URL from an earlier `watch` process.
+If the browser did not open automatically, open the printed `Liveboard: http://127.0.0.1:64973/` URL manually or use **Copy Liveboard Link** from the macOS menu bar app.
 
 If the page reports a version mismatch or observer failure, confirm the running Local runtime and the `zodex` binary you launched agree:
 

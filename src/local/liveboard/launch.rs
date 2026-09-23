@@ -107,7 +107,7 @@ async fn probe_liveboard(url: &str) -> Result<()> {
         .await
         .map_err(|_| anyhow!("Local Liveboard host is unavailable; restart Zodex Local"))?;
     if !response.status().is_success() {
-        bail!("Local Liveboard host rejected its private capability; restart Zodex Local")
+        bail!("Local Liveboard host rejected its stable local URL; restart Zodex Local")
     }
     Ok(())
 }

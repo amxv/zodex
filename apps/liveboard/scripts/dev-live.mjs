@@ -110,6 +110,19 @@ function startVite(upstream) {
   })
 }
 
+async function resolvePrivateUpstream(publicUrl) {
+  const response = await fetch(publicUrl)
+  if (!response.ok) {
+    throw new Error(`stable Liveboard root returned HTTP ${response.status}`)
+  }
+  const html = await response.text()
+  const match = /<base href="([^"]+)" \/>/.exec(html)
+  if (!match) {
+    throw new Error('stable Liveboard root did not expose its private asset base')
+  }
+  return new URL(match[1], publicUrl).toString()
+}
+
 function shutdown(exitCode = 0) {
   if (shuttingDown) return
   shuttingDown = true
@@ -123,7 +136,8 @@ process.on('SIGTERM', () => shutdown(0))
 
 try {
   await ensureViewerBinary()
-  const upstream = await startViewer()
+  const publicUrl = await startViewer()
+  const upstream = await resolvePrivateUpstream(publicUrl)
   startVite(upstream)
 } catch (error) {
   console.error(error instanceof Error ? error.message : error)

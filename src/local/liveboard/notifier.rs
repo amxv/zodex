@@ -272,11 +272,7 @@ mod tests {
     use super::*;
 
     fn discovery() -> LocalLiveboardDiscovery {
-        LocalLiveboardDiscovery::new(
-            "runtime-a",
-            "http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/",
-        )
-        .unwrap()
+        LocalLiveboardDiscovery::new("runtime-a", "http://127.0.0.1:43123/").unwrap()
     }
 
     struct FakeLinkCopier {
@@ -324,10 +320,7 @@ mod tests {
         let calls = copier.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "b222");
-        assert_eq!(
-            calls[0].1,
-            "http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/?agent=b222"
-        );
+        assert_eq!(calls[0].1, "http://127.0.0.1:43123/?agent=b222");
         drop(calls);
         notifier.shutdown().unwrap();
     }
@@ -367,7 +360,7 @@ mod tests {
         });
         let helper = PathBuf::from("/fake/Zodex.app/Contents/MacOS/zodex-menubar");
         let copier = SystemLinkCopier::with_runner(Some(helper.clone()), runner.clone());
-        let url = "http://127.0.0.1:43123/capability012345678901234567/?agent=k7m2";
+        let url = "http://127.0.0.1:43123/?agent=k7m2";
         copier.copy("k7m2", url).unwrap();
 
         let calls = runner.calls.lock().unwrap();

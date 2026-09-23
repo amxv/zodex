@@ -368,19 +368,15 @@ mod tests {
         let (_dir, paths) = test_paths();
         paths.ensure_persistent_dirs().unwrap();
         std::fs::create_dir_all(paths.runtime_dir()).unwrap();
-        let capability = "supersecretliveboardcapability012345";
         std::fs::write(
             paths.liveboard_discovery_file(),
-            format!(
-                "{{\"schema_version\":1,\"runtime_id\":\"runtime-a\",\"base_url\":\"http://127.0.0.1:43123/{capability}/\"}}"
-            ),
+            "{\"schema_version\":2,\"runtime_id\":\"runtime-a\",\"base_url\":\"http://127.0.0.1:64973/\"}",
         )
         .unwrap();
 
         let json = serde_json::to_string(&LocalStatusDocument::inspect(&paths).unwrap()).unwrap();
-        assert!(!json.contains(capability));
         assert!(!json.contains("liveboard.json"));
-        assert!(!json.contains("43123"));
+        assert!(!json.contains("64973"));
     }
 
     #[test]

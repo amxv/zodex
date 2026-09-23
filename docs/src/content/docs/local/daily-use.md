@@ -14,7 +14,7 @@ On macOS, `zodex local setup` enables the small menu bar app by default. It retu
 zodex local menu
 ```
 
-Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, or update Zodex from the menu bar. The app refreshes status when you open its menu and immediately after relevant user actions, with no background polling timer. Update checks also happen only when you open the menu or choose **Check for Updates…**; repeated menu opens use the CLI's short cache. Toggle **Launch at Login** off whenever you no longer want the menu app to return after logout or restart.
+Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu bar. The app refreshes status when you open its menu and immediately after relevant user actions, with no background polling timer. Update checks also happen only when you open the menu or choose **Check for Updates…**; repeated menu opens use the CLI's short cache. Toggle **Launch at Login** off whenever you no longer want the menu app to return after logout or restart.
 
 ## Start from the project you want ChatGPT to begin with
 

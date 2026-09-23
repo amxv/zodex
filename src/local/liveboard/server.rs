@@ -27,12 +27,14 @@ use super::prefs::{LiveboardPreferencesPatch, LiveboardPreferencesStore};
 
 const PREFERENCE_BODY_LIMIT: usize = 64 * 1024;
 const LIVEBOARD_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+pub(crate) const LOCAL_LIVEBOARD_PORT: u16 = 64_973;
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'";
 
 #[derive(Clone)]
 struct LiveboardState {
     observer: Arc<LiveboardObserverBridge>,
     preferences: LiveboardPreferencesStore,
+    private_base_path: String,
 }
 
 #[derive(Clone)]
@@ -43,6 +45,8 @@ struct SecurityState {
 
 pub(crate) struct LocalLiveboardHost {
     url: String,
+    #[cfg(test)]
+    private_url: String,
     cancellation: CancellationToken,
     task: JoinHandle<Result<()>>,
 }
@@ -50,6 +54,11 @@ pub(crate) struct LocalLiveboardHost {
 impl LocalLiveboardHost {
     pub(crate) fn url(&self) -> &str {
         &self.url
+    }
+
+    #[cfg(test)]
+    pub(crate) fn private_url(&self) -> &str {
+        &self.private_url
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -89,10 +98,14 @@ pub(crate) async fn start_liveboard_host(
     let preferences = LiveboardPreferencesStore::new(paths);
     preferences.load()?;
 
-    let listener =
-        tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .await
-            .context("failed to bind Liveboard loopback listener")?;
+    let listener = tokio::net::TcpListener::bind(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        liveboard_bind_port(),
+    ))
+    .await
+    .with_context(|| {
+        format!("failed to bind Liveboard loopback listener on 127.0.0.1:{LOCAL_LIVEBOARD_PORT}")
+    })?;
     let addr = listener
         .local_addr()
         .context("failed to inspect Liveboard loopback listener")?;
@@ -101,6 +114,7 @@ pub(crate) async fn start_liveboard_host(
     }
 
     let capability = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 24]>());
+    let private_base_path = format!("/{capability}/");
     let expected_host = HeaderValue::from_str(&addr.to_string())
         .context("Liveboard listener address was not a valid Host header")?;
     let origin = format!("http://{addr}");
@@ -111,6 +125,7 @@ pub(crate) async fn start_liveboard_host(
         Arc::new(LiveboardState {
             observer,
             preferences,
+            private_base_path: private_base_path.clone(),
         }),
         SecurityState {
             expected_host,
@@ -125,11 +140,18 @@ pub(crate) async fn start_liveboard_host(
             .await
             .context("Liveboard host terminated unexpectedly")
     });
+    let url = format!("{origin}/");
     Ok(LocalLiveboardHost {
-        url: format!("{origin}/{capability}/"),
+        url,
+        #[cfg(test)]
+        private_url: format!("{origin}{private_base_path}"),
         cancellation,
         task,
     })
+}
+
+const fn liveboard_bind_port() -> u16 {
+    if cfg!(test) { 0 } else { LOCAL_LIVEBOARD_PORT }
 }
 
 fn build_router(capability: &str, state: Arc<LiveboardState>, security: SecurityState) -> Router {
@@ -158,17 +180,33 @@ fn build_router(capability: &str, state: Arc<LiveboardState>, security: Security
         .route("/api/invocations/{id}/output", get(proxy_output))
         .route("/api/events", get(proxy_events))
         .route("/api/open-file", post(open_file))
-        .with_state(state)
         .layer(DefaultBodyLimit::max(PREFERENCE_BODY_LIMIT));
     Router::new()
+        .route("/", get(index))
         .route(&prefix, get(index))
         .route(&format!("{prefix}/"), get(index))
         .nest(&prefix, scoped)
         .layer(middleware::from_fn_with_state(security, security_boundary))
+        .with_state(state)
 }
 
-async fn index() -> Response {
-    serve_asset("index.html")
+async fn index(State(state): State<Arc<LiveboardState>>) -> Response {
+    serve_index(&state.private_base_path)
+}
+
+fn serve_index(private_base_path: &str) -> Response {
+    let Some(asset) = assets::find("index.html") else {
+        return error_response(StatusCode::NOT_FOUND, "asset was not found");
+    };
+    let html = String::from_utf8_lossy(asset.bytes);
+    let base = format!("<base href=\"{private_base_path}\" />");
+    let html = html.replacen("<head>", &format!("<head>\n    {base}"), 1);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(html.into_owned()))
+        .expect("Liveboard index response must be valid")
 }
 
 async fn asset(AxumPath(path): AxumPath<String>) -> Response {

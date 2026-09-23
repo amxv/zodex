@@ -27,10 +27,7 @@ func copyFocusedLiveboardLinkAndShowHUD(agentID: String) throws {
           components.user == nil,
           components.password == nil,
           components.fragment == nil,
-          components.path.hasSuffix("/"),
-          components.path.split(separator: "/").count == 1,
-          let segment = components.path.split(separator: "/").first,
-          segment.count >= 24,
+          components.path == "/",
           components.queryItems == [URLQueryItem(name: "agent", value: agentID)]
     else {
         throw LiveboardCopyHUDError.invalidURL

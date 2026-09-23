@@ -116,13 +116,25 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert!(html.contains("Zodex Liveboard"));
     assert!(html.contains("./assets/"));
     assert!(!html.contains(BEARER));
+    let public_url = reqwest::Url::parse(host.url()).unwrap();
+    assert_eq!(public_url.path(), "/");
+    let private_url = reqwest::Url::parse(host.private_url()).unwrap();
+    assert_ne!(private_url.path(), public_url.path());
+    assert!(html.contains(&format!("<base href=\"{}\"", private_url.path())));
+
+    let public_api = client
+        .get(format!("{}api/status", host.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(public_api.status(), StatusCode::NOT_FOUND);
 
     let fingerprinted_asset = assets::all()
         .iter()
         .find(|asset| asset.path.starts_with("assets/") && assets::immutable(asset.path))
         .expect("production Liveboard build should contain a fingerprinted asset");
     let asset = client
-        .get(capability_url(host.url(), fingerprinted_asset.path))
+        .get(capability_url(host.private_url(), fingerprinted_asset.path))
         .send()
         .await
         .unwrap();
@@ -134,7 +146,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert!(asset.headers().get("content-type").is_some());
 
     let status = client
-        .get(capability_url(host.url(), "api/status"))
+        .get(capability_url(host.private_url(), "api/status"))
         .send()
         .await
         .unwrap();
@@ -153,7 +165,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let invocation_id = invocation.invocation_id.unwrap();
     let output_metadata = client
         .get(capability_url(
-            host.url(),
+            host.private_url(),
             &format!("api/invocations/{invocation_id}/output-metadata"),
         ))
         .send()
@@ -167,7 +179,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert!(!output_metadata.to_string().contains(BEARER));
 
     let prefs = client
-        .get(capability_url(host.url(), "preferences"))
+        .get(capability_url(host.private_url(), "preferences"))
         .send()
         .await
         .unwrap();
@@ -181,7 +193,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(prefs["editor_command"], "zed");
 
     let patched = client
-        .patch(capability_url(host.url(), "preferences"))
+        .patch(capability_url(host.private_url(), "preferences"))
         .json(&json!({"theme":"dark","max_visible_agents":5,"show_raw_button":true,"editor_command":"/usr/bin/true"}))
         .send()
         .await
@@ -197,14 +209,14 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let open_path = dir.path().join("open-me.txt");
     std::fs::write(&open_path, "open me").unwrap();
     let opened = client
-        .post(capability_url(host.url(), "api/open-file"))
+        .post(capability_url(host.private_url(), "api/open-file"))
         .json(&json!({"path": open_path}))
         .send()
         .await
         .unwrap();
     assert_eq!(opened.status(), StatusCode::NO_CONTENT);
     let missing = client
-        .post(capability_url(host.url(), "api/open-file"))
+        .post(capability_url(host.private_url(), "api/open-file"))
         .json(&json!({"path": dir.path().join("missing.txt")}))
         .send()
         .await
@@ -212,19 +224,22 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 
     let unknown_post = client
-        .post(capability_url(host.url(), "api/status"))
+        .post(capability_url(host.private_url(), "api/status"))
         .send()
         .await
         .unwrap();
     assert_eq!(unknown_post.status(), StatusCode::METHOD_NOT_ALLOWED);
     let execution = client
-        .get(capability_url(host.url(), "api/exec-command"))
+        .get(capability_url(host.private_url(), "api/exec-command"))
         .send()
         .await
         .unwrap();
     assert_eq!(execution.status(), StatusCode::NOT_FOUND);
     let traversal = client
-        .get(capability_url(host.url(), "assets/%2e%2e/index.html"))
+        .get(capability_url(
+            host.private_url(),
+            "assets/%2e%2e/index.html",
+        ))
         .send()
         .await
         .unwrap();
@@ -234,7 +249,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     ));
 
     let cross_origin = client
-        .patch(capability_url(host.url(), "preferences"))
+        .patch(capability_url(host.private_url(), "preferences"))
         .header("origin", "http://evil.invalid")
         .json(&json!({"theme":"light"}))
         .send()
@@ -267,7 +282,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
             .is_none()
     );
 
-    let capability = reqwest::Url::parse(host.url())
+    let capability = reqwest::Url::parse(host.private_url())
         .unwrap()
         .path_segments()
         .unwrap()
@@ -301,7 +316,7 @@ async fn host_streams_sse_without_buffering_and_stays_bound_to_its_runtime() {
 
     let response = client
         .get(capability_url(
-            host.url(),
+            host.private_url(),
             "api/events?include_output=false",
         ))
         .send()
@@ -336,7 +351,7 @@ async fn host_streams_sse_without_buffering_and_stays_bound_to_its_runtime() {
     observer.history.shutdown_blocking().unwrap();
     let replacement = ObserverFixture::start(dir.path(), "runtime-two").await;
     let status = client
-        .get(capability_url(host.url(), "api/status"))
+        .get(capability_url(host.private_url(), "api/status"))
         .send()
         .await
         .unwrap();

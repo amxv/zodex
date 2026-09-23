@@ -16,11 +16,11 @@ On macOS, the default viewer is **Liveboard**, a browser UI built on the same pu
 zodex local watch
 ```
 
-On macOS, Zodex starts a temporary loopback Liveboard host, prints its capability URL, and opens it in your default browser. Keep the `watch` command running while you use the board.
+On macOS, Zodex exposes Liveboard at the stable local-only address `http://127.0.0.1:64973/`, prints that URL, and opens it in your default browser. The browser-visible address stays stable across Local restarts; Zodex still keeps the internal read-only API behind a per-run private capability path. Keep the `watch` command running while you use the board.
 
 Linux and Windows do not host the embedded macOS Liveboard. `zodex local watch` opens the terminal viewer directly; `zodex local watch --tui` is equivalent and useful in cross-platform scripts.
 
-On macOS, use `zodex local watch --no-open` when you want the same temporary Liveboard host without launching a browser. This is useful for local frontend development and other workflows that need to attach their own browser surface to the read-only host. Linux and Windows do not expose this browser-host mode.
+On macOS, use `zodex local watch --no-open` when you want the same Liveboard host without launching a browser. This is useful for local frontend development and other workflows that need to attach their own browser surface to the read-only host. Linux and Windows do not expose this browser-host mode.
 
 If the browser cannot be opened automatically, the CLI prints the URL so you can open it manually.
 
@@ -135,7 +135,7 @@ The observability listener requires a managed Bearer token and deliberately does
 
 Instead, `zodex local watch` starts a separate loopback **same-origin capability host**. That host reads discovery and the observer bearer on the native side, proxies only the allowlisted read-only observer resources Liveboard needs, serves the embedded frontend, and keeps the bearer out of browser JavaScript.
 
-The capability URL is local sensitive state while the host is running. Do not publish it or treat it as a permanent bookmark.
+The browser-visible root is the stable `http://127.0.0.1:64973/` address. A random per-run capability path is injected into the page internally for asset and API requests, so it does not need to appear in the address bar or copied Liveboard links.
 
 ## Build another viewer
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::super::LocalPaths;
 use super::super::status::write_user_only_json_atomic;
 
-pub(crate) const LOCAL_LIVEBOARD_DISCOVERY_SCHEMA_VERSION: u32 = 1;
+pub(crate) const LOCAL_LIVEBOARD_DISCOVERY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct LocalLiveboardDiscovery {
@@ -92,14 +92,6 @@ pub(crate) fn validate_agent_id(agent_id: &str) -> Result<()> {
 fn validate_base_url(value: &str) -> Result<Url> {
     let url =
         Url::parse(value).context("Local Liveboard private discovery contains an invalid URL")?;
-    let path_segments = url
-        .path_segments()
-        .map(|segments| {
-            segments
-                .filter(|segment| !segment.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     if url.scheme() != "http"
         || url.host_str() != Some("127.0.0.1")
         || url.port().is_none()
@@ -107,14 +99,9 @@ fn validate_base_url(value: &str) -> Result<Url> {
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || !url.path().ends_with('/')
-        || path_segments.len() != 1
-        || path_segments[0].len() < 24
-        || !path_segments[0]
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || url.path() != "/"
     {
-        bail!("Local Liveboard URL must be a credential-free loopback capability URL")
+        bail!("Local Liveboard URL must be a credential-free loopback root URL")
     }
     Ok(url)
 }
@@ -142,11 +129,8 @@ mod tests {
     #[test]
     fn discovery_is_private_runtime_scoped_and_builds_canonical_focus_url() {
         let (_dir, paths) = test_paths();
-        let discovery = LocalLiveboardDiscovery::new(
-            "runtime-a",
-            "http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/",
-        )
-        .unwrap();
+        let discovery =
+            LocalLiveboardDiscovery::new("runtime-a", "http://127.0.0.1:43123/").unwrap();
         write_liveboard_discovery(&paths, &discovery).unwrap();
 
         #[cfg(unix)]
@@ -161,7 +145,7 @@ mod tests {
         let loaded = load_liveboard_discovery(&paths, "runtime-a").unwrap();
         assert_eq!(
             loaded.focused_url("k7m2").unwrap(),
-            "http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/?agent=k7m2"
+            "http://127.0.0.1:43123/?agent=k7m2"
         );
         assert!(load_liveboard_discovery(&paths, "runtime-b").is_err());
 
@@ -170,20 +154,15 @@ mod tests {
     }
 
     #[test]
-    fn discovery_rejects_non_loopback_or_query_bearing_capabilities() {
+    fn discovery_rejects_non_loopback_nested_or_query_bearing_urls() {
+        assert!(LocalLiveboardDiscovery::new("runtime-a", "http://example.com:43123/").is_err());
         assert!(
-            LocalLiveboardDiscovery::new(
-                "runtime-a",
-                "http://example.com:43123/abcdefghijklmnopqrstuvwxyz012345/"
-            )
-            .is_err()
+            LocalLiveboardDiscovery::new("runtime-a", "http://127.0.0.1:43123/?agent=k7m2")
+                .is_err()
         );
         assert!(
-            LocalLiveboardDiscovery::new(
-                "runtime-a",
-                "http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/?agent=k7m2"
-            )
-            .is_err()
+            LocalLiveboardDiscovery::new("runtime-a", "http://127.0.0.1:43123/private-capability/")
+                .is_err()
         );
         assert!(validate_agent_id("K7M2").is_err());
         assert!(validate_agent_id("abc").is_err());
@@ -195,7 +174,7 @@ mod tests {
         fs::create_dir_all(paths.runtime_dir()).unwrap();
         fs::write(
             paths.liveboard_discovery_file(),
-            br#"{"schema_version":99,"runtime_id":"runtime-a","base_url":"http://127.0.0.1:43123/abcdefghijklmnopqrstuvwxyz012345/"}"#,
+            br#"{"schema_version":99,"runtime_id":"runtime-a","base_url":"http://127.0.0.1:43123/"}"#,
         )
         .unwrap();
 
