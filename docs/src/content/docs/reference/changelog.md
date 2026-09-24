@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.4 — 2026-09-24
+
+- Simplified `zodex local setup` by removing the blocking tunnel metadata preflight. Setup now verifies and installs local state and securely stores the runtime key, while `zodex local start` verifies actual tunnel access and readiness, so optional tunnel metadata or rate-limit responses no longer block otherwise valid setup.
+- Made Liveboard first-class on Linux, macOS, and Windows at the stable local-only `http://127.0.0.1:64973/` address. `zodex local watch` opens it, `zodex local watch url` prints it, `zodex local watch copyurl` copies it, and `zodex local start` prints the URL after startup.
+- Embedded Liveboard assets in all supported Local operator release artifacts and added native Linux and Windows Liveboard validation. Removed the old `--no-open` workflow; `--tui` remains the explicit terminal viewer.
+
 ## 0.5.3 — 2026-09-23
 
 - Fixed Windows `zodex local setup` tunnel metadata validation by preserving the required Windows process environment while continuing to exclude the user's full `PATH` and ambient OpenAI credentials.
