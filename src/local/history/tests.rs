@@ -986,7 +986,7 @@ fn active_process_creator_invocation_survives_retention_even_when_capture_is_inc
             })),
         )
         .unwrap();
-    std::thread::sleep(Duration::from_millis(100));
+    runtime.flush_for_test().unwrap();
     let connection = Connection::open(&path).unwrap();
     connection
         .execute(
