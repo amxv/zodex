@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 
 #[cfg(target_os = "macos")]

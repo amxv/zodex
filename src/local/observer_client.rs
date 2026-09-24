@@ -190,7 +190,6 @@ impl LocalObserverClient {
         ensure_success(self.get("v1/events", &query).await?).await
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) async fn raw_get(&self, path: &str, raw_query: Option<&str>) -> Result<Response> {
         let mut url = self
             .base_url
