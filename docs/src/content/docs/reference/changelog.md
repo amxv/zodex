@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.5 — 2026-09-26
+
+- Hardened `zodex local setup` against GitHub API `403`/rate-limit failures by resolving the official latest `tunnel-client` release from its published `SHA256SUMS.txt` manifest and then downloading the exact versioned asset, instead of depending on the unauthenticated GitHub Releases API.
+- Made the Windows tunnel subprocess environment allowlist case-insensitive, matching Windows environment-variable semantics so required OS and proxy variables survive regardless of shell-provided casing while ambient OpenAI credentials remain excluded.
+
 ## 0.5.4 — 2026-09-24
 
 - Simplified `zodex local setup` by removing the blocking tunnel metadata preflight. Setup now verifies and installs local state and securely stores the runtime key, while `zodex local start` verifies actual tunnel access and readiness, so optional tunnel metadata or rate-limit responses no longer block otherwise valid setup.
