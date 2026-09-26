@@ -57,22 +57,24 @@ fn provider_environment_for_target(
 ) -> Vec<(OsString, OsString)> {
     let mut environment = Vec::new();
     for (key, value) in inherited {
-        let allowed_provider_variable = PROVIDER_ENV_ALLOWLIST
-            .iter()
-            .any(|allowed| key.as_os_str() == OsStr::new(allowed));
-        let allowed_windows_variable = windows
-            && WINDOWS_PROVIDER_ENV_ALLOWLIST
-                .iter()
-                .any(|allowed| key.as_os_str() == OsStr::new(allowed));
+        let matches = |allowed: &&str| {
+            if windows {
+                key.to_string_lossy().eq_ignore_ascii_case(allowed)
+            } else {
+                key.as_os_str() == OsStr::new(allowed)
+            }
+        };
+        let allowed_provider_variable = PROVIDER_ENV_ALLOWLIST.iter().any(matches);
+        let allowed_windows_variable =
+            windows && WINDOWS_PROVIDER_ENV_ALLOWLIST.iter().any(matches);
         if allowed_provider_variable || allowed_windows_variable {
             environment.push((key.clone(), value.clone()));
         }
     }
     if windows
-        && let Some((_, system_root)) = inherited.iter().find(|(key, _)| {
-            key.as_os_str() == OsStr::new("SystemRoot")
-                || key.as_os_str() == OsStr::new("SYSTEMROOT")
-        })
+        && let Some((_, system_root)) = inherited
+            .iter()
+            .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("SystemRoot"))
     {
         let mut system32 = system_root.clone();
         system32.push("\\System32");
@@ -236,26 +238,25 @@ mod tests {
     #[test]
     fn windows_provider_environment_restores_required_os_context_only() {
         let inherited = vec![
-            (OsString::from("SystemRoot"), OsString::from(r"C:\Windows")),
-            (OsString::from("SYSTEMROOT"), OsString::from(r"C:\Windows")),
-            (OsString::from("WINDIR"), OsString::from(r"C:\Windows")),
-            (OsString::from("SystemDrive"), OsString::from("C:")),
-            (OsString::from("TEMP"), OsString::from(r"C:\Temp")),
-            (OsString::from("TMP"), OsString::from(r"C:\Temp")),
+            (OsString::from("sYsTeMrOoT"), OsString::from(r"C:\Windows")),
+            (OsString::from("windir"), OsString::from(r"C:\Windows")),
+            (OsString::from("systemdrive"), OsString::from("C:")),
+            (OsString::from("Temp"), OsString::from(r"C:\Temp")),
+            (OsString::from("tmp"), OsString::from(r"C:\Temp")),
             (
-                OsString::from("USERPROFILE"),
+                OsString::from("UserProfile"),
                 OsString::from(r"C:\Users\ashray"),
             ),
             (
-                OsString::from("APPDATA"),
+                OsString::from("AppData"),
                 OsString::from(r"C:\Users\ashray\AppData\Roaming"),
             ),
             (
-                OsString::from("LOCALAPPDATA"),
+                OsString::from("LocalAppData"),
                 OsString::from(r"C:\Users\ashray\AppData\Local"),
             ),
             (
-                OsString::from("PROGRAMDATA"),
+                OsString::from("ProgramData"),
                 OsString::from(r"C:\ProgramData"),
             ),
             (
@@ -283,7 +284,7 @@ mod tests {
                 OsString::from("fallback-secret"),
             ),
             (
-                OsString::from("HTTPS_PROXY"),
+                OsString::from("Https_Proxy"),
                 OsString::from("http://proxy.example"),
             ),
         ];
@@ -300,28 +301,33 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         for required in [
-            "SystemRoot",
-            "SYSTEMROOT",
-            "WINDIR",
-            "SystemDrive",
-            "TEMP",
-            "TMP",
-            "USERPROFILE",
-            "APPDATA",
-            "LOCALAPPDATA",
-            "PROGRAMDATA",
-            "ComSpec",
-            "PATHEXT",
-            "PROCESSOR_ARCHITECTURE",
+            "systemroot",
+            "windir",
+            "systemdrive",
+            "temp",
+            "tmp",
+            "userprofile",
+            "appdata",
+            "localappdata",
+            "programdata",
+            "comspec",
+            "pathext",
+            "processor_architecture",
         ] {
-            assert!(mapped.contains_key(required), "missing {required}");
+            assert!(
+                mapped.keys().any(|key| key.eq_ignore_ascii_case(required)),
+                "missing {required}"
+            );
         }
         assert_eq!(
             mapped.get("PATH").map(String::as_str),
             Some(r"C:\Windows\System32")
         );
         assert_eq!(
-            mapped.get("HTTPS_PROXY").map(String::as_str),
+            mapped
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("HTTPS_PROXY"))
+                .map(|(_, value)| value.as_str()),
             Some("http://proxy.example")
         );
         assert_eq!(

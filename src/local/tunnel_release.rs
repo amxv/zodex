@@ -7,8 +7,10 @@ use sha2::{Digest, Sha256};
 
 use super::ManagedTunnelClientRelease;
 
-const OFFICIAL_LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/openai/tunnel-client/releases/latest";
+const OFFICIAL_LATEST_CHECKSUM_URL: &str =
+    "https://github.com/openai/tunnel-client/releases/latest/download/SHA256SUMS.txt";
+const OFFICIAL_VERSIONED_RELEASE_BASE: &str =
+    "https://github.com/openai/tunnel-client/releases/download";
 const MAX_CHECKSUM_BYTES: u64 = 1024 * 1024;
 const MAX_PLATFORM_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -89,30 +91,92 @@ impl ResolvedTunnelRelease {
 #[derive(Clone)]
 pub struct OfficialTunnelReleaseClient {
     client: Client,
-    latest_release_url: String,
+    source: ReleaseSource,
+}
+
+#[derive(Clone)]
+enum ReleaseSource {
+    LatestManifest {
+        checksum_url: String,
+        versioned_release_base: String,
+    },
+    GithubApi {
+        latest_release_url: String,
+    },
 }
 
 impl OfficialTunnelReleaseClient {
     pub fn new() -> Result<Self> {
-        Self::with_latest_release_url(OFFICIAL_LATEST_RELEASE_API)
+        Self::with_source(ReleaseSource::LatestManifest {
+            checksum_url: OFFICIAL_LATEST_CHECKSUM_URL.to_string(),
+            versioned_release_base: OFFICIAL_VERSIONED_RELEASE_BASE.to_string(),
+        })
     }
 
     pub fn with_latest_release_url(url: impl Into<String>) -> Result<Self> {
+        Self::with_source(ReleaseSource::GithubApi {
+            latest_release_url: url.into(),
+        })
+    }
+
+    fn with_source(source: ReleaseSource) -> Result<Self> {
         crate::install_rustls_crypto_provider();
         let client = Client::builder()
             .user_agent(format!("zodex/{} local-setup", env!("CARGO_PKG_VERSION")))
             .build()
             .context("failed to build tunnel-client release HTTP client")?;
-        Ok(Self {
-            client,
-            latest_release_url: url.into(),
-        })
+        Ok(Self { client, source })
     }
 
     pub async fn resolve_latest(&self, arch: TunnelArchitecture) -> Result<ResolvedTunnelRelease> {
+        match &self.source {
+            ReleaseSource::LatestManifest {
+                checksum_url,
+                versioned_release_base,
+            } => {
+                self.resolve_latest_from_manifest(checksum_url, versioned_release_base, arch)
+                    .await
+            }
+            ReleaseSource::GithubApi { latest_release_url } => {
+                self.resolve_latest_from_api(latest_release_url, arch).await
+            }
+        }
+    }
+
+    async fn resolve_latest_from_manifest(
+        &self,
+        checksum_url: &str,
+        versioned_release_base: &str,
+        arch: TunnelArchitecture,
+    ) -> Result<ResolvedTunnelRelease> {
+        let checksum_text = self
+            .download_text(checksum_url, MAX_CHECKSUM_BYTES)
+            .await
+            .context("failed to download official tunnel-client checksum manifest")?;
+        let (version, asset_name, archive_sha256) = release_for_architecture(&checksum_text, arch)?;
+        let archive_url = format!(
+            "{}/{}/{}",
+            versioned_release_base.trim_end_matches('/'),
+            version,
+            asset_name
+        );
+
+        Ok(ResolvedTunnelRelease {
+            version,
+            asset_name,
+            archive_url,
+            archive_sha256,
+        })
+    }
+
+    async fn resolve_latest_from_api(
+        &self,
+        latest_release_url: &str,
+        arch: TunnelArchitecture,
+    ) -> Result<ResolvedTunnelRelease> {
         let release: GithubRelease = self
             .client
-            .get(&self.latest_release_url)
+            .get(latest_release_url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
@@ -318,9 +382,60 @@ fn checksum_for_asset(manifest: &str, asset_name: &str) -> Result<String> {
     found.ok_or_else(|| anyhow!("checksum manifest has no entry for {asset_name}"))
 }
 
+fn release_for_architecture(
+    manifest: &str,
+    arch: TunnelArchitecture,
+) -> Result<(String, String, String)> {
+    let prefix = "tunnel-client-";
+    let suffix = arch.asset_suffix();
+    let mut found = None;
+    for line in manifest.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        let name = name.trim_start_matches('*');
+        let Some(version) = name
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+        else {
+            continue;
+        };
+        if version.is_empty() || !version.starts_with('v') {
+            continue;
+        }
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("checksum manifest contains an invalid SHA-256 for {name}");
+        }
+        if found.is_some() {
+            bail!(
+                "checksum manifest contains multiple primary tunnel-client assets for {}",
+                arch.asset_suffix()
+            );
+        }
+        found = Some((
+            version.to_string(),
+            name.to_string(),
+            hash.to_ascii_lowercase(),
+        ));
+    }
+    found.with_context(|| {
+        format!(
+            "checksum manifest has no primary tunnel-client asset for {}",
+            arch.asset_suffix()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TunnelArchitecture, checksum_for_asset, sha256_hex, validate_tunnel_id};
+    use super::{
+        TunnelArchitecture, checksum_for_asset, release_for_architecture, sha256_hex,
+        validate_tunnel_id,
+    };
 
     #[test]
     fn tunnel_id_validation_matches_current_provider_contract() {
@@ -352,6 +467,28 @@ mod tests {
         );
         assert!(checksum_for_asset(&manifest, "missing.zip").is_err());
         assert!(checksum_for_asset("not-a-hash  wanted.zip\n", "wanted.zip").is_err());
+    }
+
+    #[test]
+    fn latest_manifest_selects_primary_asset_and_version_without_github_api() {
+        let manifest = format!(
+            concat!(
+                "{}  tunnel-client-runtime-v0.0.15-windows-amd64.zip\n",
+                "{}  tunnel-client-v0.0.15-windows-amd64.zip\n",
+                "{}  tunnel-client-v0.0.15-linux-amd64.zip\n",
+            ),
+            "a".repeat(64),
+            "B".repeat(64),
+            "c".repeat(64),
+        );
+        assert_eq!(
+            release_for_architecture(&manifest, TunnelArchitecture::WindowsAmd64).unwrap(),
+            (
+                "v0.0.15".to_string(),
+                "tunnel-client-v0.0.15-windows-amd64.zip".to_string(),
+                "b".repeat(64),
+            )
+        );
     }
 
     #[test]
