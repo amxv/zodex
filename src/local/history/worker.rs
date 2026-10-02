@@ -1074,7 +1074,7 @@ fn process_messages(
                             .is_some();
                         let active_process_count = if was_active && removed {
                             active_process_count
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                                .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                                     Some(count.saturating_sub(1))
                                 })
                                 .unwrap_or(0)
