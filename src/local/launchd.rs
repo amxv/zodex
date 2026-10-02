@@ -28,6 +28,9 @@ impl LocalLaunchdJob {
     }
 
     pub fn render_plist(&self) -> String {
+        // Local serves explicit user/model requests. Background classification
+        // throttles startup disk I/O during login and is inherited by tool and
+        // tunnel children. Interactive keeps this user-started service responsive.
         let executable = xml_escape(&self.executable.display().to_string());
         let bootstrap = xml_escape(&self.bootstrap_path.display().to_string());
         format!(
@@ -48,7 +51,7 @@ impl LocalLaunchdJob {
   <key>RunAtLoad</key>
   <true/>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
   <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key>
@@ -185,6 +188,7 @@ mod tests {
         assert!(plist.contains("<string>local</string>"));
         assert!(plist.contains("<string>__runtime</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
+        assert!(plist.contains("<key>ProcessType</key>\n  <string>Interactive</string>"));
         assert!(!plist.contains("KeepAlive"));
         assert!(!plist.contains("~/Library/LaunchAgents"));
         assert!(!plist.contains("EnvironmentVariables"));

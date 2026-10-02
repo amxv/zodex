@@ -60,6 +60,75 @@ fn startup_retention_finishes_before_runtime_is_returned() {
 }
 
 #[test]
+fn retention_without_expired_invocations_preserves_existing_summaries() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let store = HistoryStore::open(path.clone(), Arc::from("runtime-old")).unwrap();
+    let context = store
+        .begin(
+            InvocationContext::default()
+                .with_correlation_id("retained-before-start")
+                .with_provider(ProviderCallMetadata::new(
+                    "openai/session",
+                    "provider-retained",
+                )),
+            InvocationStart::new(
+                "apply_patch",
+                json!({"patch":"fixture","workdir":dir.path()}),
+            ),
+        )
+        .unwrap();
+    store
+        .complete(&context, InvocationOutcome::Success(json!({"ok":true})))
+        .unwrap();
+    let records = LocalHistoryReader::query(&path, &HistoryQuery::recent(10)).unwrap();
+    let summaries_before = LocalHistoryReader::agent_summaries(&path, &records).unwrap();
+    assert_eq!(summaries_before.len(), 1);
+    assert_eq!(summaries_before[0].workdirs.len(), 1);
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    // Make summary churn fail visibly without relying on timing or database
+    // size. Neither a cold start nor a no-op maintenance pass needs to rewrite
+    // summaries for retained invocations.
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_summary_delete BEFORE DELETE ON agent_workdirs
+             BEGIN SELECT RAISE(ABORT, 'unexpected summary rewrite'); END;
+             CREATE TRIGGER reject_summary_insert BEFORE INSERT ON agent_workdirs
+             BEGIN SELECT RAISE(ABORT, 'unexpected summary rewrite'); END;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let runtime = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        path.clone(),
+        "runtime-new",
+        u64::MAX,
+        u64::MAX,
+    ))
+    .unwrap();
+    assert!(
+        LocalHistoryReader::status(&path)
+            .unwrap()
+            .last_retention_error
+            .is_none()
+    );
+    runtime.run_retention_now(u64::MAX, u64::MAX).unwrap();
+    assert_eq!(
+        LocalHistoryReader::agent_summaries(&path, &records).unwrap(),
+        summaries_before
+    );
+    assert_eq!(
+        LocalHistoryReader::query(&path, &HistoryQuery::recent(10))
+            .unwrap()
+            .len(),
+        1
+    );
+    runtime.shutdown_blocking().unwrap();
+}
+
+#[test]
 fn size_retention_deletes_old_complete_units_in_bounded_batches() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("history.sqlite3");

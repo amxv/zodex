@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.6 - 2026-10-02
+
+- Fixed macOS Local startup delays during a busy login by running the explicitly started runtime and its children with interactive scheduling, avoiding background CPU and disk throttling.
+- Reduced cold-start history work by preserving existing summaries when retention has no expired invocations to delete. Added regression coverage for startup and recurring maintenance.
+- Added a bounded cold-start allowance on macOS and made readiness failures identify the component still starting. The menu bar returns at login while the Local runtime waits for an explicit start.
+
 ## 0.5.5 — 2026-09-26
 
 - Hardened `zodex local setup` against GitHub API `403`/rate-limit failures by resolving the official latest `tunnel-client` release from its published `SHA256SUMS.txt` manifest and then downloading the exact versioned asset, instead of depending on the unauthenticated GitHub Releases API.

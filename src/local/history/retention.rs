@@ -39,7 +39,7 @@ impl HistoryStore {
                         })?;
                 }
             }
-            transaction
+            let deleted = transaction
                 .execute(
                     "DELETE FROM invocations
                      WHERE evidence_state != 'pending'
@@ -49,7 +49,12 @@ impl HistoryStore {
                     [cutoff],
                 )
                 .context("failed to delete age-expired Local invocation units")?;
-            recompute_summaries(&transaction)?;
+            // Summaries already reflect every admitted invocation. Rebuilding
+            // them without a deletion adds a full history scan and needless
+            // writes to every cold start and maintenance pass.
+            if deleted > 0 {
+                recompute_summaries(&transaction)?;
+            }
             transaction
                 .commit()
                 .context("failed to commit Local age retention")?;

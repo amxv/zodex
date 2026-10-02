@@ -900,9 +900,7 @@ pub async fn wait_for_runtime_ready(
     while Instant::now() < deadline {
         match load_runtime_state(paths) {
             Ok(Some(state)) if state.runtime_id == expected_runtime_id => {
-                if let Some(error) = state.health.last_error.as_deref() {
-                    last_reason = error.to_string();
-                }
+                last_reason = pending_readiness_reason(&state);
                 if state.lifecycle == LocalRuntimeLifecycle::Ready
                     && state.health.mcp_ready
                     && state.health.observability_ready
@@ -938,6 +936,28 @@ pub async fn wait_for_runtime_ready(
         "Zodex Local did not reach composite readiness within {}s: {last_reason}; inspect `zodex local status` and `zodex local logs`",
         timeout.as_secs()
     )
+}
+
+fn pending_readiness_reason(state: &LocalRuntimeState) -> String {
+    if let Some(error) = state.health.last_error.as_ref() {
+        return error.clone();
+    }
+    let reason = if state.process.is_none() {
+        "runtime has not published process state"
+    } else if !state.health.observability_ready {
+        "runtime is initializing MCP, history, and observability"
+    } else if !state.health.mcp_ready {
+        "runtime is verifying MCP readiness"
+    } else if !state.health.tunnel_process_running {
+        "runtime is launching the tunnel client"
+    } else if !state.health.tunnel_control_plane_ready {
+        "tunnel client is connecting to the control plane"
+    } else if !state.health.tunnel_ready {
+        "tunnel client is waiting for tunnel readiness"
+    } else {
+        "runtime is publishing discovery"
+    };
+    reason.to_string()
 }
 
 pub(super) fn healthy_existing_discovery(

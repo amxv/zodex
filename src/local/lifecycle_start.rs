@@ -16,6 +16,11 @@ use super::{
     LaunchdController, LocalPaths, LocalRuntimeDiscovery, LocalStatusDocument, load_runtime_state,
 };
 
+// A cold macOS login can delay process initialization before the tunnel gets
+// its own readiness window. Keep a bounded allowance for that initial work.
+#[cfg(target_os = "macos")]
+const START_READY_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(not(target_os = "macos"))]
 const START_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const START_ATTEMPTS: usize = 2;
 

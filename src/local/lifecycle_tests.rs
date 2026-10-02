@@ -337,6 +337,41 @@ async fn runtime_ready_wait_requires_every_composite_health_boundary() {
     assert_eq!(ready.runtime_id, state.runtime_id);
 }
 
+#[tokio::test]
+async fn pending_readiness_reports_a_live_runtime_initializing_history() {
+    // The old default timeout text claimed launchd never published a process
+    // even after the runtime had started and was initializing its history.
+    let dir = tempdir().unwrap();
+    let paths = test_paths(dir.path());
+    let state = LocalRuntimeState {
+        schema_version: LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
+        runtime_id: "runtime-cold-start".to_string(),
+        lifecycle: LocalRuntimeLifecycle::Starting,
+        process: SystemProcessInspector
+            .identity(std::process::id() as i32)
+            .unwrap(),
+        start_directory: None,
+        started_at: None,
+        expires_at: None,
+        health: LocalRuntimeHealth::default(),
+    };
+    assert!(state.process.is_some());
+    write_runtime_state(&paths, &state).unwrap();
+    let error = wait_for_runtime_ready(&paths, &state.runtime_id, Duration::from_millis(20))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("runtime is initializing MCP, history, and observability")
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains("has not published process state")
+    );
+}
+
 #[test]
 fn stale_cleanup_removes_only_disposable_runtime_artifacts() {
     let dir = tempdir().unwrap();
