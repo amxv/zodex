@@ -11,6 +11,7 @@ try {
     # The parent CLI has to exit before Windows allows replacing zodex.exe.
     Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    $trayWasInstalled = Test-Path -LiteralPath $TrayDestination -PathType Leaf
     $trayWasRunning = $false
     # Only stop a tray helper belonging to this exact installation.
     $trays = @(Get-CimInstance Win32_Process -Filter "Name='zodex-tray.exe'" -ErrorAction SilentlyContinue |
@@ -33,7 +34,20 @@ try {
     if (-not $replaced) { throw 'Could not replace the Zodex tray executable' }
     Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $TraySource -Force -ErrorAction SilentlyContinue
-    if ($trayWasRunning) { Start-Process -FilePath $TrayDestination -WindowStyle Hidden }
+    if (-not $trayWasInstalled) {
+        # A 0.5.7 CLI may have arrived through the 0.5.6 self-updater, which
+        # copied only zodex.exe. This is the first time we install the tray.
+        $registration = Start-Process -FilePath $TrayDestination -ArgumentList '--enable-autostart' -Wait -PassThru -WindowStyle Hidden
+        if ($registration.ExitCode -ne 0) {
+            throw "Failed to enable the new Zodex tray at login (exit code $($registration.ExitCode))."
+        }
+        if ($env:ZODEX_SKIP_TRAY_LAUNCH -ne '1') {
+            Start-Process -FilePath $TrayDestination -WindowStyle Hidden
+        }
+    } elseif ($trayWasRunning) {
+        # Preserve deliberate Quit and Launch at Login opt-out choices.
+        Start-Process -FilePath $TrayDestination -WindowStyle Hidden
+    }
 } finally {
     Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
 }

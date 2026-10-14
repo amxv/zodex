@@ -110,6 +110,27 @@ jobs:
           XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --disable-autostart
           test "$(XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --autostart-status)" = disabled
 
+          # Simulate upgrading a pre-tray Local install without rerunning setup.
+          # The new tray should register for the next desktop login but never
+          # start Local or override a subsequent opt-out.
+          mkdir -p "$temp_config/source" "$temp_config/installed" "$temp_config/home"
+          cp target/debug/zodex "$temp_config/source/zodex"
+          cp apps/tray/target/debug/zodex-tray "$temp_config/source/zodex-tray"
+          printf 'old Zodex CLI\n' > "$temp_config/installed/zodex"
+          env HOME="$temp_config/home" XDG_CONFIG_HOME="$temp_config" \
+            ZODEX_INSTALL_MODE=operator ZODEX_UPGRADE_MODE=1 ZODEX_SKIP_TRAY_LAUNCH=1 \
+            ZODEX_BINARY_SOURCE_DIR="$temp_config/source" ZODEX_INSTALL_DIR="$temp_config/installed" \
+            bash scripts/install.sh
+          test -x "$temp_config/installed/zodex-tray"
+          test "$(XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --autostart-status)" = enabled
+          test ! -d "$temp_config/home/.local/state/zodex/local/runtime"
+          XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --disable-autostart
+          env HOME="$temp_config/home" XDG_CONFIG_HOME="$temp_config" \
+            ZODEX_INSTALL_MODE=operator ZODEX_UPGRADE_MODE=1 ZODEX_SKIP_TRAY_LAUNCH=1 \
+            ZODEX_BINARY_SOURCE_DIR="$temp_config/source" ZODEX_INSTALL_DIR="$temp_config/installed" \
+            bash scripts/install.sh
+          test "$(XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --autostart-status)" = disabled
+
       - name: Run repository validation
         shell: bash
         env:
@@ -276,14 +297,27 @@ jobs:
           $disable = Start-Process -FilePath $tray -ArgumentList '--disable-autostart' -Wait -PassThru -WindowStyle Hidden
           if ($disable.ExitCode -ne 0) { throw 'Windows tray startup deregistration failed' }
 
+      - name: Exercise pre-tray Windows upgrade migration
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP 'zodex-tray-ci-package'
+          $archiveName = 'zodex-x86_64-pc-windows-msvc'
+          $packageDir = Join-Path $temp $archiveName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item 'target/debug/zodex.exe' "$packageDir/zodex.exe"
+          Copy-Item 'apps/tray/target/debug/zodex-tray.exe' "$packageDir/zodex-tray.exe"
+          tar -C $temp -czf "$temp/$archiveName.tar.gz" $archiveName
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create Windows migration fixture archive' }
+          & "$env:GITHUB_WORKSPACE/tests/windows_tray_migration.ps1" -ReleaseArchive "$temp/$archiveName.tar.gz"
+
       - name: Validate Windows installer syntax
         shell: pwsh
         run: |
-          foreach ($file in @('install.ps1', 'finish-windows-upgrade.ps1')) {
+          foreach ($file in @('scripts/install.ps1', 'scripts/finish-windows-upgrade.ps1', 'tests/windows_tray_migration.ps1')) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(
-              "$env:GITHUB_WORKSPACE/scripts/$file",
+              "$env:GITHUB_WORKSPACE/$file",
               [ref]$tokens,
               [ref]$errors
             ) | Out-Null

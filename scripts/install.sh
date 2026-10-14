@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.1"
+SCRIPT_VERSION="0.2.2"
 
 ZODEX_VERSION="${ZODEX_VERSION:-latest}"
 ZODEX_INSTALL_MODE="${ZODEX_INSTALL_MODE:-auto}"
@@ -394,6 +394,8 @@ install_operator_binaries_from_dir() {
   [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"
   install -d -m 0755 "${install_dir}"
   ensure_local_stopped_before_operator_replace "${install_dir}/zodex"
+  local cli_was_installed=0
+  [[ -e "${install_dir}/zodex" ]] && cli_was_installed=1
 
   local app_destination=""
   local app_executable=""
@@ -414,7 +416,21 @@ install_operator_binaries_from_dir() {
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
 
   if [[ "$(uname -s)" == "Linux" && -x "${src_dir}/zodex-tray" ]]; then
+    local tray_was_installed=0
+    [[ -e "${install_dir}/zodex-tray" ]] && tray_was_installed=1
     install_operator_binary_atomically "${src_dir}/zodex-tray" "${install_dir}/zodex-tray"
+    if [[ "${tray_was_installed}" -eq 0 && "${cli_was_installed}" -eq 1 ]]; then
+      # Older self-updaters did not install the tray. Initial installation
+      # during an existing Local upgrade registers the desktop helper, not
+      # Zodex Local. Fresh installs defer to setup's --no-menu-bar preference;
+      # later upgrades never reset a user-controlled Launch at Login opt-out.
+      if ! "${install_dir}/zodex-tray" --enable-autostart; then
+        warn "tray installed but could not register desktop autostart; run 'zodex-tray --enable-autostart' when using a graphical desktop"
+      elif [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] \
+            && [[ "${ZODEX_SKIP_TRAY_LAUNCH:-0}" != "1" ]]; then
+        "${install_dir}/zodex-tray" </dev/null >/dev/null 2>&1 &
+      fi
+    fi
   fi
 
   if [[ -n "${app_destination}" ]]; then

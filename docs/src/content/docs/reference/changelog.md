@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.8 - 2026-10-15
+
+- Fixed first-time Windows/Linux tray migration when upgrading an existing Local installation. If the tray was absent, the installer now registers it at desktop sign-in and launches it immediately where a desktop session is available, without running Local setup or starting the Local runtime. Brand-new installs still defer tray registration to `zodex local setup`, respecting `--no-menu-bar`.
+- Preserved deliberate tray **Quit** and **Launch at Login** opt-outs on subsequent installs or self-upgrades. Windows upgrades detect a running Local executable and ask the user to stop it rather than silently interrupting a session.
+- Added regression coverage for upgrading a pre-tray Windows install, for the Windows CLI's tray-upgrade helper, and for Linux first-install autostart versus later opt-out behavior.
+- **Windows users coming directly from v0.5.6 must rerun the normal PowerShell installer** (`irm https://zodex.ashray.xyz/install.ps1 | iex`) rather than `zodex upgrade` once: the older self-updater only knew how to install `zodex.exe`. Existing Zodex Local credentials and configuration remain intact.
+
 ## 0.5.7 - 2026-10-14
 
 - Added a lightweight standalone Rust system tray app for Windows x86-64 and Linux x86-64/ARM64, matching macOS's Start, Stop, Liveboard, folder, update, and Launch at Login shortcuts without importing Zodex runtime internals.
