@@ -50,6 +50,8 @@ zodex local --help
 
 On Linux and macOS, the normal non-root install uses `~/.local/bin`. On Windows, the PowerShell installer uses `%LOCALAPPDATA%\Programs\Zodex` by default and adds it to the user's PATH.
 
+If Zodex Local is **already configured**, the installer is also a non-destructive upgrade path. On Windows, upgrading from v0.5.6 to v0.5.8 or later should use the PowerShell installer above (not the v0.5.6 `zodex upgrade` command), because that older self-updater only knew how to replace `zodex.exe`. This installs and opens the new tray and enables it at user login without repeating `zodex local setup` or starting Local. Stop any running Local instance before replacing its Windows executable.
+
 The Local runtime is part of the `zodex` operator binary. You do not install a separate `zodexd` service on the Local host.
 
 ## Create the tunnel in OpenAI Platform

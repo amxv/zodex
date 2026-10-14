@@ -152,29 +152,13 @@ jobs:
           $trayVersion = Start-Process -FilePath $tray -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
           if ($trayVersion.ExitCode -ne 0) { throw 'Windows tray version check failed' }
 
-          $installDir = Join-Path $smoke "installed"
-          $assetPath = (Resolve-Path -LiteralPath "dist/$archiveName.tar.gz").Path
-          $env:ZODEX_ASSET_URL = [Uri]::new($assetPath).AbsoluteUri
-          $env:ZODEX_INSTALL_DIR = $installDir
-          & "$env:GITHUB_WORKSPACE/scripts/install.ps1"
-          if ($LASTEXITCODE -ne 0) { throw "Windows installer smoke test failed" }
-          $installed = Join-Path $installDir "zodex.exe"
-          if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
-            throw "Windows installer did not install zodex.exe"
-          }
-          if (-not (Test-Path -LiteralPath (Join-Path $installDir 'zodex-tray.exe') -PathType Leaf)) {
-            throw 'Windows installer did not install zodex-tray.exe'
-          }
-          & $installed --version
-          if ($LASTEXITCODE -ne 0) { throw "installed zodex --version failed" }
-          Remove-Item Env:ZODEX_ASSET_URL -ErrorAction SilentlyContinue
-          Remove-Item Env:ZODEX_INSTALL_DIR -ErrorAction SilentlyContinue
+          & "$env:GITHUB_WORKSPACE/tests/windows_tray_migration.ps1" -ReleaseArchive "dist/$archiveName.tar.gz"
 
           $tokens = $null
           $errors = $null
-          foreach ($file in @('install.ps1', 'finish-windows-upgrade.ps1')) {
+          foreach ($file in @('scripts/install.ps1', 'scripts/finish-windows-upgrade.ps1', 'tests/windows_tray_migration.ps1')) {
             [System.Management.Automation.Language.Parser]::ParseFile(
-              "$env:GITHUB_WORKSPACE/scripts/$file",
+              "$env:GITHUB_WORKSPACE/$file",
               [ref]$tokens,
               [ref]$errors
             ) | Out-Null

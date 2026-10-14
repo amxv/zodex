@@ -57,7 +57,18 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    $InstalledCli = Join-Path $InstallDir 'zodex.exe'
+    $CliWasInstalled = Test-Path -LiteralPath $InstalledCli -PathType Leaf
     $InstalledTray = Join-Path $InstallDir 'zodex-tray.exe'
+    $TrayWasInstalled = Test-Path -LiteralPath $InstalledTray -PathType Leaf
+    # Do not interrupt a running Local runtime or overwrite its loaded binary.
+    # This installer is also the upgrade path for v0.5.6, whose self-updater
+    # does not know how to install additional executables.
+    $RunningLocal = @(Get-CimInstance Win32_Process -Filter "Name='zodex.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $InstalledCli })
+    if ($RunningLocal.Count -gt 0) {
+        throw 'Zodex is running from this installation. Run zodex local stop before upgrading; the installer will not stop Local for you.'
+    }
     $WasRunning = $false
     # Windows locks the executable of a running tray. Stop only the matching
     # per-user helper at our destination, never other Zodex installations.
@@ -68,7 +79,7 @@ try {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         }
     try {
-        Copy-Item -LiteralPath $Source -Destination (Join-Path $InstallDir 'zodex.exe') -Force
+        Copy-Item -LiteralPath $Source -Destination $InstalledCli -Force
         $Replaced = $false
         for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
             try {
@@ -86,6 +97,21 @@ try {
         }
     }
 
+    if ($CliWasInstalled -and -not $TrayWasInstalled) {
+        # The operator was already installed but the tray was not (0.5.6
+        # upgrades). Only register the convenience tray, never Local itself.
+        # A fresh install waits for `zodex local setup` so --no-menu-bar works;
+        # a later upgrade preserves users' explicit login/quit preferences.
+        $Registration = Start-Process -FilePath $InstalledTray -ArgumentList '--enable-autostart' -Wait -PassThru -WindowStyle Hidden
+        if ($Registration.ExitCode -ne 0) {
+            throw "Zodex tray was installed, but Launch at Login registration failed (exit code $($Registration.ExitCode))."
+        }
+        if ($env:ZODEX_SKIP_TRAY_LAUNCH -ne '1') {
+            Start-Process -FilePath $InstalledTray -WindowStyle Hidden
+        }
+        Write-Host 'Zodex tray enabled at login. Zodex Local remains stopped until manually started.'
+    }
+
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $PathParts = @($UserPath -split ';' | Where-Object { $_ })
     if (-not ($PathParts | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') })) {
@@ -96,8 +122,8 @@ try {
         $env:Path = "$InstallDir;$env:Path"
     }
 
-    Write-Host "Installed Zodex to $(Join-Path $InstallDir 'zodex.exe')"
-    Write-Host 'Run: zodex local setup'
+    Write-Host "Installed Zodex to $InstalledCli"
+    Write-Host 'If this is a first installation, run: zodex local setup'
 } finally {
     Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
 }

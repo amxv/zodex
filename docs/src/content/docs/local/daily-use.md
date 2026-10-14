@@ -236,6 +236,14 @@ zodex upgrade --stop-local
 
 The release checksum is verified before installation. Your Local configuration, platform credential storage, durable history, and platform-specific viewer/control preferences are preserved. On macOS and Windows, if the menu/tray app is open, the upgrade restarts it into the new version; if intentionally quit, it remains quit. On Linux, the new tray executable is installed without changing the running Local runtime and takes effect when the tray next starts.
 
+**Upgrading Windows from v0.5.6 to v0.5.8 or later:** rerun the regular PowerShell installer instead of using `zodex upgrade` for this one transition:
+
+```powershell
+irm https://zodex.ashray.xyz/install.ps1 | iex
+```
+
+The v0.5.6 self-updater copied only the CLI executable, so it cannot install a brand-new tray. The current installer checks the release archive, installs the missing tray, enables Launch at Login, and opens the tray immediately. It **does not** rerun Local setup or start the Local runtime. If Local is currently running, stop it before replacing the operator. Later upgrades preserve a user's decision to disable Launch at Login or quit the tray.
+
 The menu bar and tray use this same CLI upgrade contract. They show **Update to v…** when one is available and offer **Stop and Update** only when the CLI reports that Local is blocking the update.
 
 ## What happens on logout or reboot?
