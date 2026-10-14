@@ -413,6 +413,10 @@ install_operator_binaries_from_dir() {
 
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
 
+  if [[ "$(uname -s)" == "Linux" && -x "${src_dir}/zodex-tray" ]]; then
+    install_operator_binary_atomically "${src_dir}/zodex-tray" "${install_dir}/zodex-tray"
+  fi
+
   if [[ -n "${app_destination}" ]]; then
     if [[ -x "${app_executable}" ]] \
         && stop_zodex_menubar_before_replace "${app_executable}"; then
@@ -453,6 +457,9 @@ EOF
 
   if [[ -d "${install_dir}/Zodex.app" ]]; then
     printf '  %s\n' "${install_dir}/Zodex.app"
+  fi
+  if [[ -x "${install_dir}/zodex-tray" ]]; then
+    printf '  %s\n' "${install_dir}/zodex-tray"
   fi
 
   cat <<EOF

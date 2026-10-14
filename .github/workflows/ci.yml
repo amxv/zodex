@@ -19,6 +19,7 @@ on:
       - scripts/install.ps1
       - apps/liveboard/**
       - apps/menubar/**
+      - apps/tray/**
       - services/cloudflare-proxy/**
       - docs/src/content/docs/local.md
       - docs/src/content/docs/local/setup.md
@@ -43,6 +44,7 @@ on:
       - scripts/install.ps1
       - apps/liveboard/**
       - apps/menubar/**
+      - apps/tray/**
       - services/cloudflare-proxy/**
       - docs/src/content/docs/local.md
       - docs/src/content/docs/local/setup.md
@@ -93,6 +95,20 @@ jobs:
           target/debug/zodex local setup --help
           target/debug/zodex local start --help
           target/debug/zodex local watch --help
+
+      - name: Validate Linux desktop tray helper
+        run: |
+          cargo test --locked --manifest-path apps/tray/Cargo.toml
+          cargo build --locked --manifest-path apps/tray/Cargo.toml
+          apps/tray/target/debug/zodex-tray --version
+          apps/tray/target/debug/zodex-tray --autostart-status
+          temp_config="$(mktemp -d)"
+          trap 'rm -rf "$temp_config"' EXIT
+          XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --enable-autostart
+          grep '^Exec=' "$temp_config/autostart/zodex-tray.desktop"
+          test "$(XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --autostart-status)" = enabled
+          XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --disable-autostart
+          test "$(XDG_CONFIG_HOME="$temp_config" apps/tray/target/debug/zodex-tray --autostart-status)" = disabled
 
       - name: Run repository validation
         shell: bash
@@ -245,17 +261,34 @@ jobs:
           .\target\debug\zodex.exe local watch --help | Out-Null
           .\target\debug\zodex.exe upgrade --help | Out-Null
 
+      - name: Validate Windows tray helper
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path apps/tray/Cargo.toml
+          cargo build --locked --manifest-path apps/tray/Cargo.toml
+          $tray = (Resolve-Path '.\apps\tray\target\debug\zodex-tray.exe').Path
+          $check = Start-Process -FilePath $tray -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
+          if ($check.ExitCode -ne 0) { throw 'Windows tray failed its version smoke test' }
+          $enable = Start-Process -FilePath $tray -ArgumentList '--enable-autostart' -Wait -PassThru -WindowStyle Hidden
+          if ($enable.ExitCode -ne 0) { throw 'Windows tray startup registration failed' }
+          $value = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').ZodexTray
+          if ($value -notlike '*zodex-tray.exe*') { throw 'Windows tray startup registration was not created' }
+          $disable = Start-Process -FilePath $tray -ArgumentList '--disable-autostart' -Wait -PassThru -WindowStyle Hidden
+          if ($disable.ExitCode -ne 0) { throw 'Windows tray startup deregistration failed' }
+
       - name: Validate Windows installer syntax
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            "$env:GITHUB_WORKSPACE/scripts/install.ps1",
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($file in @('install.ps1', 'finish-windows-upgrade.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              "$env:GITHUB_WORKSPACE/scripts/$file",
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
           }

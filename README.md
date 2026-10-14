@@ -22,7 +22,7 @@ One Local runtime can serve multiple ChatGPT conversations at once. Zodex gives 
 - **Live observability** — commands, output, diffs, process state, and Agent timelines in the browser Liveboard or terminal TUI.
 - **Durable history** — inspect previous tool activity even after the viewer or Local runtime stops.
 - **Explicit lifecycle** — start access when you want it, optionally give it a TTL, and stop it cleanly.
-- **Host-native controls** — Linux, macOS, and Windows include the browser Liveboard and terminal viewer; macOS additionally includes an optional menu-bar app. Linux stores the tunnel key in a user-only credential file and Windows uses Windows Credential Manager.
+- **Host-native controls** — Linux, macOS, and Windows include Liveboard and a terminal viewer. macOS has a native Swift menu bar app; Windows and graphical Linux desktops have a lightweight Rust system tray. The tray starts at login by default, but Zodex Local does not. Linux stores the tunnel key in a user-only credential file and Windows uses Windows Credential Manager.
 
 Local is intentionally a **trusted-host mode, not a sandbox**. ChatGPT receives the same filesystem and developer-tool access your logged-in user has, subject to the host operating system's normal permissions.
 

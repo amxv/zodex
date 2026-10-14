@@ -6,15 +6,15 @@ category: Local
 summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, durable history, logs, and clean shutdown."
 ---
 
-Once [Local setup](/docs/local/setup) is complete, use the CLI on any supported platform. macOS also offers the optional Zodex menu bar app.
+Once [Local setup](/docs/local/setup) is complete, use the CLI on any supported platform. macOS also provides a native menu bar app, while Windows and graphical Linux desktops offer a lightweight Rust system tray.
 
-On macOS, `zodex local setup` enables the small menu bar app by default. It returns automatically when you next log in, while the Zodex Local runtime itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
+On all supported graphical desktops, `zodex local setup` enables the menu bar or system tray app by default. It opens automatically at your next login, while Zodex Local itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
 
 ```bash
 zodex local menu
 ```
 
-Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu bar. The app refreshes status when you open its menu and immediately after relevant user actions, with no background polling timer. Update checks also happen only when you open the menu or choose **Check for Updates…**; repeated menu opens use the CLI's short cache. Toggle **Launch at Login** off whenever you no longer want the menu app to return after logout or restart.
+Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling; the Windows/Linux tray refreshes status periodically and after actions. The Mac app checks for updates when you open its menu; Windows/Linux check on request. Toggle **Launch at Login** off whenever you no longer want the menu/tray app to return after logout or restart. **Quit** does not stop the Zodex Local runtime.
 
 ## Start from the project you want ChatGPT to begin with
 
@@ -234,9 +234,9 @@ On Linux, macOS, and Windows, an update that would replace a running Local runti
 zodex upgrade --stop-local
 ```
 
-The release checksum is verified before installation. Your Local configuration, platform credential storage, durable history, and platform-specific viewer/control preferences are preserved. On macOS, if the menu bar app is open, it restarts into the new version; if you had intentionally quit it, the upgrade leaves it quit.
+The release checksum is verified before installation. Your Local configuration, platform credential storage, durable history, and platform-specific viewer/control preferences are preserved. On macOS and Windows, if the menu/tray app is open, the upgrade restarts it into the new version; if intentionally quit, it remains quit. On Linux, the new tray executable is installed without changing the running Local runtime and takes effect when the tray next starts.
 
-The menu bar uses this same CLI upgrade contract. It checks for updates when you open the menu, shows **Update to v…** when one is available, and offers **Stop and Update** only when the CLI reports that Local is blocking the update.
+The menu bar and tray use this same CLI upgrade contract. They show **Update to v…** when one is available and offer **Stop and Update** only when the CLI reports that Local is blocking the update.
 
 ## What happens on logout or reboot?
 
@@ -245,6 +245,8 @@ Local is not an auto-start login service. A later login/reboot requires another 
 ```bash
 zodex local start
 ```
+
+Or simply click **Start Zodex** in the menu bar/system tray, which returns automatically at login unless you disabled that preference.
 
 That is intentional: access is something you turn on, optionally give a TTL, and turn off.
 

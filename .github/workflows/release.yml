@@ -85,6 +85,19 @@ jobs:
         run: |
           apps/menubar/build.sh "target/${{ matrix.target }}/release/Zodex.app"
 
+      - name: Build Linux tray helper
+        if: contains(matrix.target, 'linux')
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: |
+          cargo build --locked --release --manifest-path apps/tray/Cargo.toml --target "${{ matrix.target }}"
+          test -x "apps/tray/target/${{ matrix.target }}/release/zodex-tray"
+
+      - name: Build Windows tray helper
+        if: ${{ matrix.windows }}
+        shell: pwsh
+        run: cargo build --locked --release --manifest-path apps/tray/Cargo.toml --target "${{ matrix.target }}"
+
       - name: Package release archive
         if: ${{ !matrix.windows }}
         run: |
@@ -96,6 +109,9 @@ jobs:
           cp "target/${{ matrix.target }}/release/zodex-prd" "dist/${{ matrix.archive_name }}/"
           if [[ -d "target/${{ matrix.target }}/release/Zodex.app" ]]; then
             cp -R "target/${{ matrix.target }}/release/Zodex.app" "dist/${{ matrix.archive_name }}/"
+          fi
+          if [[ -f "apps/tray/target/${{ matrix.target }}/release/zodex-tray" ]]; then
+            cp "apps/tray/target/${{ matrix.target }}/release/zodex-tray" "dist/${{ matrix.archive_name }}/"
           fi
           tar -C dist -czf "dist/${{ matrix.archive_name }}.tar.gz" "${{ matrix.archive_name }}"
           (
@@ -112,6 +128,7 @@ jobs:
           $packageDir = "dist/$archiveName"
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item "target/$target/release/zodex.exe" "$packageDir/zodex.exe"
+          Copy-Item "apps/tray/target/$target/release/zodex-tray.exe" "$packageDir/zodex-tray.exe"
           tar -C dist -czf "dist/$archiveName.tar.gz" $archiveName
           $hash = (Get-FileHash "dist/$archiveName.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archiveName.tar.gz" | Set-Content -Encoding ascii "dist/$archiveName.tar.gz.sha256"
@@ -130,6 +147,10 @@ jobs:
           & $zodex local setup --help | Out-Null
           & $zodex local watch --help | Out-Null
           & $zodex upgrade --help | Out-Null
+          $tray = Join-Path $smoke "$archiveName/zodex-tray.exe"
+          if (-not (Test-Path -LiteralPath $tray -PathType Leaf)) { throw 'Windows tray is missing' }
+          $trayVersion = Start-Process -FilePath $tray -ArgumentList '--version' -Wait -PassThru -WindowStyle Hidden
+          if ($trayVersion.ExitCode -ne 0) { throw 'Windows tray version check failed' }
 
           $installDir = Join-Path $smoke "installed"
           $assetPath = (Resolve-Path -LiteralPath "dist/$archiveName.tar.gz").Path
@@ -141,6 +162,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
             throw "Windows installer did not install zodex.exe"
           }
+          if (-not (Test-Path -LiteralPath (Join-Path $installDir 'zodex-tray.exe') -PathType Leaf)) {
+            throw 'Windows installer did not install zodex-tray.exe'
+          }
           & $installed --version
           if ($LASTEXITCODE -ne 0) { throw "installed zodex --version failed" }
           Remove-Item Env:ZODEX_ASSET_URL -ErrorAction SilentlyContinue
@@ -148,14 +172,16 @@ jobs:
 
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            "$env:GITHUB_WORKSPACE/scripts/install.ps1",
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            throw "Windows installer syntax is invalid"
+          foreach ($file in @('install.ps1', 'finish-windows-upgrade.ps1')) {
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              "$env:GITHUB_WORKSPACE/scripts/$file",
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "Windows $file syntax is invalid"
+            }
           }
 
       - name: Smoke test packaged macOS Local operator
