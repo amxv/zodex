@@ -3,7 +3,7 @@ title: "Command reference"
 description: "A compact reference for every public zodex local command, argument, option, and common example."
 order: 7
 category: Local
-summary: "The public Local CLI: setup, start, status, watch, history, config, logs, stop, plus macOS menu-bar controls."
+summary: "The public Local CLI: setup, start, status, watch, history, config, logs, stop, plus cross-platform menu/tray controls."
 ---
 
 Use this page when you already understand [Local](/docs/local) and just need the exact command surface.
@@ -46,11 +46,11 @@ printf '%s\n' "$OPENAI_TUNNEL_RUNTIME_KEY" \
 
 `--runtime-key-fd` is Unix-only. Windows automation should use stdin or an environment variable.
 
-On macOS, setup enables and opens the lightweight Zodex menu bar app by default. It is registered to return when you next log in, but it does not start the Zodex Local runtime. Pass `--no-menu-bar` to leave the bundled menu app disabled and unopened.
+On macOS, setup enables and opens the lightweight Zodex Swift menu bar app by default. It is registered to return when you next log in, but it does not start the Zodex Local runtime.
 
-On Linux, setup stores the runtime key in a mode-`0600` user-only credential file, installs the Linux tunnel-client bundle, and ignores the menu-bar option.
+On Linux, setup stores the runtime key in a mode-`0600` user-only credential file, installs the Linux tunnel-client bundle, and enables a Rust D-Bus status notifier tray for graphical desktop logins by default. A headless setup never attempts to open a tray but still registers it for a future desktop login.
 
-On Windows, setup stores the runtime key in Windows Credential Manager, installs the Windows tunnel-client bundle, and ignores the menu-bar option.
+On Windows, setup stores the runtime key in Windows Credential Manager, installs the Windows tunnel-client bundle, and enables the Rust notification-area tray for login by default. **All three platforms** support `--no-menu-bar` (alias `--no-tray`) to skip enabling/opening the control surface during setup.
 
 ## `zodex local start`
 
@@ -132,13 +132,13 @@ On Linux, macOS, and Windows, plain `watch` opens the runtime-owned same-origin 
 zodex local menu
 ```
 
-On Apple Silicon macOS, this opens the lightweight Zodex menu bar app. Linux and Windows do not provide this macOS-only control surface; use `zodex local start`, `watch`, `status`, and `stop` from your terminal.
+On Apple Silicon macOS, this opens the Swift menu bar app. On Windows and graphical Linux desktops, it opens the Rust system tray. On headless Linux, continue using the CLI.
 
-**Launch at Login** is enabled by default after `zodex local setup`. Turn that checked menu item off if you no longer want the menu app to return after logout or restart. Choosing **Quit** only exits the current menu app session; it does not start or stop Zodex Local and does not make the app relaunch before the next login.
+**Launch at Login** is enabled by default after `zodex local setup`. Turn that checked menu item off if you no longer want the menu/tray app to return after logout or restart. Choosing **Quit** only exits the current menu/tray session; it does not start or stop Zodex Local and does not make the app relaunch before the next login.
 
 ## `zodex upgrade`
 
-The root upgrade command is also the menu bar's update backend:
+The root upgrade command is also the menu bar/tray update backend:
 
 ```bash
 zodex upgrade
@@ -151,7 +151,7 @@ zodex upgrade --check --format json
 
 An already-current upgrade exits before downloading the release archive. Human mode streams progress; JSON mode emits the stable upgrade event stream used by the menu app. `--stop-local` is explicit authorization to stop blocking Local state before installation. Release downloads are pinned to the version resolved by the CLI and checksum-verified before the embedded low-level installer replaces the operator and menu app.
 
-**Start Zodex** enters your configured interactive login shell before it invokes `zodex local start`, so a menu app launched by macOS still captures the normal shell environment used for Homebrew, language toolchains, user-installed CLIs, credentials, and PATH customizations.
+**Start Zodex** captures the configured interactive login shell on macOS/Linux before invoking `zodex local start`, so a menu/tray launched at login still sees language toolchains, user-installed CLIs, credentials, and PATH customizations. Windows inherits the logged-in user's environment.
 
 ## `zodex local history`
 

@@ -60,8 +60,8 @@ enum LocalCommand {
         /// Generate a new localhost observability bearer instead of reusing the current one.
         #[arg(long)]
         rotate_observability_bearer: bool,
-        /// Skip launching/enabling the macOS menu bar controls (ignored on Linux/Windows).
-        #[arg(long)]
+        /// Skip enabling the macOS menu bar or Windows/Linux tray at login.
+        #[arg(long, alias = "no-tray")]
         no_menu_bar: bool,
     },
     /// Start the one machine-wide Local runtime from a repository or workspace.
@@ -95,8 +95,8 @@ enum LocalCommand {
         #[command(subcommand)]
         command: Option<LocalWatchCommand>,
     },
-    #[cfg(target_os = "macos")]
-    /// Open the lightweight macOS menu bar controls for Local.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    /// Open the lightweight menu bar / system tray controls for Local.
     Menu,
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
@@ -249,7 +249,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 }
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         LocalCommand::Menu => {
             ensure_local_runtime_host()?;
             run_native_local_menu()
@@ -405,6 +405,72 @@ fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
         );
     }
     if enable_at_login {
+        run_native_local_menu()?;
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn native_local_tray_binary() -> Result<PathBuf> {
+    let executable = env::current_exe()
+        .context("failed to resolve installed Zodex executable")?
+        .canonicalize()
+        .context("failed to canonicalize installed Zodex executable")?;
+    let tray = executable
+        .parent()
+        .context("installed Zodex executable has no parent directory")?
+        .join(if cfg!(windows) { "zodex-tray.exe" } else { "zodex-tray" });
+    if !tray.is_file() {
+        bail!("Zodex tray app is missing at {}; reinstall or upgrade Zodex", tray.display());
+    }
+    Ok(tray)
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn run_native_local_menu() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+        bail!("Zodex tray requires a graphical desktop session; use the Local CLI on headless Linux");
+    }
+
+    let tray = native_local_tray_binary()?;
+    let mut command = Command::new(&tray);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .spawn()
+        .with_context(|| format!("failed to launch Zodex system tray at {}", tray.display()))?;
+    println!("Zodex tray controls launched (Local is not started).");
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
+    let tray = native_local_tray_binary()?;
+    let command = if enable_at_login { "--enable-autostart" } else { "--disable-autostart" };
+    let output = Command::new(&tray)
+        .arg(command)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to configure Zodex tray at {}", tray.display()))?;
+    if !output.status.success() {
+        bail!(
+            "could not configure Zodex tray launch at login: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if enable_at_login {
+        #[cfg(target_os = "linux")]
+        if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+            // Headless installations have no panel. Install the desktop entry
+            // for future graphical logins without starting a GUI over SSH.
+            return Ok(());
+        }
         run_native_local_menu()?;
     }
     Ok(())
@@ -772,7 +838,7 @@ async fn run_native_local_setup(
     tunnel_id: String,
     runtime_key: RuntimeKey,
     rotate_observability_bearer: bool,
-    _enable_menu_bar: bool,
+    enable_menu_bar: bool,
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = WindowsTarArchiveExtractor;
@@ -800,7 +866,14 @@ async fn run_native_local_setup(
         "Observability bearer: {}",
         if result.observability_bearer_rotated { "generated/rotated" } else { "verified/reused" }
     );
-    println!("Windows Local uses terminal watch controls; `zodex local watch --tui` opens the activity viewer.");
+    if enable_menu_bar {
+        match configure_native_local_menu(true) {
+            Ok(()) => println!("Tray: enabled now and at future Windows sign-ins (Local stays stopped)"),
+            Err(error) => eprintln!("warning: Local setup succeeded but the tray could not be enabled: {error:#}"),
+        }
+    } else {
+        println!("Tray: skipped (--no-menu-bar)");
+    }
     Ok(())
 }
 
@@ -810,7 +883,7 @@ async fn run_native_local_setup(
     tunnel_id: String,
     runtime_key: RuntimeKey,
     rotate_observability_bearer: bool,
-    _enable_menu_bar: bool,
+    enable_menu_bar: bool,
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = LinuxZipArchiveExtractor;
@@ -841,7 +914,14 @@ async fn run_native_local_setup(
         "Observability bearer: {}",
         if result.observability_bearer_rotated { "generated/rotated" } else { "verified/reused" }
     );
-    println!("Linux Local uses terminal watch controls; `zodex local watch --tui` opens the activity viewer.");
+    if enable_menu_bar {
+        match configure_native_local_menu(true) {
+            Ok(()) => println!("Tray: enabled for graphical desktop logins (Local stays stopped)"),
+            Err(error) => eprintln!("warning: Local setup succeeded but the optional tray could not be enabled: {error:#}"),
+        }
+    } else {
+        println!("Tray: skipped (--no-menu-bar)");
+    }
     Ok(())
 }
 

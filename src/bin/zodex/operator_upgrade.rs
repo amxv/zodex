@@ -9,6 +9,8 @@ const OPERATOR_LATEST_API: &str = "https://api.github.com/repos/amxv/zodex/relea
 const OPERATOR_RELEASE_BASE: &str = "https://github.com/amxv/zodex/releases/download";
 #[cfg(not(target_os = "windows"))]
 const EMBEDDED_OPERATOR_INSTALLER: &str = include_str!("../../../scripts/install.sh");
+#[cfg(target_os = "windows")]
+const EMBEDDED_WINDOWS_UPGRADE_HELPER: &str = include_str!("../../../scripts/finish-windows-upgrade.ps1");
 const UPGRADE_CHECK_CACHE_SECONDS: i64 = 5 * 60;
 const UPGRADE_DOWNLOAD_ATTEMPTS: usize = 3;
 
@@ -822,8 +824,17 @@ fn install_extracted_operator_windows(
         )
     })?;
     let source = extracted_dir.join(operator_binary_name());
+    let tray_source = extracted_dir.join("zodex-tray.exe");
+    if !tray_source.is_file() {
+        return Err(UpgradeFailure::new(
+            "install_failed",
+            "Windows release archive is missing zodex-tray.exe",
+        ));
+    }
     let state = upgrade_state_root()?;
     let pending = state.join("pending-zodex.exe");
+    let pending_tray = state.join("pending-zodex-tray.exe");
+    let destination_tray = current.with_file_name("zodex-tray.exe");
     let helper = state.join("finish-upgrade.ps1");
     fs::copy(&source, &pending).map_err(|error| {
         UpgradeFailure::new(
@@ -831,22 +842,13 @@ fn install_extracted_operator_windows(
             format!("Could not stage Windows update at {}: {error}", pending.display()),
         )
     })?;
-    let script = r#"param(
-    [Parameter(Mandatory=$true)][string]$Source,
-    [Parameter(Mandatory=$true)][string]$Destination,
-    [Parameter(Mandatory=$true)][int]$ParentPid,
-    [Parameter(Mandatory=$true)][string]$ScriptPath
-)
-$ErrorActionPreference = 'Stop'
-try {
-    Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
-    Copy-Item -LiteralPath $Source -Destination $Destination -Force
-    Remove-Item -LiteralPath $Source -Force -ErrorAction SilentlyContinue
-} finally {
-    Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
-}
-"#;
-    fs::write(&helper, script).map_err(|error| {
+    fs::copy(&tray_source, &pending_tray).map_err(|error| {
+        UpgradeFailure::new(
+            "install_failed",
+            format!("Could not stage Windows tray update at {}: {error}", pending_tray.display()),
+        )
+    })?;
+    fs::write(&helper, EMBEDDED_WINDOWS_UPGRADE_HELPER).map_err(|error| {
         UpgradeFailure::new(
             "install_failed",
             format!("Could not write Windows upgrade helper {}: {error}", helper.display()),
@@ -859,6 +861,10 @@ try {
         .arg(&pending)
         .arg("-Destination")
         .arg(&current)
+        .arg("-TraySource")
+        .arg(&pending_tray)
+        .arg("-TrayDestination")
+        .arg(&destination_tray)
         .arg("-ParentPid")
         .arg(std::process::id().to_string())
         .arg("-ScriptPath")

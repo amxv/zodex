@@ -48,12 +48,43 @@ try {
     tar -C $Temp -xzf $Archive
     if ($LASTEXITCODE -ne 0) { throw 'Failed to extract the Zodex release archive.' }
     $Source = Join-Path $Temp 'zodex-x86_64-pc-windows-msvc\zodex.exe'
+    $TraySource = Join-Path $Temp 'zodex-x86_64-pc-windows-msvc\zodex-tray.exe'
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
         throw 'The Zodex Windows release archive did not contain zodex.exe.'
     }
+    if (-not (Test-Path -LiteralPath $TraySource -PathType Leaf)) {
+        throw 'The Zodex Windows release archive did not contain zodex-tray.exe.'
+    }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Copy-Item -LiteralPath $Source -Destination (Join-Path $InstallDir 'zodex.exe') -Force
+    $InstalledTray = Join-Path $InstallDir 'zodex-tray.exe'
+    $WasRunning = $false
+    # Windows locks the executable of a running tray. Stop only the matching
+    # per-user helper at our destination, never other Zodex installations.
+    Get-CimInstance Win32_Process -Filter "Name='zodex-tray.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $InstalledTray } |
+        ForEach-Object {
+            $WasRunning = $true
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    try {
+        Copy-Item -LiteralPath $Source -Destination (Join-Path $InstallDir 'zodex.exe') -Force
+        $Replaced = $false
+        for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
+            try {
+                Copy-Item -LiteralPath $TraySource -Destination $InstalledTray -Force -ErrorAction Stop
+                $Replaced = $true
+                break
+            } catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        if (-not $Replaced) { throw 'Could not replace the Zodex tray executable.' }
+    } finally {
+        if ($WasRunning -and (Test-Path -LiteralPath $InstalledTray -PathType Leaf)) {
+            Start-Process -FilePath $InstalledTray -WindowStyle Hidden
+        }
+    }
 
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $PathParts = @($UserPath -split ';' | Where-Object { $_ })

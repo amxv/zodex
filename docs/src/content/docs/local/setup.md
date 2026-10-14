@@ -120,17 +120,21 @@ On success, Zodex:
 - saves the non-secret tunnel configuration;
 - creates the automatically managed Local observability credential;
 - on macOS, enables and opens the lightweight Zodex menu bar app so it returns at future logins;
+- on Windows, enables and opens the lightweight Zodex system tray so it returns at future sign-ins;
+- on Linux, enables the lightweight system tray for future graphical desktop logins and opens it if a desktop session is active;
 - exits without leaving the Local runtime or tunnel running.
 
 Setup is idempotent, so running it again is also the repair/update path.
 
-The macOS menu app is only a control surface. Linux and Windows use the CLI instead; all three platforms can open the browser Liveboard with `zodex local watch` or the terminal viewer with `zodex local watch --tui`. Enabling the macOS app at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app on macOS, opt out during setup:
+All three desktop controls are convenience wrappers around the installed CLI. Enabling **Launch at Login** launches only the menu bar or system tray app; it **does not** start Zodex Local, the tunnel, or an Agent process. After reboot, use **Start Zodex** from the tray, or `zodex local start` in the terminal. If you do not want the menu app on macOS or the tray on Windows/Linux, opt out during setup:
 
 ```bash
 zodex local setup --no-menu-bar
 ```
 
-If you enable it initially and change your mind later, turn off **Launch at Login** from the Zodex menu. Choosing **Quit** exits it for the current login session without changing the Zodex Local runtime.
+`--no-tray` is an alias for the same option on Windows/Linux.
+
+If you enable it initially and change your mind later, turn off **Launch at Login** from the Zodex menu. Choosing **Quit** exits it for the current session without changing the Local runtime or the login setting. On Linux, the tray requires a graphical desktop and an AppIndicator/StatusNotifier-compatible panel (KDE Plasma and Ubuntu's supported GNOME sessions work; other GNOME installations may need an AppIndicator extension). Headless Linux continues to work entirely through the CLI; Linux's tray uses the D-Bus status notifier backend without GTK dependencies. Choosing a folder on Linux uses an installed `zenity`, `kdialog`, or `yad` desktop dialog.
 
 ## Scripted setup without putting the key on argv
 

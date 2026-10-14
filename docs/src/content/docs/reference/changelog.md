@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.7 - 2026-10-14
+
+- Added a lightweight standalone Rust system tray app for Windows x86-64 and Linux x86-64/ARM64, matching macOS's Start, Stop, Liveboard, folder, update, and Launch at Login shortcuts without importing Zodex runtime internals.
+- Windows now registers the tray at user sign-in and Linux uses the XDG desktop autostart standard. Both start only the tray: Zodex Local remains off after reboot until the user explicitly starts it.
+- Bundled the tray in existing operator releases and installers; Windows in-place upgrades replace and relaunch a running tray, while Linux uses the D-Bus status notifier backend without requiring GTK libraries.
+
 ## 0.5.6 - 2026-10-02
 
 - Fixed macOS Local startup delays during a busy login by running the explicitly started runtime and its children with interactive scheduling, avoiding background CPU and disk throttling.
