@@ -249,7 +249,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 }
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         LocalCommand::Menu => {
             ensure_local_runtime_host()?;
             run_native_local_menu()
