@@ -547,7 +547,7 @@ mod tests {
                 "background must be transparent"
             );
         }
-        assert_eq!(rgba[(8 * 32 + 16) * 4 + 3], 255, "top bar of Z");
+        assert_eq!(rgba[(7 * 32 + 16) * 4 + 3], 255, "top bar of Z");
         assert_eq!(rgba[(16 * 32 + 16) * 4 + 3], 255, "diagonal of Z");
         assert_eq!(rgba[(24 * 32 + 16) * 4 + 3], 255, "bottom bar of Z");
     }
