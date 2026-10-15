@@ -8,13 +8,27 @@ summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, 
 
 Once [Local setup](/docs/local/setup) is complete, use the CLI on any supported platform. macOS also provides a native menu bar app, while Windows and graphical Linux desktops offer a lightweight Rust system tray.
 
-On all supported graphical desktops, `zodex local setup` enables the menu bar or system tray app by default. It opens automatically at your next login, while Zodex Local itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
+On all supported graphical desktops, `zodex local setup` enables the menu bar or system tray app by default. It opens automatically at your next login, while Zodex Local itself remains stopped until you explicitly start it unless you opt into tunnel autostart. If you opted out during setup, you can still open the app manually:
 
 ```bash
 zodex local menu
 ```
 
-Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling. The Windows/Linux tray independently polls the actual Local status every two seconds, and every half-second during Start/Stop transitions; as soon as the CLI reports running or stopped, the corresponding controls update even if a launch/shutdown subprocess is still finishing. It shows **Status Unavailable**, not an invented runtime state, if the CLI check fails. The tray icon is a transparent Z, and hovering it shows the latest known status. The Mac app checks for updates when you open its menu; Windows/Linux check on request. Toggle **Launch at Login** off whenever you no longer want the menu/tray app to return after logout or restart. **Quit** does not stop the Zodex Local runtime.
+Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling. The Windows/Linux tray independently polls the actual Local status every two seconds, and every half-second during Start/Stop transitions; as soon as the CLI reports running or stopped, the corresponding controls update even if a launch/shutdown subprocess is still finishing. It shows **Status Unavailable**, not an invented runtime state, if the CLI check fails. The tray icon is a transparent Z, and hovering it shows the latest known status. The Mac app checks for updates when you open its menu; Windows/Linux check on request. **Quit** does not stop the Zodex Local runtime.
+
+### Launch the tunnel automatically at login (optional)
+
+Two separate checkboxes now appear in each desktop menu. **Launch Menu Bar at Login** (Mac) or **Launch Tray at Login** (Windows/Linux) controls whether the convenience app returns after a restart. **Launch Tunnel at Login**, immediately below it, is an independent opt-in that starts Zodex Local using the saved Start Folder whenever that app launches at a future desktop login. It's off by default, so existing installations keep their original behavior. Enabling it also enables the menu/tray login item; disabling the menu/tray login item disables tunnel autostart.
+
+The same settings are available in any terminal, without repeating setup:
+
+```bash
+zodex local autostart enable /absolute/workspace/path
+zodex local autostart status
+zodex local autostart disable
+```
+
+When enabled, Local starts in the background through the normal CLI with the same permissions and lifetime rules. Disabling the setting does not stop the running tunnel; it only prevents the next automatic login launch. Changes to the startup folder or the checkboxes are persisted. Headless Linux remains CLI-controlled rather than starting a desktop tray.
 
 ## Start from the project you want ChatGPT to begin with
 

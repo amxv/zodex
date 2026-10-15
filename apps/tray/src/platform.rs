@@ -10,9 +10,11 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Preferences {
     pub start_folder: Option<PathBuf>,
+    pub launch_tunnel_at_login: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -440,6 +442,7 @@ mod tests {
     fn saved_preferences_round_trip_without_secrets() {
         let value = Preferences {
             start_folder: Some(PathBuf::from("/tmp/zodex start folder")),
+            launch_tunnel_at_login: true,
         };
         let text = serde_json::to_string(&value).unwrap();
         assert_eq!(
@@ -449,6 +452,14 @@ mod tests {
             value.start_folder
         );
         assert!(!text.contains("runtime_key"));
+    }
+
+    #[test]
+    fn existing_tray_settings_do_not_start_tunnel_by_default() {
+        let old = r#"{"start_folder":"/tmp/previous-workspace"}"#;
+        let loaded: Preferences = serde_json::from_str(old).unwrap();
+        assert!(!loaded.launch_tunnel_at_login);
+        assert_eq!(loaded.start_folder, Some(PathBuf::from("/tmp/previous-workspace")));
     }
 
     #[cfg(target_os = "linux")]

@@ -131,6 +131,23 @@ jobs:
             bash scripts/install.sh
           test "$(XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --autostart-status)" = disabled
 
+          # CLI and tray share persisted login settings. Enabling only
+          # registers the tray for future desktop logins; the tunnel remains
+          # stopped now. Disabling preserves the selected start folder and the
+          # independent Launch Tray at Login setting.
+          login_cli=(env HOME="$temp_config/home" XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex")
+          "${login_cli[@]}" local autostart status --json | grep '"launch_tunnel_at_login":false'
+          "${login_cli[@]}" local autostart enable "$temp_config/source"
+          "${login_cli[@]}" local autostart status --json | grep '"launch_tunnel_at_login":true'
+          test "$(XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --autostart-status)" = enabled
+          test ! -e "$temp_config/home/.local/state/zodex/local/runtime/state.json"
+          "${login_cli[@]}" local autostart disable
+          "${login_cli[@]}" local autostart status --json | grep '"launch_tunnel_at_login":false'
+          grep -F "$temp_config/source" "$temp_config/zodex/tray.json"
+          test "$(XDG_CONFIG_HOME="$temp_config" "$temp_config/installed/zodex-tray" --autostart-status)" = enabled
+          "${login_cli[@]}" local autostart folder "$temp_config/home"
+          grep -F "$temp_config/home" "$temp_config/zodex/tray.json"
+
       - name: Run repository validation
         shell: bash
         env:
@@ -296,6 +313,56 @@ jobs:
           if ($value -notlike '*zodex-tray.exe*') { throw 'Windows tray startup registration was not created' }
           $disable = Start-Process -FilePath $tray -ArgumentList '--disable-autostart' -Wait -PassThru -WindowStyle Hidden
           if ($disable.ExitCode -ne 0) { throw 'Windows tray startup deregistration failed' }
+
+      - name: Validate Windows tunnel autostart CLI and shared preferences
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP 'zodex-login-ci'
+          $bin = Join-Path $temp 'bin'
+          $appdata = Join-Path $temp 'appdata'
+          $workspace = Join-Path $temp 'workspace'
+          New-Item -ItemType Directory -Force -Path $bin, $appdata, $workspace | Out-Null
+          Copy-Item 'target/debug/zodex.exe' "$bin/zodex.exe"
+          Copy-Item 'apps/tray/target/debug/zodex-tray.exe' "$bin/zodex-tray.exe"
+          $cli = Join-Path $bin 'zodex.exe'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $oldValue = (Get-ItemProperty -Path $runKey -Name ZodexTray -ErrorAction SilentlyContinue).ZodexTray
+          $oldAppData = $env:APPDATA
+          $oldXdgConfig = $env:XDG_CONFIG_HOME
+          try {
+            $env:APPDATA = $appdata
+            Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue
+            $status = (& $cli local autostart status --json | ConvertFrom-Json)
+            if ($LASTEXITCODE -ne 0 -or $status.launch_tunnel_at_login) { throw 'Tunnel autostart must default off' }
+            & $cli local autostart enable $workspace
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to enable tunnel autostart' }
+            $status = (& $cli local autostart status --json | ConvertFrom-Json)
+            if (-not $status.launch_tunnel_at_login -or $status.start_folder -notlike '*workspace*') {
+              throw 'Windows terminal setting did not persist start folder and enabled flag'
+            }
+            $registered = (Get-ItemProperty -Path $runKey -Name ZodexTray).ZodexTray
+            if ($registered -notlike '*zodex-tray.exe*') { throw 'Enabling tunnel did not enable tray login' }
+            & $cli local autostart disable
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to disable tunnel autostart' }
+            $status = (& $cli local autostart status --json | ConvertFrom-Json)
+            if ($status.launch_tunnel_at_login -or $status.start_folder -notlike '*workspace*') {
+              throw 'Disabling tunnel autostart lost the saved folder'
+            }
+            $registered = (Get-ItemProperty -Path $runKey -Name ZodexTray).ZodexTray
+            if ($registered -notlike '*zodex-tray.exe*') { throw 'Disabling tunnel incorrectly disabled tray login' }
+          } finally {
+            $env:APPDATA = $oldAppData
+            if ($null -eq $oldXdgConfig) {
+              Remove-Item Env:XDG_CONFIG_HOME -ErrorAction SilentlyContinue
+            } else {
+              $env:XDG_CONFIG_HOME = $oldXdgConfig
+            }
+            if ($null -eq $oldValue) {
+              Remove-ItemProperty -Path $runKey -Name ZodexTray -ErrorAction SilentlyContinue
+            } else {
+              Set-ItemProperty -Path $runKey -Name ZodexTray -Value $oldValue
+            }
+          }
 
       - name: Exercise pre-tray Windows upgrade migration
         shell: pwsh

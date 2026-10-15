@@ -128,7 +128,7 @@ On success, Zodex:
 
 Setup is idempotent, so running it again is also the repair/update path.
 
-All three desktop controls are convenience wrappers around the installed CLI. Enabling **Launch at Login** launches only the menu bar or system tray app; it **does not** start Zodex Local, the tunnel, or an Agent process. After reboot, use **Start Zodex** from the tray, or `zodex local start` in the terminal. If you do not want the menu app on macOS or the tray on Windows/Linux, opt out during setup:
+All three desktop controls are convenience wrappers around the installed CLI. **Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) launches only the convenience app by default, without starting Zodex Local, the tunnel, or an Agent process. If you want the tunnel to start with your next desktop login, enable the separate **Launch Tunnel at Login** option or run `zodex local autostart enable /absolute/workspace/path`. The tunnel option is off by default and uses your saved Start Folder. If you do not want the menu app on macOS or the tray on Windows/Linux, opt out during setup:
 
 ```bash
 zodex local setup --no-menu-bar
@@ -136,7 +136,7 @@ zodex local setup --no-menu-bar
 
 `--no-tray` is an alias for the same option on Windows/Linux.
 
-If you enable it initially and change your mind later, turn off **Launch at Login** from the Zodex menu. Choosing **Quit** exits it for the current session without changing the Local runtime or the login setting. On Linux, the tray requires a graphical desktop and an AppIndicator/StatusNotifier-compatible panel (KDE Plasma and Ubuntu's supported GNOME sessions work; other GNOME installations may need an AppIndicator extension). Headless Linux continues to work entirely through the CLI; Linux's tray uses the D-Bus status notifier backend without GTK dependencies. Choosing a folder on Linux uses an installed `zenity`, `kdialog`, or `yad` desktop dialog.
+If you enable it initially and change your mind later, turn off **Launch Menu Bar at Login** or **Launch Tray at Login** from the Zodex menu. That also turns off the dependent tunnel-autostart preference. Choosing **Quit** exits it for the current session without changing the Local runtime or saved login options. On Linux, the tray requires a graphical desktop and an AppIndicator/StatusNotifier-compatible panel (KDE Plasma and Ubuntu's supported GNOME sessions work; other GNOME installations may need an AppIndicator extension). Headless Linux continues to work entirely through the CLI; Linux's tray uses the D-Bus status notifier backend without GTK dependencies. Choosing a folder on Linux uses an installed `zenity`, `kdialog`, or `yad` desktop dialog.
 
 ## Scripted setup without putting the key on argv
 

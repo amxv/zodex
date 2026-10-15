@@ -1,7 +1,7 @@
 use std::io::IsTerminal as _;
 
 use zodex::local::{
-    HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
+    HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalLoginPreferences, LocalPaths, LocalStatusDocument,
     LocalStatusState, RuntimeKey, WatchOptions, build_presentation, clear_local_history,
     copy_local_liveboard_url, ensure_offline_mutation, local_liveboard_url, parse_human_duration,
     render_presentation, run_local_liveboard, run_local_watch, validate_tunnel_id,
@@ -98,6 +98,12 @@ enum LocalCommand {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     /// Open the lightweight menu bar / system tray controls for Local.
     Menu,
+    /// Configure whether the tunnel starts automatically when you sign in.
+    #[command(after_help = "Examples:\n  zodex local autostart status\n  zodex local autostart status --json\n  zodex local autostart enable\n  zodex local autostart enable ~/code/projects\n  zodex local autostart disable\n  zodex local autostart folder ~/code/projects\n\nEnabling also enables Launch Tray/Menu Bar at Login. By default only the tray/menu bar starts at login; the tunnel remains off until you explicitly enable this setting. Setting a folder alone does not enable autostart.")]
+    Autostart {
+        #[command(subcommand)]
+        command: LocalAutostartCommand,
+    },
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
     History {
@@ -152,6 +158,26 @@ enum LocalWatchCommand {
     Url,
     /// Copy the stable Liveboard URL to the system clipboard.
     Copyurl,
+}
+
+#[derive(Debug, Subcommand)]
+enum LocalAutostartCommand {
+    /// Enable Launch Tunnel at Login and register the tray/menu bar for login.
+    Enable {
+        /// Start directory to use at login; defaults to saved folder or current directory.
+        path: Option<PathBuf>,
+    },
+    /// Disable Launch Tunnel at Login but keep the tray/menu bar login option unchanged.
+    Disable,
+    /// Report the persisted tunnel autostart setting and selected start folder.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the start folder used by Start Zodex and automatic login startup.
+    Folder {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -253,6 +279,10 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
         LocalCommand::Menu => {
             ensure_local_runtime_host()?;
             run_native_local_menu()
+        }
+        LocalCommand::Autostart { command } => {
+            ensure_local_runtime_host()?;
+            handle_local_autostart(&paths, command)
         }
         LocalCommand::History {
             last,
@@ -380,6 +410,15 @@ fn native_local_menu_app() -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
+    set_native_menu_login(enable_at_login)?;
+    if enable_at_login {
+        run_native_local_menu()?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn set_native_menu_login(enable_at_login: bool) -> Result<()> {
     let app = native_local_menu_app()?;
     let helper = app.join("Contents/MacOS/zodex-menubar");
     let mode = if enable_at_login {
@@ -403,9 +442,6 @@ fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
                 format!(": {stderr}")
             }
         );
-    }
-    if enable_at_login {
-        run_native_local_menu()?;
     }
     Ok(())
 }
@@ -451,6 +487,21 @@ fn run_native_local_menu() -> Result<()> {
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
+    set_native_menu_login(enable_at_login)?;
+    if enable_at_login {
+        #[cfg(target_os = "linux")]
+        if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+            // Headless installations have no panel. A future graphical login
+            // can launch the registered tray.
+            return Ok(());
+        }
+        run_native_local_menu()?;
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn set_native_menu_login(enable_at_login: bool) -> Result<()> {
     let tray = native_local_tray_binary()?;
     let command = if enable_at_login { "--enable-autostart" } else { "--disable-autostart" };
     let output = Command::new(&tray)
@@ -464,16 +515,59 @@ fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    if enable_at_login {
-        #[cfg(target_os = "linux")]
-        if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
-            // Headless installations have no panel. Install the desktop entry
-            // for future graphical logins without starting a GUI over SSH.
-            return Ok(());
-        }
-        run_native_local_menu()?;
-    }
     Ok(())
+}
+
+fn handle_local_autostart(paths: &LocalPaths, command: LocalAutostartCommand) -> Result<()> {
+    let mut prefs = LocalLoginPreferences::load(paths)?;
+    match command {
+        LocalAutostartCommand::Status { json } => {
+            if json {
+                println!("{}", serde_json::to_string(&prefs)?);
+            } else {
+                println!(
+                    "Launch Tunnel at Login: {}",
+                    if prefs.launch_tunnel_at_login { "enabled" } else { "disabled" }
+                );
+                println!(
+                    "Start Folder: {}",
+                    prefs.start_folder.as_deref().map_or_else(
+                        || "Not set".to_owned(),
+                        |folder| folder.display().to_string()
+                    )
+                );
+            }
+            Ok(())
+        }
+        LocalAutostartCommand::Folder { path } => {
+            prefs.set_start_folder(&path)?;
+            prefs.save(paths)?;
+            println!("Saved Start Folder: {}", prefs.start_folder.as_deref().unwrap().display());
+            Ok(())
+        }
+        LocalAutostartCommand::Enable { path } => {
+            let folder = match path.or_else(|| prefs.start_folder.clone()) {
+                Some(path) => path,
+                None => env::current_dir().context("Could not resolve current Start Folder")?,
+            };
+            prefs.set_start_folder(&folder)?;
+            // Login depends on a desktop control surface being registered.
+            // Configure that first without launching the tray/menu bar now.
+            set_native_menu_login(true)?;
+            prefs.launch_tunnel_at_login = true;
+            prefs.save(paths)?;
+            println!("Launch Tunnel at Login: enabled");
+            println!("Start Folder: {}", prefs.start_folder.as_deref().unwrap().display());
+            println!("The tray/menu bar will open and start the tunnel after your next login.");
+            Ok(())
+        }
+        LocalAutostartCommand::Disable => {
+            prefs.launch_tunnel_at_login = false;
+            prefs.save(paths)?;
+            println!("Launch Tunnel at Login: disabled (tray/menu bar login unchanged)");
+            Ok(())
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

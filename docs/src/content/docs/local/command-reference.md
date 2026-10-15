@@ -134,7 +134,26 @@ zodex local menu
 
 On Apple Silicon macOS, this opens the Swift menu bar app. On Windows and graphical Linux desktops, it opens the Rust system tray. On headless Linux, continue using the CLI.
 
-**Launch at Login** is enabled by default after `zodex local setup`. Turn that checked menu item off if you no longer want the menu/tray app to return after logout or restart. Choosing **Quit** only exits the current menu/tray session; it does not start or stop Zodex Local and does not make the app relaunch before the next login.
+**Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) is enabled by default after `zodex local setup`. Only the lightweight control app opens; the Local tunnel stays stopped unless you also enable **Launch Tunnel at Login**. The latter is off by default, uses your saved Start Folder, and takes effect at the next login. Enabling tunnel autostart automatically enables the menu/tray login item. Turning off the menu/tray login item disables tunnel autostart too.
+
+Choosing **Quit** only exits the current menu/tray session; it does not change the Local runtime or the saved login settings.
+
+## `zodex local autostart`
+
+Read and change the same persistent **Launch Tunnel at Login** setting available in the menu/tray on all three desktop platforms:
+
+```bash
+zodex local autostart status
+zodex local autostart status --json
+zodex local autostart enable
+zodex local autostart enable /absolute/workspace/path
+zodex local autostart folder /absolute/workspace/path
+zodex local autostart disable
+```
+
+`enable` uses the last saved Start Folder, or the current directory if none was configured. Passing an explicit folder also saves that location for subsequent login launches and manual Start actions. The folder must exist and be accessible. `folder` changes that location without enabling autostart. `disable` stops **future automatic login starts** but does not stop an already-running Local runtime, and leaves **Launch Menu Bar at Login** or **Launch Tray at Login** as-is.
+
+The setting persists in the user's non-secret Zodex desktop preferences. The menu/tray observes terminal changes without requiring another setup, and on your next graphical login it uses the same `zodex local start` lifecycle, credentials, and runtime behavior as a manual Start. Headless Linux does not automatically start a desktop tray; use an appropriate external service manager if you need headless boot-time operation.
 
 ## `zodex upgrade`
 
@@ -151,7 +170,7 @@ zodex upgrade --check --format json
 
 An already-current upgrade exits before downloading the release archive. Human mode streams progress; JSON mode emits the stable upgrade event stream used by the menu app. `--stop-local` is explicit authorization to stop blocking Local state before installation. Release downloads are pinned to the version resolved by the CLI and checksum-verified before the embedded low-level installer replaces the operator and menu app.
 
-**Start Zodex** captures the configured interactive login shell on macOS/Linux before invoking `zodex local start`, so a menu/tray launched at login still sees language toolchains, user-installed CLIs, credentials, and PATH customizations. Windows inherits the logged-in user's environment.
+**Start Zodex**, whether clicked manually or launched at login when enabled, captures the configured interactive login shell on macOS/Linux before invoking `zodex local start`, so the menu/tray sees language toolchains, user-installed CLIs, credentials, and PATH customizations. Windows inherits the logged-in user's environment.
 
 ## `zodex local history`
 

@@ -60,6 +60,7 @@ struct MenuItems {
     folder_change: MenuItem,
     update: MenuItem,
     launch_at_login: CheckMenuItem,
+    launch_tunnel_at_login: CheckMenuItem,
     version: MenuItem,
     quit: MenuItem,
 }
@@ -76,9 +77,15 @@ impl MenuItems {
             folder_change: MenuItem::new("Set Start Folder…", true, None),
             update: MenuItem::new("Check for Updates…", true, None),
             launch_at_login: CheckMenuItem::new(
-                "Launch at Login",
+                "Launch Tray at Login",
                 true,
                 platform::launch_at_login_enabled(),
+                None,
+            ),
+            launch_tunnel_at_login: CheckMenuItem::new(
+                "Launch Tunnel at Login",
+                true,
+                platform::preferences().launch_tunnel_at_login,
                 None,
             ),
             version: MenuItem::new(
@@ -102,6 +109,7 @@ impl MenuItems {
             &divider2,
             &items.update,
             &items.launch_at_login,
+            &items.launch_tunnel_at_login,
             &items.version,
             &divider3,
             &items.quit,
@@ -152,6 +160,11 @@ impl App {
         app.refresh_folder();
         app.render_status();
         app.submit(Task::Status);
+        // Only the tray's initial login launch triggers this. Changes to
+        // the setting during a session take effect at the next login.
+        if let Some(path) = Self::login_start_folder(&app.preferences) {
+            app.submit(Task::Start(path));
+        }
         app
     }
 
@@ -169,6 +182,25 @@ impl App {
             } else {
                 "Set Start Folder…"
             });
+    }
+
+    fn refresh_login_preferences(&mut self) {
+        let previous = self.preferences.start_folder.clone();
+        self.preferences = platform::preferences();
+        if previous != self.preferences.start_folder {
+            self.refresh_folder();
+            self.render_status();
+        }
+        self.items.launch_tunnel_at_login.set_checked(self.preferences.launch_tunnel_at_login);
+        self.items.launch_at_login.set_checked(platform::launch_at_login_enabled());
+    }
+
+    fn login_start_folder(preferences: &platform::Preferences) -> Option<PathBuf> {
+        preferences
+            .launch_tunnel_at_login
+            .then(|| preferences.start_folder.clone())
+            .flatten()
+            .filter(|path| path.is_dir())
     }
 
     fn submit(&mut self, task: Task) {
@@ -293,12 +325,47 @@ impl App {
             });
         } else if id == self.items.launch_at_login.id() {
             let desired = !platform::launch_at_login_enabled();
-            if let Err(error) = platform::set_launch_at_login(desired) {
-                platform::show_message("Launch at Login could not be changed", &error, false);
+            if !desired && self.preferences.launch_tunnel_at_login {
+                // Tunnel autostart cannot work without a login tray; turning
+                // the latter off also turns off the dependent option.
+                let result = commands::run(&self.binary, &["local", "autostart", "disable"], false);
+                if !result.ok {
+                    platform::show_message("Could not disable Launch Tunnel at Login", &result.output, false);
+                    self.refresh_login_preferences();
+                    return true;
+                }
             }
-            self.items
-                .launch_at_login
-                .set_checked(platform::launch_at_login_enabled());
+            if let Err(error) = platform::set_launch_at_login(desired) {
+                platform::show_message("Launch Tray at Login could not be changed", &error, false);
+            }
+            self.refresh_login_preferences();
+        } else if id == self.items.launch_tunnel_at_login.id() {
+            let enabling = !platform::preferences().launch_tunnel_at_login;
+            let path = if enabling {
+                match self.preferences.start_folder.as_deref().filter(|folder| folder.is_dir()) {
+                    Some(path) => path.to_string_lossy().into_owned(),
+                    None => {
+                        platform::show_message(
+                            "Start Folder required",
+                            "Choose an existing Start Folder before enabling Launch Tunnel at Login.",
+                            false,
+                        );
+                        self.refresh_login_preferences();
+                        return true;
+                    }
+                }
+            } else {
+                String::new()
+            };
+            let result = if enabling {
+                commands::run(&self.binary, &["local", "autostart", "enable", &path], false)
+            } else {
+                commands::run(&self.binary, &["local", "autostart", "disable"], false)
+            };
+            if !result.ok {
+                platform::show_message("Could not change Launch Tunnel at Login", &result.output, false);
+            }
+            self.refresh_login_preferences();
         } else if id == self.items.update.id() {
             if let Some(version) = &self.available_update {
                 self.submit(Task::Upgrade(version.clone(), false));
@@ -319,9 +386,15 @@ impl App {
                         false,
                     );
                 } else {
-                    self.preferences.start_folder = Some(path.canonicalize().unwrap_or(path));
-                    if let Err(error) = platform::save_preferences(&self.preferences) {
+                    // The CLI can toggle tunnel autostart while the folder
+                    // picker is open. Reload first so a stale in-memory copy
+                    // cannot overwrite the independently saved login option.
+                    let mut updated = platform::preferences();
+                    updated.start_folder = Some(path.canonicalize().unwrap_or(path));
+                    if let Err(error) = platform::save_preferences(&updated) {
                         platform::show_message("Could not save Start Folder", &error, false);
+                    } else {
+                        self.preferences = updated;
                     }
                     self.refresh_folder();
                     self.render_status();
@@ -334,6 +407,7 @@ impl App {
             Response::FolderSelected(Ok(None)) => {}
             Response::Status { epoch, result } => {
                 self.status_in_flight = false;
+                self.refresh_login_preferences();
                 if epoch == self.status_epoch {
                     let state = commands::status(&result)
                         .map(|status| RuntimeState::parse(&status.state))
@@ -535,6 +609,20 @@ fn zodex_icon() -> Result<Icon, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_starts_tunnel_only_with_opt_in_and_existing_start_folder() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut prefs = platform::Preferences {
+            start_folder: Some(workspace.path().to_path_buf()),
+            launch_tunnel_at_login: false,
+        };
+        assert_eq!(App::login_start_folder(&prefs), None);
+        prefs.launch_tunnel_at_login = true;
+        assert_eq!(App::login_start_folder(&prefs), prefs.start_folder);
+        prefs.start_folder = Some(workspace.path().join("missing"));
+        assert_eq!(App::login_start_folder(&prefs), None);
+    }
 
     #[test]
     fn tray_icon_has_no_tile_or_background_and_has_a_centered_z() {

@@ -16,6 +16,11 @@ private struct LocalStatus: Decodable {
     let runtime: Runtime?
 }
 
+private struct LocalLoginPreferences: Decodable {
+    let start_folder: String?
+    let launch_tunnel_at_login: Bool
+}
+
 private struct UpgradeEvent: Decodable {
     let schema_version: Int
     let event: String
@@ -74,8 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         symbolDescription: "Start folder"
     )
     private lazy var launchAtLoginItem = menuItem(
-        "Launch at Login",
+        "Launch Menu Bar at Login",
         action: #selector(toggleLaunchAtLogin)
+    )
+    private lazy var launchTunnelAtLoginItem = menuItem(
+        "Launch Tunnel at Login",
+        action: #selector(toggleLaunchTunnelAtLogin)
     )
     private lazy var updateItem = menuItem(
         "Check for Updates…",
@@ -94,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var availableUpdateVersion: String?
     private var upgradeCheckInFlight = false
     private var upgradeInFlight = false
+    private var sharedStartFolder: String?
+    private var tunnelAutostartEnabled = false
 
     init(zodexURL: URL) {
         self.zodexURL = zodexURL
@@ -121,18 +132,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(updateItem)
         menu.addItem(launchAtLoginItem)
+        menu.addItem(launchTunnelAtLoginItem)
         menu.addItem(versionItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         statusItem.menu = menu
 
+        refreshLoginPreferences(migrateLegacyFolder: true)
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         disableRuntimeActions()
+        if tunnelAutostartEnabled, let path = validStartFolder {
+            // Login startup is opt-in. Launch asynchronously through the same
+            // captured interactive shell used for a manual menu Start.
+            beginStart(path: path, showFailure: false)
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         copyLiveboardItem.title = "Copy Liveboard Link"
+        refreshLoginPreferences()
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         refreshStatus()
@@ -160,7 +179,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var configuredStartFolder: String? {
-        defaults.string(forKey: Self.startFolderKey)
+        sharedStartFolder ?? defaults.string(forKey: Self.startFolderKey)
+    }
+
+    private func readLoginPreferences() -> LocalLoginPreferences? {
+        let result = runZodexSync(["local", "autostart", "status", "--json"])
+        guard result.exitCode == 0, let data = result.output.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(LocalLoginPreferences.self, from: data)
+    }
+
+    private func refreshLoginPreferences(migrateLegacyFolder: Bool = false) {
+        guard var preferences = readLoginPreferences() else {
+            launchTunnelAtLoginItem.state = .off
+            return
+        }
+        if migrateLegacyFolder,
+           preferences.start_folder == nil,
+           let legacyPath = defaults.string(forKey: Self.startFolderKey) {
+            let result = runZodexSync(["local", "autostart", "folder", legacyPath])
+            if result.exitCode == 0 {
+                preferences = readLoginPreferences() ?? preferences
+            }
+        }
+        sharedStartFolder = preferences.start_folder
+        tunnelAutostartEnabled = preferences.launch_tunnel_at_login
+        launchTunnelAtLoginItem.state = tunnelAutostartEnabled ? .on : .off
     }
 
     private var validStartFolder: String? {
@@ -286,6 +331,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showError("Start folder unavailable", detail: "Choose an existing start folder before starting Zodex.")
             return
         }
+        beginStart(path: path, showFailure: true)
+    }
+
+    private func beginStart(path: String, showFailure: Bool) {
         commandInFlight = true
         startItem.title = "Starting Zodex…"
         disableRuntimeActions()
@@ -294,7 +343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.commandInFlight = false
             if result.exitCode != 0 {
                 self.startItem.title = "Start Zodex"
-                self.showCommandError("Start Zodex failed", result: result)
+                if showFailure {
+                    self.showCommandError("Start Zodex failed", result: result)
+                } else {
+                    NSLog("Zodex login tunnel startup failed: %@", result.output)
+                }
             }
             self.refreshStatus()
         }
@@ -361,7 +414,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let path = selectedURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let result = runZodexSync(["local", "autostart", "folder", path])
+        guard result.exitCode == 0 else {
+            showCommandError("Could not save Start Folder", result: result)
+            return
+        }
         defaults.set(path, forKey: Self.startFolderKey)
+        refreshLoginPreferences()
         updateStartFolderItems()
         refreshStatus()
     }
@@ -370,10 +429,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let currentlyEnabled = launchAtLoginEnabled() else {
             updateLaunchAtLoginItem()
             showError(
-                "Launch at Login could not be changed",
+                "Launch Menu Bar at Login could not be changed",
                 detail: "The installed Zodex menu bar helper could not report its login-item status."
             )
             return
+        }
+
+        if currentlyEnabled && tunnelAutostartEnabled {
+            let result = runZodexSync(["local", "autostart", "disable"])
+            guard result.exitCode == 0 else {
+                showCommandError("Could not disable Launch Tunnel at Login", result: result)
+                updateLaunchAtLoginItem()
+                return
+            }
+            refreshLoginPreferences()
         }
 
         // Use the same fresh helper for the mutation for the same reason as
@@ -386,10 +455,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if result.exitCode != 0 {
             let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
             showError(
-                "Launch at Login could not be changed",
+                "Launch Menu Bar at Login could not be changed",
                 detail: detail.isEmpty ? "The login-item helper exited with status \(result.exitCode)." : detail
             )
         }
+    }
+
+    @objc private func toggleLaunchTunnelAtLogin() {
+        let arguments: [String]
+        if tunnelAutostartEnabled {
+            arguments = ["local", "autostart", "disable"]
+        } else {
+            guard let path = validStartFolder else {
+                showError("Start Folder required", detail: "Choose an existing Start Folder before enabling Launch Tunnel at Login.")
+                refreshLoginPreferences()
+                return
+            }
+            arguments = ["local", "autostart", "enable", path]
+        }
+        let result = runZodexSync(arguments)
+        if result.exitCode != 0 {
+            showCommandError("Could not change Launch Tunnel at Login", result: result)
+        }
+        refreshLoginPreferences()
+        updateLaunchAtLoginItem()
     }
 
     @objc private func updateZodex() {
