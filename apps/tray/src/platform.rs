@@ -223,23 +223,34 @@ pub fn developer_environment() -> Result<Vec<(std::ffi::OsString, std::ffi::OsSt
     if !shell.is_absolute() || !shell.is_file() {
         return Err(format!("Invalid login shell: {}", shell.display()));
     }
-    let output = Command::new(&shell)
+    use std::io::{Read as _, Seek as _};
+    // As with Local start, do not wait for pipe EOF from unrelated processes
+    // started by the login shell. A temporary file avoids inherited-pipe hangs.
+    let mut output_file = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let stdout = output_file.try_clone().map_err(|error| error.to_string())?;
+    let status = Command::new(&shell)
         .args(["-lic", "printf 'ZODEX_TRAY_ENV\\0'; /usr/bin/env -0"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
+        .stdout(Stdio::from(stdout))
+        .status()
         .map_err(|e| e.to_string())?;
-    if !output.status.success() {
+    if !status.success() {
         return Err(format!("Login shell {} failed", shell.display()));
     }
+    output_file.rewind().map_err(|e| e.to_string())?;
+    let mut output = Vec::new();
+    output_file
+        .take(4 * 1024 * 1024)
+        .read_to_end(&mut output)
+        .map_err(|error| error.to_string())?;
     let marker = b"ZODEX_TRAY_ENV\0";
     let offset = output
-        .stdout
         .windows(marker.len())
         .position(|bytes| bytes == marker)
         .ok_or("Login shell did not return its environment")?
         + marker.len();
-    let vars = output.stdout[offset..]
+    let vars = output[offset..]
         .split(|byte| *byte == 0)
         .filter_map(|entry| {
             let position = entry.iter().position(|byte| *byte == b'=')?;
@@ -394,6 +405,32 @@ pub fn pump_events() {
 
 #[cfg(target_os = "linux")]
 pub fn pump_events() {}
+
+#[cfg(target_os = "windows")]
+pub fn tray_icon_foreground() -> [u8; 3] {
+    // Windows can run a light taskbar even when the app window is dark.
+    // Respect the system taskbar theme so the transparent Z remains legible.
+    let output = reg_command(&[
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        "/v",
+        "SystemUsesLightTheme",
+    ]);
+    let light = output
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                line.contains("SystemUsesLightTheme") && line.trim_end().ends_with("0x1")
+            })
+        });
+    if light { [28, 28, 28] } else { [247, 247, 247] }
+}
+
+#[cfg(target_os = "linux")]
+pub fn tray_icon_foreground() -> [u8; 3] {
+    [247, 247, 247]
+}
 
 #[cfg(test)]
 mod tests {

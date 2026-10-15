@@ -14,7 +14,7 @@ On all supported graphical desktops, `zodex local setup` enables the menu bar or
 zodex local menu
 ```
 
-Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling; the Windows/Linux tray refreshes status periodically and after actions. The Mac app checks for updates when you open its menu; Windows/Linux check on request. Toggle **Launch at Login** off whenever you no longer want the menu/tray app to return after logout or restart. **Quit** does not stop the Zodex Local runtime.
+Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling. The Windows/Linux tray independently polls the actual Local status every two seconds, and every half-second during Start/Stop transitions; as soon as the CLI reports running or stopped, the corresponding controls update even if a launch/shutdown subprocess is still finishing. It shows **Status Unavailable**, not an invented runtime state, if the CLI check fails. The tray icon is a transparent Z, and hovering it shows the latest known status. The Mac app checks for updates when you open its menu; Windows/Linux check on request. Toggle **Launch at Login** off whenever you no longer want the menu/tray app to return after logout or restart. **Quit** does not stop the Zodex Local runtime.
 
 ## Start from the project you want ChatGPT to begin with
 

@@ -8,6 +8,14 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.9 - 2026-10-15
+
+- Fixed the Windows/Linux system tray getting stuck on **Starting Zodex…** after the runtime had already started. The tray now checks the authoritative `zodex local status --json` independently of command completion, every half-second during transitions and every two seconds while idle. Successful status observations immediately reconcile the menu, enable the correct Start/Stop/Liveboard buttons, and update the tray tooltip.
+- Added the missing **Stopping Zodex…** disabled-menu transition. A delayed response from an earlier Start/Stop command can no longer replace a newer status.
+- Made lifecycle commands and Linux login-shell environment capture use temporary files rather than inherited stdout/stderr pipes; detached child processes can no longer hold the tray's subprocess reader open. Bounded status checks report **Status Unavailable** rather than falsely claiming the runtime is stopped or running if the CLI cannot be queried.
+- Replaced the blue square tray icon with a clean, antialiased, transparent Z matching the macOS menu-bar style, with foreground contrast adjusted for the Windows taskbar theme. Also removed Windows verbatim-path prefixes from the displayed Start Folder.
+- Added cross-platform lifecycle-state tests, icon transparency tests, and a Linux regression test covering child processes inheriting stdout after the launching CLI has exited.
+
 ## 0.5.8 - 2026-10-15
 
 - Fixed first-time Windows/Linux tray migration when upgrading an existing Local installation. If the tray was absent, the installer now registers it at desktop sign-in and launches it immediately where a desktop session is available, without running Local setup or starting the Local runtime. Brand-new installs still defer tray registration to `zodex local setup`, respecting `--no-menu-bar`.

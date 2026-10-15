@@ -4,9 +4,11 @@
 compile_error!("zodex-tray is only for Windows and Linux; macOS uses the Swift menu bar app");
 
 mod commands;
+mod lifecycle;
 mod platform;
 
 use commands::CommandResult;
+use lifecycle::{Lifecycle, Operation, RuntimeState};
 use std::{
     env,
     path::{Path, PathBuf},
@@ -16,11 +18,14 @@ use std::{
     time::{Duration, Instant},
 };
 use tray_icon::{
-    Icon, TrayIconBuilder,
+    Icon, TrayIconBuilder, TrayIconEvent,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-const STATUS_INTERVAL: Duration = Duration::from_secs(8);
+// A tray that is supposed to report the truth must reconcile independently
+// of Start/Stop command completion, including when a CLI is slow or wedged.
+const STATUS_INTERVAL: Duration = Duration::from_secs(2);
+const TRANSITION_STATUS_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug)]
 enum Task {
@@ -34,7 +39,15 @@ enum Task {
 }
 
 enum Response {
-    Finished(Task, CommandResult),
+    Status {
+        epoch: u64,
+        result: CommandResult,
+    },
+    Finished {
+        task: Task,
+        id: u64,
+        result: CommandResult,
+    },
     FolderSelected(Result<Option<PathBuf>, String>),
 }
 
@@ -96,21 +109,18 @@ impl MenuItems {
         .map_err(|e| e.to_string())?;
         Ok((items, menu))
     }
-
-    fn runtime_disabled(&self) {
-        self.start.set_enabled(false);
-        self.stop.set_enabled(false);
-        self.liveboard.set_enabled(false);
-        self.copy.set_enabled(false);
-    }
 }
 
 struct App {
     binary: PathBuf,
+    tray: tray_icon::TrayIcon,
     items: MenuItems,
     preferences: platform::Preferences,
     sender: Sender<Response>,
-    in_flight: bool,
+    lifecycle: Lifecycle,
+    active_command: Option<u64>,
+    next_command_id: u64,
+    status_epoch: u64,
     status_in_flight: bool,
     update_in_flight: bool,
     available_update: Option<String>,
@@ -118,19 +128,29 @@ struct App {
 }
 
 impl App {
-    fn new(binary: PathBuf, items: MenuItems, sender: Sender<Response>) -> Self {
+    fn new(
+        binary: PathBuf,
+        tray: tray_icon::TrayIcon,
+        items: MenuItems,
+        sender: Sender<Response>,
+    ) -> Self {
         let mut app = Self {
             binary,
+            tray,
             items,
             preferences: platform::preferences(),
             sender,
-            in_flight: false,
+            lifecycle: Lifecycle::default(),
+            active_command: None,
+            next_command_id: 0,
+            status_epoch: 0,
             status_in_flight: false,
             update_in_flight: false,
             available_update: None,
             last_status: Instant::now(),
         };
         app.refresh_folder();
+        app.render_status();
         app.submit(Task::Status);
         app
     }
@@ -152,19 +172,35 @@ impl App {
     }
 
     fn submit(&mut self, task: Task) {
-        match task {
-            Task::Status if self.status_in_flight || self.in_flight => return,
-            Task::Status => self.status_in_flight = true,
+        let mut id = 0;
+        let mut epoch = self.status_epoch;
+        match &task {
+            Task::Status if self.status_in_flight => return,
+            Task::Status => {
+                self.status_in_flight = true;
+                self.last_status = Instant::now();
+            }
             Task::CheckUpgrade | Task::Upgrade(_, _) if self.update_in_flight => return,
             Task::CheckUpgrade | Task::Upgrade(_, _) => {
                 self.update_in_flight = true;
                 self.items.update.set_enabled(false);
                 self.items.update.set_text("Working on update…");
             }
-            _ if self.in_flight => return,
+            _ if self.active_command.is_some() => return,
             _ => {
-                self.in_flight = true;
-                self.items.runtime_disabled();
+                self.next_command_id += 1;
+                id = self.next_command_id;
+                self.active_command = Some(id);
+                match &task {
+                    Task::Start(_) => self.lifecycle.begin(id, Operation::Start),
+                    Task::Stop => self.lifecycle.begin(id, Operation::Stop),
+                    _ => {}
+                }
+                // Ignore status results initiated before the requested
+                // transition. They'll be stale as soon as Start/Stop begins.
+                self.status_epoch += 1;
+                epoch = self.status_epoch;
+                self.render_status();
             }
         }
         let executable = self.binary.clone();
@@ -214,7 +250,12 @@ impl App {
             };
             let argv = args.iter().map(String::as_str).collect::<Vec<_>>();
             let result = commands::run(&executable, &argv, start);
-            let _ = sender.send(Response::Finished(task, result));
+            let response = if matches!(task, Task::Status) {
+                Response::Status { epoch, result }
+            } else {
+                Response::Finished { task, id, result }
+            };
+            let _ = sender.send(response);
         });
     }
 
@@ -229,7 +270,6 @@ impl App {
                 .clone()
                 .filter(|path| path.is_dir())
             {
-                self.items.start.set_text("Starting Zodex…");
                 self.submit(Task::Start(path));
             } else {
                 platform::show_message(
@@ -284,6 +324,7 @@ impl App {
                         platform::show_message("Could not save Start Folder", &error, false);
                     }
                     self.refresh_folder();
+                    self.render_status();
                     self.submit(Task::Status);
                 }
             }
@@ -291,70 +332,68 @@ impl App {
                 platform::show_message("Could not choose Start Folder", &error, false);
             }
             Response::FolderSelected(Ok(None)) => {}
-            Response::Finished(task, result) => match task {
-                Task::Status => {
-                    self.status_in_flight = false;
-                    self.last_status = Instant::now();
-                    self.apply_status(&result);
+            Response::Status { epoch, result } => {
+                self.status_in_flight = false;
+                if epoch == self.status_epoch {
+                    let state = commands::status(&result)
+                        .map(|status| RuntimeState::parse(&status.state))
+                        .unwrap_or(RuntimeState::Unavailable);
+                    if let Some(id) = self.lifecycle.observe(state)
+                        && self.active_command == Some(id)
+                    {
+                        self.active_command = None;
+                    }
+                    self.render_status();
+                } else {
+                    // An in-flight pre-click status response was stale;
+                    // schedule a fresh observation on the next event tick.
+                    self.last_status = Instant::now() - STATUS_INTERVAL;
                 }
+            }
+            Response::Finished { task, id, result } => match task {
+                Task::Status => unreachable!("status has its own response type"),
                 Task::CheckUpgrade | Task::Upgrade(_, _) => {
                     self.update_in_flight = false;
                     self.items.update.set_enabled(true);
                     self.apply_upgrade(task, &result);
                 }
                 _ => {
-                    self.in_flight = false;
+                    if self.active_command != Some(id) {
+                        // Polling already observed the true target state, or
+                        // this is an old completion from before a new click.
+                        return;
+                    }
+                    self.active_command = None;
+                    self.lifecycle.finish(id);
+                    self.status_epoch += 1;
+                    self.render_status();
                     if !result.ok {
                         platform::show_message("Zodex command failed", &result.output, false);
                     } else if matches!(task, Task::CopyLiveboard) {
                         self.items.copy.set_text("Liveboard Link Copied");
                     }
+                    self.last_status = Instant::now() - STATUS_INTERVAL;
                     self.submit(Task::Status);
                 }
             },
         }
     }
 
-    fn apply_status(&self, result: &CommandResult) {
-        self.items.start.set_text("Start Zodex");
-        self.items.copy.set_text("Copy Liveboard Link");
-        if self.in_flight {
-            return;
-        }
+    fn render_status(&self) {
         let start_folder_valid = self
             .preferences
             .start_folder
             .as_deref()
             .is_some_and(Path::is_dir);
-        match commands::status(result)
-            .as_ref()
-            .map(|status| status.state.as_str())
-        {
-            Some("running") => {
-                self.items.start.set_text("Zodex is Running");
-                self.items.start.set_enabled(false);
-                self.items.stop.set_enabled(true);
-                self.items.liveboard.set_enabled(true);
-                self.items.copy.set_enabled(true);
-            }
-            Some("stale") => {
-                self.items.runtime_disabled();
-                self.items.stop.set_enabled(true);
-            }
-            Some("stopped") => {
-                self.items.runtime_disabled();
-                self.items.start.set_enabled(start_folder_valid);
-            }
-            Some("unconfigured") => {
-                self.items.runtime_disabled();
-                self.items.start.set_text("Run zodex local setup first");
-            }
-            _ => {
-                self.items.runtime_disabled();
-                self.items.start.set_enabled(start_folder_valid);
-                self.items.stop.set_enabled(true);
-            }
-        }
+        let ui = self
+            .lifecycle
+            .presentation(start_folder_valid, self.active_command.is_some());
+        self.items.start.set_text(ui.label);
+        self.items.start.set_enabled(ui.start_enabled);
+        self.items.stop.set_enabled(ui.stop_enabled);
+        self.items.liveboard.set_enabled(ui.liveboard_enabled);
+        self.items.copy.set_enabled(ui.liveboard_enabled);
+        let _ = self.tray.set_tooltip(Some(ui.tooltip));
     }
 
     fn apply_upgrade(&mut self, task: Task, result: &CommandResult) {
@@ -419,7 +458,15 @@ impl App {
 }
 
 fn abbreviated_path(path: &Path) -> String {
-    let path = path.to_string_lossy();
+    let path = path.to_string_lossy().into_owned();
+    // Windows canonicalize() returns verbatim paths (\\?\C:\Users\...).
+    // Keep those for subprocesses, but never show raw API prefixes in menus.
+    #[cfg(target_os = "windows")]
+    let path = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
+    };
     if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
         let home = home.to_string_lossy();
         if path == home {
@@ -429,35 +476,81 @@ fn abbreviated_path(path: &Path) -> String {
             return format!("~{}{}", std::path::MAIN_SEPARATOR, rest);
         }
     }
-    path.into_owned()
+    path
+}
+
+/// Match macOS's plain semibold "Z" menu-bar text: no square, tile or
+/// background. Supersampling keeps the monochrome glyph clean at tray sizes.
+fn icon_rgba(foreground: [u8; 3]) -> Vec<u8> {
+    // The Z silhouette comes from the Zodex favicon with the background
+    // removed, centered and scaled to a 22 px glyph in a 32 px tray icon.
+    let polygon = [
+        (24.0, 28.0),
+        (72.0, 28.0),
+        (72.0, 35.0),
+        (39.0, 68.0),
+        (72.0, 68.0),
+        (72.0, 76.0),
+        (23.0, 76.0),
+        (23.0, 69.0),
+        (56.0, 36.0),
+        (24.0, 36.0),
+    ];
+    fn inside(x: f64, y: f64, polygon: &[(f64, f64)]) -> bool {
+        let mut hit = false;
+        let mut j = polygon.len() - 1;
+        for i in 0..polygon.len() {
+            let (ix, iy) = polygon[i];
+            let (jx, jy) = polygon[j];
+            if (iy > y) != (jy > y) && x < (jx - ix) * (y - iy) / (jy - iy) + ix {
+                hit = !hit;
+            }
+            j = i;
+        }
+        hit
+    }
+    let mut rgba = vec![0; 32 * 32 * 4];
+    for y in 0..32 {
+        for x in 0..32 {
+            let mut coverage = 0u8;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let point_x = ((x * 4 + sx) as f64 / 4.0 + 0.125 - 5.0) / 0.44 + 23.0;
+                    let point_y = ((y * 4 + sy) as f64 / 4.0 + 0.125 - 5.0) / 0.44 + 28.0;
+                    coverage += u8::from(inside(point_x, point_y, &polygon));
+                }
+            }
+            let offset = (y * 32 + x) * 4;
+            rgba[offset..offset + 3].copy_from_slice(&foreground);
+            rgba[offset + 3] = (u16::from(coverage) * 255 / 16) as u8;
+        }
+    }
+    rgba
 }
 
 fn zodex_icon() -> Result<Icon, String> {
-    let mut rgba = vec![0; 32 * 32 * 4];
-    let z = [
-        0b11111u8, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
-    ];
-    for y in 0usize..32 {
-        for x in 0usize..32 {
-            let corner_x = if x < 7 { 7 - x } else { x.saturating_sub(24) };
-            let corner_y = if y < 7 { 7 - y } else { y.saturating_sub(24) };
-            let rounded = corner_x * corner_x + corner_y * corner_y < 49;
-            let pixel = (y * 32 + x) * 4;
-            if rounded {
-                let glyph_x = (x as isize - 6) / 4;
-                let glyph_y = (y as isize - 4) / 3;
-                let white = (0..5).contains(&glyph_x)
-                    && (0..7).contains(&glyph_y)
-                    && z[glyph_y as usize] & (1 << (4 - glyph_x)) != 0;
-                rgba[pixel..pixel + 4].copy_from_slice(if white {
-                    &[255, 255, 255, 255]
-                } else {
-                    &[35, 137, 194, 255]
-                });
-            }
+    Icon::from_rgba(icon_rgba(platform::tray_icon_foreground()), 32, 32).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_icon_has_no_tile_or_background_and_has_a_centered_z() {
+        let rgba = icon_rgba([247, 247, 247]);
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        for (x, y) in [(0, 0), (31, 31), (0, 16), (16, 0), (16, 31)] {
+            assert_eq!(
+                rgba[(y * 32 + x) * 4 + 3],
+                0,
+                "background must be transparent"
+            );
         }
+        assert_eq!(rgba[(8 * 32 + 16) * 4 + 3], 255, "top bar of Z");
+        assert_eq!(rgba[(16 * 32 + 16) * 4 + 3], 255, "diagonal of Z");
+        assert_eq!(rgba[(24 * 32 + 16) * 4 + 3], 255, "bottom bar of Z");
     }
-    Icon::from_rgba(rgba, 32, 32).map_err(|e| e.to_string())
 }
 
 fn run() -> Result<(), String> {
@@ -496,16 +589,26 @@ fn run() -> Result<(), String> {
     };
     let binary = platform::zodex_executable()?;
     let (items, menu) = MenuItems::build()?;
-    let _tray = TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .with_tooltip("Zodex Local")
         .with_icon(zodex_icon()?)
         .with_menu(Box::new(menu))
         .build()
         .map_err(|e| format!("Could not create system tray icon: {e}"))?;
     let (sender, receiver): (Sender<Response>, Receiver<Response>) = mpsc::channel();
-    let mut app = App::new(binary, items, sender);
+    let mut app = App::new(binary, tray, items, sender);
     loop {
         platform::pump_events();
+        // Reconcile as soon as the user opens the tray, rather than waiting
+        // for the next background poll.
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            if matches!(
+                event,
+                TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }
+            ) {
+                app.submit(Task::Status);
+            }
+        }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if !app.click(event) {
                 return Ok(());
@@ -514,7 +617,12 @@ fn run() -> Result<(), String> {
         while let Ok(response) = receiver.try_recv() {
             app.received(response);
         }
-        if app.last_status.elapsed() >= STATUS_INTERVAL && !app.status_in_flight {
+        let interval = if app.lifecycle.pending() {
+            TRANSITION_STATUS_INTERVAL
+        } else {
+            STATUS_INTERVAL
+        };
+        if app.last_status.elapsed() >= interval && !app.status_in_flight {
             app.submit(Task::Status);
         }
         thread::sleep(Duration::from_millis(80));

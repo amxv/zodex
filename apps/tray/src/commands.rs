@@ -1,5 +1,11 @@
 use serde::Deserialize;
-use std::{path::Path, process::Command};
+use std::{
+    io::{Read as _, Seek as _},
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Debug)]
 pub struct CommandResult {
@@ -25,6 +31,7 @@ pub struct UpgradeEvent {
 pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult {
     let mut command = Command::new(executable);
     command.args(arguments);
+    command.stdin(Stdio::null());
     if start {
         #[cfg(target_os = "linux")]
         match crate::platform::developer_environment() {
@@ -46,6 +53,83 @@ pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult 
         use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // The Local start/stop command can spawn a detached process that holds
+    // inherited stdout/stderr handles. Command::output waits for pipe EOF,
+    // not just the CLI process to exit, so the tray could show "Starting…"
+    // indefinitely even after status is already "running". A temporary file
+    // lets us retain errors while waiting only for the direct CLI process.
+    let lifecycle = matches!(arguments, ["local", "start", ..] | ["local", "stop"]);
+    let status_query = matches!(arguments, ["local", "status", "--json"]);
+    if lifecycle || status_query {
+        let mut log = match tempfile::tempfile() {
+            Ok(file) => file,
+            Err(error) => {
+                return CommandResult {
+                    ok: false,
+                    output: format!("Could not capture Zodex lifecycle diagnostics: {error}"),
+                };
+            }
+        };
+        let stdout = match log.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                return CommandResult {
+                    ok: false,
+                    output: error.to_string(),
+                };
+            }
+        };
+        let stderr = match log.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                return CommandResult {
+                    ok: false,
+                    output: error.to_string(),
+                };
+            }
+        };
+        command.stdout(Stdio::from(stdout));
+        command.stderr(Stdio::from(stderr));
+        let wait_result = if status_query {
+            // A wedged status CLI must not pin status_in_flight forever.
+            // The command is read-only, so it is safe to terminate on timeout.
+            (|| {
+                let mut child = command.spawn()?;
+                let deadline = Instant::now() + Duration::from_secs(6);
+                loop {
+                    if let Some(exit) = child.try_wait()? {
+                        return Ok(exit);
+                    }
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "Zodex status check took more than 6 seconds",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(30));
+                }
+            })()
+        } else {
+            command.status()
+        };
+        return match wait_result {
+            Ok(status) => {
+                let _ = log.rewind();
+                let mut output = String::new();
+                let _ = log.take(64 * 1024).read_to_string(&mut output);
+                CommandResult {
+                    ok: status.success(),
+                    output,
+                }
+            }
+            Err(error) => CommandResult {
+                ok: false,
+                output: format!("Could not execute {}: {error}", executable.display()),
+            },
+        };
+    }
     match command.output() {
         Ok(output) => CommandResult {
             ok: output.status.success(),
@@ -59,6 +143,29 @@ pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult 
             ok: false,
             output: format!("Could not execute {}: {error}", executable.display()),
         },
+    }
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waiting_for_cli_does_not_wait_for_descendant_inherited_stdout() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "(sleep 3) & echo 'CLI finished'"]);
+        let mut output_file = tempfile::tempfile().unwrap();
+        command.stdout(Stdio::from(output_file.try_clone().unwrap()));
+        command.stderr(Stdio::from(output_file.try_clone().unwrap()));
+        let started = Instant::now();
+        let exit = command.status().unwrap();
+        assert!(exit.success());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        output_file.rewind().unwrap();
+        let mut output = String::new();
+        output_file.read_to_string(&mut output).unwrap();
+        assert!(output.contains("CLI finished"));
     }
 }
 
