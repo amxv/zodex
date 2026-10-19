@@ -42,6 +42,14 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
     let mut encoded_bytes = 0usize;
     let mut entries = Vec::with_capacity(environment.len());
     for (key, value) in environment {
+        // Windows includes special per-drive current-directory entries such as
+        // `=C:=C:\\Users\\...` in the process environment block. They are not
+        // ordinary environment variables and cannot be passed through Rust's
+        // process environment APIs. Do not let one prevent Local from starting.
+        #[cfg(target_os = "windows")]
+        if is_windows_drive_current_directory(key) {
+            continue;
+        }
         validate_environment_name(key)
             .context("captured Local developer environment contains an invalid variable name")?;
         validate_environment_value(value)
@@ -95,6 +103,18 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
     })?;
     super::private_fs::set_user_only_file(path)?;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_drive_current_directory(key: &OsString) -> bool {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let units = key.encode_wide().collect::<Vec<_>>();
+    units.len() == 3
+        && units[0] == u16::from(b'=')
+        && units[2] == u16::from(b':')
+        && ((u16::from(b'A')..=u16::from(b'Z')).contains(&units[1])
+            || (u16::from(b'a')..=u16::from(b'z')).contains(&units[1]))
 }
 
 pub fn consume_environment_handoff(path: &Path) -> Result<Vec<(OsString, OsString)>> {
@@ -350,6 +370,36 @@ mod tests {
         ];
         write_environment_handoff(&path, &environment).unwrap();
         assert_eq!(consume_environment_handoff(&path).unwrap(), environment);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_environment_handoff_ignores_drive_current_directory_entries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runtime/environment.json");
+        let environment = vec![
+            (OsString::from("=C:"), OsString::from(r"C:\Users\Developer")),
+            (OsString::from("=z:"), OsString::from(r"Z:\tools")),
+            (OsString::from("SystemRoot"), OsString::from(r"C:\Windows")),
+            (
+                OsString::from("Path"),
+                OsString::from(r"C:\Windows\System32"),
+            ),
+        ];
+        write_environment_handoff(&path, &environment).unwrap();
+        assert_eq!(
+            consume_environment_handoff(&path).unwrap(),
+            environment[2..]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_environment_handoff_still_rejects_invalid_regular_keys() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runtime/environment.json");
+        let environment = vec![(OsString::from("INVALID=KEY"), OsString::from("value"))];
+        assert!(write_environment_handoff(&path, &environment).is_err());
     }
 
     #[cfg(unix)]

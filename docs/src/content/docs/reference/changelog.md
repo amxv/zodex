@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.10 - 2026-10-19
+
+- Fixed Windows Local startup when the captured login environment contains special `=C:` or `=D:` drive-directory entries. These Windows-only bookkeeping entries are omitted from the handoff; real developer variables remain intact and invalid ordinary names are still rejected.
+- Prevented Windows tray background subprocess launches during sign-out, shutdown, and laptop suspend, and restored polling when sleep or shutdown is cancelled. The tray now listens for native Windows session/power notifications using a hidden top-level message receiver.
+- Replaced recurring `reg.exe` calls with in-process Windows registry reads and writes for tray startup registration and taskbar-theme detection. This removes frequent extra child processes and avoids shutdown-time `0xc0000142` application-error dialogs caused by launching helpers while Windows is closing the desktop.
+- Added Windows regression tests for environment handoff validation and session notification behavior.
+
 ## 0.5.9 - 2026-10-15
 
 - Added **Launch Tunnel at Login**, an opt-in persisted setting on macOS, Windows, and Linux. The existing checkbox is now **Launch Menu Bar at Login** on Mac and **Launch Tray at Login** on Windows/Linux. Enabling tunnel autostart also enables the desktop login app, then uses the saved Start Folder and the existing Local lifecycle to start after the next graphical sign-in. Default remains off; disabling only affects future login launches.

@@ -6,6 +6,8 @@ compile_error!("zodex-tray is only for Windows and Linux; macOS uses the Swift m
 mod commands;
 mod lifecycle;
 mod platform;
+#[cfg(target_os = "windows")]
+mod windows_session;
 
 use commands::CommandResult;
 use lifecycle::{Lifecycle, Operation, RuntimeState};
@@ -191,8 +193,12 @@ impl App {
             self.refresh_folder();
             self.render_status();
         }
-        self.items.launch_tunnel_at_login.set_checked(self.preferences.launch_tunnel_at_login);
-        self.items.launch_at_login.set_checked(platform::launch_at_login_enabled());
+        self.items
+            .launch_tunnel_at_login
+            .set_checked(self.preferences.launch_tunnel_at_login);
+        self.items
+            .launch_at_login
+            .set_checked(platform::launch_at_login_enabled());
     }
 
     fn login_start_folder(preferences: &platform::Preferences) -> Option<PathBuf> {
@@ -204,6 +210,10 @@ impl App {
     }
 
     fn submit(&mut self, task: Task) {
+        #[cfg(target_os = "windows")]
+        if windows_session::launches_paused() {
+            return;
+        }
         let mut id = 0;
         let mut epoch = self.status_epoch;
         match &task {
@@ -330,7 +340,11 @@ impl App {
                 // the latter off also turns off the dependent option.
                 let result = commands::run(&self.binary, &["local", "autostart", "disable"], false);
                 if !result.ok {
-                    platform::show_message("Could not disable Launch Tunnel at Login", &result.output, false);
+                    platform::show_message(
+                        "Could not disable Launch Tunnel at Login",
+                        &result.output,
+                        false,
+                    );
                     self.refresh_login_preferences();
                     return true;
                 }
@@ -342,7 +356,12 @@ impl App {
         } else if id == self.items.launch_tunnel_at_login.id() {
             let enabling = !platform::preferences().launch_tunnel_at_login;
             let path = if enabling {
-                match self.preferences.start_folder.as_deref().filter(|folder| folder.is_dir()) {
+                match self
+                    .preferences
+                    .start_folder
+                    .as_deref()
+                    .filter(|folder| folder.is_dir())
+                {
                     Some(path) => path.to_string_lossy().into_owned(),
                     None => {
                         platform::show_message(
@@ -358,12 +377,20 @@ impl App {
                 String::new()
             };
             let result = if enabling {
-                commands::run(&self.binary, &["local", "autostart", "enable", &path], false)
+                commands::run(
+                    &self.binary,
+                    &["local", "autostart", "enable", &path],
+                    false,
+                )
             } else {
                 commands::run(&self.binary, &["local", "autostart", "disable"], false)
             };
             if !result.ok {
-                platform::show_message("Could not change Launch Tunnel at Login", &result.output, false);
+                platform::show_message(
+                    "Could not change Launch Tunnel at Login",
+                    &result.output,
+                    false,
+                );
             }
             self.refresh_login_preferences();
         } else if id == self.items.update.id() {
@@ -442,6 +469,10 @@ impl App {
                     self.status_epoch += 1;
                     self.render_status();
                     if !result.ok {
+                        #[cfg(target_os = "windows")]
+                        if windows_session::launches_paused() {
+                            return;
+                        }
                         platform::show_message("Zodex command failed", &result.output, false);
                     } else if matches!(task, Task::CopyLiveboard) {
                         self.items.copy.set_text("Liveboard Link Copied");
@@ -675,6 +706,11 @@ fn run() -> Result<(), String> {
     let Some(_lock) = platform::single_instance()? else {
         return Ok(());
     };
+    // The tray is a GUI process with no visible top-level window. Windows
+    // only sends logoff/shutdown notifications to top-level windows, so keep
+    // an invisible receiver to stop spawning helpers during session teardown.
+    #[cfg(target_os = "windows")]
+    let _session_notifications = windows_session::SessionNotifications::new()?;
     let binary = platform::zodex_executable()?;
     let (items, menu) = MenuItems::build()?;
     let tray = TrayIconBuilder::new()
@@ -686,7 +722,9 @@ fn run() -> Result<(), String> {
     let (sender, receiver): (Sender<Response>, Receiver<Response>) = mpsc::channel();
     let mut app = App::new(binary, tray, items, sender);
     loop {
-        platform::pump_events();
+        if !platform::pump_events() {
+            return Ok(());
+        }
         // Reconcile as soon as the user opens the tray, rather than waiting
         // for the next background poll.
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {

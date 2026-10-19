@@ -114,28 +114,35 @@ fn desktop_exec_quote(path: &Path) -> Result<String, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn reg_command(args: &[&str]) -> Result<std::process::Output, String> {
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+const WINDOWS_TRAY_RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
-    let root = env::var_os("SystemRoot").ok_or("SystemRoot is missing")?;
-    Command::new(PathBuf::from(root).join("System32/reg.exe"))
-        .args(args)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("Cannot access Windows startup registration: {e}"))
+#[cfg(target_os = "windows")]
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(Some(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn registry_value_exists(subkey: &str, name: &str) -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_ANY, RegGetValueW};
+
+    let mut byte_count = 0;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            wide(subkey).as_ptr(),
+            wide(name).as_ptr(),
+            RRF_RT_ANY,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut byte_count,
+        ) == 0
+    }
 }
 
 pub fn launch_at_login_enabled() -> bool {
     #[cfg(target_os = "windows")]
     {
-        reg_command(&[
-            "query",
-            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-            "/v",
-            "ZodexTray",
-        ])
-        .is_ok_and(|output| output.status.success())
+        registry_value_exists(WINDOWS_TRAY_RUN_KEY, "ZodexTray")
     }
     #[cfg(target_os = "linux")]
     {
@@ -150,30 +157,43 @@ pub fn launch_at_login_enabled() -> bool {
 pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-        let executable = env::current_exe().map_err(|e| e.to_string())?;
-        let quoted = format!("\"{}\"", executable.display());
-        let args = if enabled {
-            vec![
-                "add",
-                key,
-                "/v",
-                "ZodexTray",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &quoted,
-                "/f",
-            ]
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::System::Registry::{
+            HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
+        };
+
+        let subkey = wide(WINDOWS_TRAY_RUN_KEY);
+        let name = wide("ZodexTray");
+        let status = if enabled {
+            let executable = env::current_exe().map_err(|e| e.to_string())?;
+            let mut quoted = OsString::from("\"");
+            quoted.push(executable.as_os_str());
+            quoted.push("\"");
+            let value = quoted.encode_wide().chain(Some(0)).collect::<Vec<_>>();
+            let bytes = u32::try_from(value.len() * size_of::<u16>())
+                .map_err(|_| "Windows tray startup path is too long".to_owned())?;
+            unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    subkey.as_ptr(),
+                    name.as_ptr(),
+                    REG_SZ,
+                    value.as_ptr().cast(),
+                    bytes,
+                )
+            }
         } else {
             if !launch_at_login_enabled() {
                 return Ok(());
             }
-            vec!["delete", key, "/v", "ZodexTray", "/f"]
+            unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey.as_ptr(), name.as_ptr()) }
         };
-        let output = reg_command(&args)?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        if status != 0 {
+            return Err(format!(
+                "Cannot update Windows tray startup registration: {}",
+                std::io::Error::from_raw_os_error(status as i32)
+            ));
         }
         Ok(())
     }
@@ -392,40 +412,48 @@ pub fn show_message(title: &str, detail: &str, question: bool) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-pub fn pump_events() {
+pub fn pump_events() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_QUIT,
     };
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+            if msg.message == WM_QUIT {
+                return false;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
+    true
 }
 
 #[cfg(target_os = "linux")]
-pub fn pump_events() {}
+pub fn pump_events() -> bool {
+    true
+}
 
 #[cfg(target_os = "windows")]
 pub fn tray_icon_foreground() -> [u8; 3] {
-    // Windows can run a light taskbar even when the app window is dark.
-    // Respect the system taskbar theme so the transparent Z remains legible.
-    let output = reg_command(&[
-        "query",
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        "/v",
-        "SystemUsesLightTheme",
-    ]);
-    let light = output
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| {
-            String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-                line.contains("SystemUsesLightTheme") && line.trim_end().ends_with("0x1")
-            })
-        });
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+
+    // Query the registry in-process. Spawning reg.exe during desktop sign-out
+    // can produce Windows' 0xc0000142 "application error" dialog.
+    let mut theme = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    let light = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize").as_ptr(),
+            wide("SystemUsesLightTheme").as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut theme as *mut u32).cast(),
+            &mut size,
+        ) == 0
+            && theme == 1
+    };
     if light { [28, 28, 28] } else { [247, 247, 247] }
 }
 
@@ -459,7 +487,10 @@ mod tests {
         let old = r#"{"start_folder":"/tmp/previous-workspace"}"#;
         let loaded: Preferences = serde_json::from_str(old).unwrap();
         assert!(!loaded.launch_tunnel_at_login);
-        assert_eq!(loaded.start_folder, Some(PathBuf::from("/tmp/previous-workspace")));
+        assert_eq!(
+            loaded.start_folder,
+            Some(PathBuf::from("/tmp/previous-workspace"))
+        );
     }
 
     #[cfg(target_os = "linux")]

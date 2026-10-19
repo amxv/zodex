@@ -29,6 +29,17 @@ pub struct UpgradeEvent {
 }
 
 pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult {
+    // Work queued before Windows notified us of logoff may run on a worker
+    // after the notification. Never start another process at that point:
+    // Windows may reject its DLL initialization with 0xc0000142.
+    #[cfg(target_os = "windows")]
+    if crate::windows_session::launches_paused() {
+        return CommandResult {
+            ok: false,
+            output: "Windows is suspending or ending the session; Zodex did not launch a command"
+                .into(),
+        };
+    }
     let mut command = Command::new(executable);
     command.args(arguments);
     command.stdin(Stdio::null());
@@ -90,6 +101,15 @@ pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult 
         };
         command.stdout(Stdio::from(stdout));
         command.stderr(Stdio::from(stderr));
+        #[cfg(target_os = "windows")]
+        if crate::windows_session::launches_paused() {
+            return CommandResult {
+                ok: false,
+                output:
+                    "Windows is suspending or ending the session; Zodex did not launch a command"
+                        .into(),
+            };
+        }
         let wait_result = if status_query {
             // A wedged status CLI must not pin status_in_flight forever.
             // The command is read-only, so it is safe to terminate on timeout.
@@ -97,6 +117,15 @@ pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult 
                 let mut child = command.spawn()?;
                 let deadline = Instant::now() + Duration::from_secs(6);
                 loop {
+                    #[cfg(target_os = "windows")]
+                    if crate::windows_session::launches_paused() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Windows is suspending or ending the session",
+                        ));
+                    }
                     if let Some(exit) = child.try_wait()? {
                         return Ok(exit);
                     }
@@ -128,6 +157,14 @@ pub fn run(executable: &Path, arguments: &[&str], start: bool) -> CommandResult 
                 ok: false,
                 output: format!("Could not execute {}: {error}", executable.display()),
             },
+        };
+    }
+    #[cfg(target_os = "windows")]
+    if crate::windows_session::launches_paused() {
+        return CommandResult {
+            ok: false,
+            output: "Windows is suspending or ending the session; Zodex did not launch a command"
+                .into(),
         };
     }
     match command.output() {
