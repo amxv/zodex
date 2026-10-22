@@ -42,12 +42,13 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
     let mut encoded_bytes = 0usize;
     let mut entries = Vec::with_capacity(environment.len());
     for (key, value) in environment {
-        // Windows includes special per-drive current-directory entries such as
-        // `=C:=C:\\Users\\...` in the process environment block. They are not
-        // ordinary environment variables and cannot be passed through Rust's
-        // process environment APIs. Do not let one prevent Local from starting.
+        // Windows includes special entries whose names begin with `=`, such as
+        // per-drive current directories (`=C:`). These are process bookkeeping,
+        // not variables that Rust can put into a child process environment.
+        // Their names are not limited to `=<drive>:`; skip all of them so an
+        // unusual Windows entry cannot prevent Local from starting.
         #[cfg(target_os = "windows")]
-        if is_windows_drive_current_directory(key) {
+        if is_windows_special_environment_name(key) {
             continue;
         }
         validate_environment_name(key)
@@ -106,15 +107,10 @@ pub fn write_environment_handoff(path: &Path, environment: &[(OsString, OsString
 }
 
 #[cfg(target_os = "windows")]
-fn is_windows_drive_current_directory(key: &OsString) -> bool {
+fn is_windows_special_environment_name(key: &OsString) -> bool {
     use std::os::windows::ffi::OsStrExt as _;
 
-    let units = key.encode_wide().collect::<Vec<_>>();
-    units.len() == 3
-        && units[0] == u16::from(b'=')
-        && units[2] == u16::from(b':')
-        && ((u16::from(b'A')..=u16::from(b'Z')).contains(&units[1])
-            || (u16::from(b'a')..=u16::from(b'z')).contains(&units[1]))
+    key.encode_wide().next() == Some(u16::from(b'='))
 }
 
 pub fn consume_environment_handoff(path: &Path) -> Result<Vec<(OsString, OsString)>> {
@@ -374,12 +370,19 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_environment_handoff_ignores_drive_current_directory_entries() {
+    fn windows_environment_handoff_ignores_special_equals_prefixed_entries() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("runtime/environment.json");
         let environment = vec![
             (OsString::from("=C:"), OsString::from(r"C:\Users\Developer")),
             (OsString::from("=z:"), OsString::from(r"Z:\tools")),
+            (OsString::from("=::"), OsString::from("unusual drive state")),
+            (OsString::from("=ExitCode"), OsString::from("00000000")),
+            (
+                OsString::from("=Q:other"),
+                OsString::from("opaque metadata"),
+            ),
+            (OsString::from("="), OsString::from("empty pseudo name")),
             (OsString::from("SystemRoot"), OsString::from(r"C:\Windows")),
             (
                 OsString::from("Path"),
@@ -389,8 +392,23 @@ mod tests {
         write_environment_handoff(&path, &environment).unwrap();
         assert_eq!(
             consume_environment_handoff(&path).unwrap(),
-            environment[2..]
+            environment[6..]
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_environment_handoff_accepts_actual_process_snapshot() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runtime/environment.json");
+        let captured = std::env::vars_os().collect::<Vec<_>>();
+        write_environment_handoff(&path, &captured).unwrap();
+
+        let expected = captured
+            .into_iter()
+            .filter(|(key, _)| !super::is_windows_special_environment_name(key))
+            .collect::<Vec<_>>();
+        assert_eq!(consume_environment_handoff(&path).unwrap(), expected);
     }
 
     #[cfg(target_os = "windows")]

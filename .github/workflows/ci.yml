@@ -278,7 +278,8 @@ jobs:
           cargo test --locked --lib local::liveboard::launch::tests::supported_platform_has_browser_and_clipboard_attempts -- --exact
           cargo test --locked --lib local::environment_handoff::tests::environment_handoff_round_trips_and_is_consumed -- --exact
           cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_preserves_utf16_values -- --exact
-          cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_ignores_drive_current_directory_entries -- --exact
+          cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_ignores_special_equals_prefixed_entries -- --exact
+          cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_accepts_actual_process_snapshot -- --exact
           cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_still_rejects_invalid_regular_keys -- --exact
           cargo test --locked --lib local::lifecycle_context::windows_tests::windows_resolves_builtin_powershell_from_captured_system_root -- --exact
           cargo test --locked --lib local::paths::tests::local_paths_separate_durable_and_runtime_state -- --exact

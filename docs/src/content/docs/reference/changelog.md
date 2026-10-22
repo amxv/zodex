@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.11 - 2026-10-22
+
+- Fixed Windows Local failing to start with "captured Local developer environment contains an invalid variable name" when Windows supplies special environment entries other than the usual `=C:` / `=D:` drive-directory entries. All Windows-only `=`-prefixed bookkeeping names are now omitted from the runtime environment handoff while ordinary variable names continue to be validated and developer values are preserved.
+- Added Windows regression coverage for unusual special names and for the actual captured process environment, preventing this startup failure from leaving the Local Liveboard unavailable.
+
 ## 0.5.10 - 2026-10-19
 
 - Fixed Windows Local startup when the captured login environment contains special `=C:` or `=D:` drive-directory entries. These Windows-only bookkeeping entries are omitted from the handoff; real developer variables remain intact and invalid ordinary names are still rejected.
