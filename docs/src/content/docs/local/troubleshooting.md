@@ -88,7 +88,7 @@ Common causes:
 - a stale runtime/tunnel state needs cleanup;
 - outbound HTTPS to OpenAI is blocked.
 
-On macOS, when repeatedly installing locally compiled builds, a Keychain password prompt after each rebuild means the ad-hoc code signature changed. Maintainers can enroll the stable local signer described in [Development](/docs/reference/development#stable-keychain-access-for-source-builds). Normal signed release upgrades do not need this development setup. Windows uses Credential Manager and does not use this macOS code-signing workaround.
+On macOS, a password prompt during an operator upgrade may be **codesign** requesting access to the signing certificate's **private key**. The installer preserves a locally configured code-signing identity to keep your existing Keychain item trusted across operator versions. If macOS asks to allow `/usr/bin/codesign` to use the **Zodex Local Development** signing key, select **Always Allow** once (rather than **Allow**) to persist authorization. A locked login Keychain still requires your password to unlock it. Zodex does not bypass Keychain access controls, disable code-signing, or store your account password. For local signing setup, see [Development](/docs/reference/development#stable-keychain-access-for-source-builds). Windows uses Credential Manager and does not use macOS code signing.
 
 Try a clean stop/start:
 

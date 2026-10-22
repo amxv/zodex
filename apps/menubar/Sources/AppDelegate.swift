@@ -101,8 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         action: #selector(toggleAutomaticUpdates)
     )
     private lazy var liveboardPortItem = menuItem(
-        "Set Liveboard Port… (64973)",
-        action: #selector(setLiveboardPort)
+        "Change Liveboard Port… (64973)",
+        action: #selector(setLiveboardPort),
+        symbol: "network",
+        symbolDescription: "Liveboard port"
     )
     private lazy var versionItem: NSMenuItem = {
         let version = Bundle.main.object(forInfoDictionaryKey: "ZodexVersion") as? String
@@ -123,6 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var liveboardPort: UInt16 = 64973
     private var pendingAutomaticUpdateVersion: String?
     private var automaticUpdateTimer: Timer?
+    private var versionCheckTimer: Timer?
+    private var relaunchingUpdatedApp = false
+    private lazy var launchVersion: String =
+        Bundle.main.object(forInfoDictionaryKey: "ZodexVersion") as? String ?? "unknown"
 
     init(zodexURL: URL) {
         self.zodexURL = zodexURL
@@ -130,6 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Capture the *running* bundle's version before a future installer
+        // replaces Info.plist on disk. A lazy first read after an update would
+        // otherwise mistake the installed version for this process's version.
+        _ = launchVersion
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
             button.image = nil
@@ -158,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureMenu.addItem(launchTunnelAtLoginItem)
         configureMenu.addItem(versionItem)
         let configureItem = NSMenuItem(title: "Configure", action: nil, keyEquivalent: "")
+        configureItem.image = menuSymbol("gearshape", description: "Configure Zodex")
         configureItem.submenu = configureMenu
         menu.addItem(configureItem)
         menu.addItem(.separator())
@@ -168,7 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         disableRuntimeActions()
-        if tunnelAutostartEnabled, let path = validStartFolder {
+        if !CommandLine.arguments.contains("--after-upgrade"),
+           tunnelAutostartEnabled, let path = validStartFolder {
             // Login startup is opt-in. Launch asynchronously through the same
             // captured interactive shell used for a manual menu Start.
             beginStart(path: path, showFailure: false)
@@ -184,9 +196,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.checkAutomaticUpdatesIfDue()
             self?.applyPendingAutomaticUpdateIfIdle()
         }
+        // The installer normally relaunches us. This also recovers when an
+        // older installer replaced the bundle without replacing the process.
+        versionCheckTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) {
+            [weak self] _ in self?.relaunchIfBundleWasUpdated()
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        relaunchIfBundleWasUpdated()
+        if relaunchingUpdatedApp { return }
         copyLiveboardItem.title = "Copy Liveboard Link"
         refreshLoginPreferences()
         updateStartFolderItems()
@@ -213,6 +232,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: description)
         image?.isTemplate = true
         return image
+    }
+
+    private func relaunchIfBundleWasUpdated() {
+        guard !relaunchingUpdatedApp, !upgradeInFlight else { return }
+        let installedInfo = Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: installedInfo),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any],
+              let installedVersion = info["ZodexVersion"] as? String,
+              installedVersion != launchVersion else { return }
+
+        // Spawn a tiny independent relauncher: launching a second app before
+        // this process exits would lose to our single-instance lock.
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = [
+            "-c",
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do " +
+                "kill -0 \"$1\" 2>/dev/null || break; sleep 0.1; done; " +
+                "exec /usr/bin/open -n -g \"$2\" --args --after-upgrade",
+            "zodex-menu-relaunch", String(getpid()), Bundle.main.bundleURL.path,
+        ]
+        helper.standardInput = FileHandle.nullDevice
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do {
+            try helper.run()
+            relaunchingUpdatedApp = true
+            NSApp.terminate(nil)
+        } catch {
+            NSLog("Zodex menu bar could not relaunch after update: %@", error.localizedDescription)
+        }
     }
 
     private var configuredStartFolder: String {
@@ -248,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         liveboardPort = preferences.liveboard_port
         launchTunnelAtLoginItem.state = tunnelAutostartEnabled ? .on : .off
         automaticUpdatesItem.state = automaticUpdatesEnabled ? .on : .off
-        liveboardPortItem.title = "Set Liveboard Port… (\(liveboardPort))"
+        liveboardPortItem.title = "Change Liveboard Port… (\(liveboardPort))"
         if !automaticUpdatesEnabled {
             pendingAutomaticUpdateVersion = nil
         }
@@ -471,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func setLiveboardPort() {
         let alert = NSAlert()
-        alert.messageText = "Set Liveboard Port"
+        alert.messageText = "Change Liveboard Port"
         alert.informativeText = "Enter a port from 1024 to 65535. Restart Zodex Local to apply it. The default is 64973."
         let input = NSTextField(string: String(liveboardPort))
         input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)

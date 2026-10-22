@@ -346,7 +346,16 @@ running_zodex_menubar_pids() {
   local lock_file
   lock_file="/tmp/zodex-menubar-$(/usr/bin/id -u).lock"
 
-  /usr/bin/pgrep -f -x "${app_executable}" 2>/dev/null || true
+  # `pgrep -f -x` stops matching if the app was launched with an argument
+  # (notably `--after-upgrade`). Only select exact user-owned executable
+  # command lines, never other processes merely mentioning this app path.
+  /bin/ps -axww -o uid= -o pid= -o command= 2>/dev/null \
+    | /usr/bin/awk -v uid="$(/usr/bin/id -u)" -v executable="${app_executable}" '
+        $1 == uid {
+          pid=$2; $1=""; $2=""; sub(/^[[:space:]]+/, "")
+          if ($0 == executable || $0 == executable " --after-upgrade") print pid
+        }
+      ' || true
   # The lock stays open for the lifetime of the app and remains reliable even
   # if an upgrade has renamed or removed the bundle underneath the process.
   if [[ -e "${lock_file}" && -x /usr/sbin/lsof ]]; then
@@ -380,6 +389,15 @@ stop_zodex_menubar_before_replace() {
   done
 
   die "failed to stop the running Zodex menu bar app before replacing ${app_executable}"
+}
+
+# LaunchServices may still consider the just-replaced bundle to be running,
+# even after the old process has exited. `-n` forces a fresh instance; the
+# menu's single-instance lock prevents duplicates. `--after-upgrade` avoids
+# triggering an opt-in login-only tunnel start on app replacement.
+relaunch_zodex_menubar_after_upgrade() {
+  local app_destination="$1"
+  /usr/bin/open -n -g "${app_destination}" --args --after-upgrade
 }
 
 install_operator_binaries_from_dir() {
@@ -442,19 +460,19 @@ install_operator_binaries_from_dir() {
     if [[ -e "${app_destination}" ]]; then
       /bin/mv "${app_destination}" "${app_backup}" \
         || {
-          [[ "${app_was_running}" -eq 0 ]] || /usr/bin/open -g "${app_destination}" || true
+          [[ "${app_was_running}" -eq 0 ]] || relaunch_zodex_menubar_after_upgrade "${app_destination}" || true
           die "failed to stage existing Zodex menu bar app for replacement"
         }
     fi
     if ! /bin/mv "${app_temporary}" "${app_destination}"; then
       [[ ! -e "${app_backup}" ]] || /bin/mv "${app_backup}" "${app_destination}" || true
-      [[ "${app_was_running}" -eq 0 ]] || /usr/bin/open -g "${app_destination}" || true
+      [[ "${app_was_running}" -eq 0 ]] || relaunch_zodex_menubar_after_upgrade "${app_destination}" || true
       die "failed to install Zodex menu bar app"
     fi
     /bin/rm -rf "${app_backup}"
 
     if [[ "${app_was_running}" -eq 1 ]]; then
-      /usr/bin/open -g "${app_destination}" \
+      relaunch_zodex_menubar_after_upgrade "${app_destination}" \
         || warn "Zodex menu bar app was upgraded but could not be relaunched automatically"
     fi
   fi

@@ -467,6 +467,115 @@ fn operator_upgrade_can_install_preextracted_release_without_fresh_install_chatt
     std::fs::remove_dir_all(&test_dir).expect("remove upgrade source test directory");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn upgrading_a_running_mac_menu_relaunches_the_new_app_without_login_autostart() {
+    let root = tempfile::tempdir().expect("temporary installer fixture");
+    let source = root.path().join("source");
+    let installed = root.path().join("installed");
+    let source_app = source.join("Zodex.app/Contents/MacOS/zodex-menubar");
+    let installed_app = installed.join("Zodex.app/Contents/MacOS/zodex-menubar");
+    std::fs::create_dir_all(source_app.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(installed_app.parent().unwrap()).unwrap();
+    std::fs::write(source.join("zodex"), "#!/bin/sh\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(source.join("zodex"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(&source_app, "new menu binary").unwrap();
+    std::fs::write(&installed_app, "old menu binary").unwrap();
+    std::fs::set_permissions(&installed_app, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let script = r#"
+set -euo pipefail
+eval "$(sed -n '/^install_operator_binary_atomically()/,/^}/p' "$INSTALL_SCRIPT")"
+eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "$INSTALL_SCRIPT")"
+uname() { printf 'Darwin\n'; }
+ensure_local_stopped_before_operator_replace() { :; }
+sign_local_operator_if_configured() { :; }
+stop_zodex_menubar_before_replace() { printf 'STOP_MENU:%s\n' "$1"; return 0; }
+relaunch_zodex_menubar_after_upgrade() { printf 'RELAUNCH_MENU:%s:--after-upgrade\n' "$1"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+log() { :; }
+install_operator_binaries_from_dir "$SOURCE_DIR"
+"#;
+    let output = Command::new("bash")
+        .args(["-c", script])
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("SOURCE_DIR", &source)
+        .env("ZODEX_INSTALL_DIR", &installed)
+        .env("ZODEX_UPGRADE_MODE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = String::from_utf8_lossy(&output.stdout);
+    assert!(messages.contains("STOP_MENU:"), "{messages}");
+    assert!(messages.contains("RELAUNCH_MENU:"), "{messages}");
+    assert!(messages.contains(":--after-upgrade"), "{messages}");
+    assert_eq!(std::fs::read(&installed_app).unwrap(), b"new menu binary");
+    let installer = std::fs::read_to_string(install_script_path()).unwrap();
+    assert!(
+        installer.contains("/usr/bin/open -n -g") && installer.contains("--args --after-upgrade"),
+        "a new process must be launched, not the stale LaunchServices instance"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn installer_recognizes_a_menu_app_launched_with_after_upgrade_argument() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = root.path().join("Zodex.app/Contents/MacOS/zodex-menubar");
+    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    let c_source = root.path().join("fixture.c");
+    std::fs::write(
+        &c_source,
+        "#include <unistd.h>\nint main(void) { sleep(15); return 0; }\n",
+    )
+    .unwrap();
+    let built = Command::new("/usr/bin/cc")
+        .arg(&c_source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "could not build process fixture: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let mut process = Command::new(&binary)
+        .arg("--after-upgrade")
+        .spawn()
+        .unwrap();
+    let script = r#"
+eval "$(sed -n '/^running_zodex_menubar_pids()/,/^}/p' "$INSTALL_SCRIPT")"
+running_zodex_menubar_pids "$MENU_EXE"
+"#;
+    let output = Command::new("bash")
+        .args(["-c", script])
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("MENU_EXE", &binary)
+        .output()
+        .unwrap();
+    let _ = process.kill();
+    let _ = process.wait();
+    assert!(
+        output.status.success(),
+        "menu process detection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let detected = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        detected
+            .lines()
+            .any(|line| line.trim() == process.id().to_string()),
+        "installer did not recognize running --after-upgrade menu process: {detected}"
+    );
+}
+
 #[test]
 fn public_install_docs_invoke_the_bash_installer() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

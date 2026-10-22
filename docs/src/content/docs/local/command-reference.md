@@ -155,7 +155,7 @@ zodex local autostart disable
 
 ### Desktop settings
 
-In **Configure** on macOS, Windows, or graphical Linux, use **Set Liveboard Port** to change the loopback port and **Automatic Updates (Daily)** to turn daily checks/automatic installation on or off. The matching terminal commands are:
+In **Configure** on macOS, Windows, or graphical Linux, use **Change Liveboard Port** (network icon) to change the loopback port and **Automatic Updates (Daily)** to turn daily checks/automatic installation on or off. The matching terminal commands are:
 
 ```bash
 zodex local preferences liveboard-port 65000

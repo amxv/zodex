@@ -20,8 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tray_icon::{
-    Icon, TrayIconBuilder, TrayIconEvent,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    Icon, NativeIcon, TrayIconBuilder, TrayIconEvent,
+    menu::{CheckMenuItem, IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 // A tray that is supposed to report the truth must reconcile independently
@@ -63,7 +63,7 @@ struct MenuItems {
     copy: MenuItem,
     folder_label: MenuItem,
     folder_change: MenuItem,
-    liveboard_port: MenuItem,
+    liveboard_port: IconMenuItem,
     update: MenuItem,
     automatic_updates: CheckMenuItem,
     launch_at_login: CheckMenuItem,
@@ -82,7 +82,9 @@ impl MenuItems {
             copy: MenuItem::new("Copy Liveboard Link", false, None),
             folder_label: MenuItem::new("Start Folder: ~", false, None),
             folder_change: MenuItem::new("Change Start Folder…", true, None),
-            liveboard_port: MenuItem::new("Set Liveboard Port…", true, None),
+            liveboard_port: IconMenuItem::with_native_icon(
+                "Change Liveboard Port…", true, Some(NativeIcon::Network), None,
+            ),
             update: MenuItem::new("Check for Updates…", true, None),
             automatic_updates: CheckMenuItem::new(
                 "Automatic Updates (Daily)", true, platform::preferences().automatic_updates, None,
@@ -107,6 +109,7 @@ impl MenuItems {
             quit: MenuItem::new("Quit Tray App", true, None),
         };
         let configure = Submenu::new("Configure", true);
+        configure.set_native_icon(Some(NativeIcon::PreferencesGeneral));
         configure.append_items(&[
             &items.folder_label,
             &items.folder_change,
@@ -199,7 +202,7 @@ impl App {
         self.items.folder_label.set_text(value);
         self.items.folder_change.set_text("Change Start Folder…");
         self.items.liveboard_port.set_text(format!(
-            "Set Liveboard Port… ({})", self.preferences.liveboard_port
+            "Change Liveboard Port… ({})", self.preferences.liveboard_port
         ));
     }
 
