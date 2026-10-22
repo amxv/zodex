@@ -104,7 +104,7 @@ impl MenuItems {
                 false,
                 None,
             ),
-            quit: MenuItem::new("Quit Tray Icon App", true, None),
+            quit: MenuItem::new("Quit Tray App", true, None),
         };
         let configure = Submenu::new("Configure", true);
         configure.append_items(&[

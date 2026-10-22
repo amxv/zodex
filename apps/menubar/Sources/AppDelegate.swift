@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.isEnabled = false
         return item
     }()
-    private lazy var quitItem = menuItem("Quit Menu Bar App", action: #selector(quit))
+    private lazy var quitItem = menuItem("Quit Menu Bar", action: #selector(quit))
 
     private var commandInFlight = false
     private var currentRuntimeID: String?

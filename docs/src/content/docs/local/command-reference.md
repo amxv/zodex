@@ -136,7 +136,7 @@ On Apple Silicon macOS, this opens the Swift menu bar app. On Windows and graphi
 
 **Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) is enabled by default after `zodex local setup`. Only the lightweight control app opens; the Local tunnel stays stopped unless you also enable **Launch Tunnel at Login**. The latter is off by default, uses your saved Start Folder, and takes effect at the next login. Enabling tunnel autostart automatically enables the menu/tray login item. Turning off the menu/tray login item disables tunnel autostart too.
 
-The main menu groups non-lifecycle controls in **Configure**. Choosing **Quit Menu Bar App** or **Quit Tray Icon App** only exits the convenience app; it does not change the Local runtime or the saved login settings. On fresh installs, Start Folder defaults to the user's home directory without additional setup; an explicitly selected folder is never overwritten.
+The main menu groups non-lifecycle controls in **Configure**. Choosing **Quit Menu Bar** or **Quit Tray App** only exits the convenience app; it does not change the Local runtime or the saved login settings. On fresh installs, Start Folder defaults to the user's home directory without additional setup; an explicitly selected folder is never overwritten.
 
 ## `zodex local autostart`
 
