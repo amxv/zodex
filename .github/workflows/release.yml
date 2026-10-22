@@ -39,6 +39,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Use short Cargo checkout paths on Windows
+        if: matrix.windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'D:\c' | Out-Null
+          'CARGO_HOME=D:\c' >> $env:GITHUB_ENV
+          git config --global core.longpaths true
+
       - name: Install Linux cross linker
         if: ${{ matrix.apt_packages }}
         run: |

@@ -8,6 +8,10 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.15 - 2026-10-23
+
+- Fixed Windows CI and release builds after the upstream Codex update: use a short Windows Cargo cache path and enable Git long-path support so Codex's unrelated long-named snapshot fixtures no longer exceed the Windows path limit. No patch-tool runtime or MCP interface changes.
+
 ## 0.5.14 - 2026-10-23
 
 - Updated OpenAI's upstream Codex `apply_patch` engine to the October 22, 2026 commit, including improved line-ending preservation, path handling, and partial-change evidence. Zodex retains its original `apply_patch(patch, workdir)` MCP interface.

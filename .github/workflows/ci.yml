@@ -247,6 +247,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Use short Cargo checkout paths on Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'D:\c' | Out-Null
+          'CARGO_HOME=D:\c' >> $env:GITHUB_ENV
+          git config --global core.longpaths true
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
