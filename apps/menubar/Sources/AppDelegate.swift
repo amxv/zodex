@@ -19,6 +19,12 @@ private struct LocalStatus: Decodable {
 private struct LocalLoginPreferences: Decodable {
     let start_folder: String?
     let launch_tunnel_at_login: Bool
+    let automatic_updates: Bool
+    let liveboard_port: UInt16
+}
+
+private struct AutomaticUpdateClaim: Decodable {
+    let due: Bool
 }
 
 private struct UpgradeEvent: Decodable {
@@ -73,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }()
     private lazy var changeFolderItem = menuItem(
-        "Set Start Folder…",
+        "Change Start Folder…",
         action: #selector(changeStartFolder),
         symbol: "folder.fill",
         symbolDescription: "Start folder"
@@ -90,13 +96,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         "Check for Updates…",
         action: #selector(updateZodex)
     )
+    private lazy var automaticUpdatesItem = menuItem(
+        "Automatic Updates (Daily)",
+        action: #selector(toggleAutomaticUpdates)
+    )
+    private lazy var liveboardPortItem = menuItem(
+        "Set Liveboard Port… (64973)",
+        action: #selector(setLiveboardPort)
+    )
     private lazy var versionItem: NSMenuItem = {
         let version = Bundle.main.object(forInfoDictionaryKey: "ZodexVersion") as? String
         let item = NSMenuItem(title: "Zodex v\(version ?? "unknown")", action: nil, keyEquivalent: "")
         item.isEnabled = false
         return item
     }()
-    private lazy var quitItem = menuItem("Quit", action: #selector(quit))
+    private lazy var quitItem = menuItem("Quit Menu Bar App", action: #selector(quit))
 
     private var commandInFlight = false
     private var currentRuntimeID: String?
@@ -105,6 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var upgradeInFlight = false
     private var sharedStartFolder: String?
     private var tunnelAutostartEnabled = false
+    private var automaticUpdatesEnabled = true
+    private var liveboardPort: UInt16 = 64973
+    private var pendingAutomaticUpdateVersion: String?
+    private var automaticUpdateTimer: Timer?
 
     init(zodexURL: URL) {
         self.zodexURL = zodexURL
@@ -127,13 +145,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(liveboardItem)
         menu.addItem(copyLiveboardItem)
         menu.addItem(.separator())
-        menu.addItem(startFolderItem)
-        menu.addItem(changeFolderItem)
-        menu.addItem(.separator())
-        menu.addItem(updateItem)
-        menu.addItem(launchAtLoginItem)
-        menu.addItem(launchTunnelAtLoginItem)
-        menu.addItem(versionItem)
+        let configureMenu = NSMenu(title: "Configure")
+        configureMenu.autoenablesItems = false
+        configureMenu.addItem(startFolderItem)
+        configureMenu.addItem(changeFolderItem)
+        configureMenu.addItem(liveboardPortItem)
+        configureMenu.addItem(.separator())
+        configureMenu.addItem(updateItem)
+        configureMenu.addItem(automaticUpdatesItem)
+        configureMenu.addItem(.separator())
+        configureMenu.addItem(launchAtLoginItem)
+        configureMenu.addItem(launchTunnelAtLoginItem)
+        configureMenu.addItem(versionItem)
+        let configureItem = NSMenuItem(title: "Configure", action: nil, keyEquivalent: "")
+        configureItem.submenu = configureMenu
+        menu.addItem(configureItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         statusItem.menu = menu
@@ -147,6 +173,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // captured interactive shell used for a manual menu Start.
             beginStart(path: path, showFailure: false)
         }
+        // One daily claim across process restarts, with a lightweight timer
+        // while the menu app is open. Never replace an active Local runtime.
+        automaticUpdateTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) {
+            [weak self] _ in
+            self?.checkAutomaticUpdatesIfDue()
+            self?.applyPendingAutomaticUpdateIfIdle()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.checkAutomaticUpdatesIfDue()
+            self?.applyPendingAutomaticUpdateIfIdle()
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -155,7 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         refreshStatus()
-        refreshUpgradeStatus(force: false, reportUpToDate: false)
+        applyPendingAutomaticUpdateIfIdle()
     }
 
     private func menuItem(
@@ -178,8 +215,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
 
-    private var configuredStartFolder: String? {
-        sharedStartFolder ?? defaults.string(forKey: Self.startFolderKey)
+    private var configuredStartFolder: String {
+        sharedStartFolder
+            ?? defaults.string(forKey: Self.startFolderKey)
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
     }
 
     private func readLoginPreferences() -> LocalLoginPreferences? {
@@ -205,13 +244,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         sharedStartFolder = preferences.start_folder
         tunnelAutostartEnabled = preferences.launch_tunnel_at_login
+        automaticUpdatesEnabled = preferences.automatic_updates
+        liveboardPort = preferences.liveboard_port
         launchTunnelAtLoginItem.state = tunnelAutostartEnabled ? .on : .off
+        automaticUpdatesItem.state = automaticUpdatesEnabled ? .on : .off
+        liveboardPortItem.title = "Set Liveboard Port… (\(liveboardPort))"
+        if !automaticUpdatesEnabled {
+            pendingAutomaticUpdateVersion = nil
+        }
     }
 
     private var validStartFolder: String? {
-        guard let path = configuredStartFolder else {
-            return nil
-        }
+        let path = configuredStartFolder
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
             return nil
@@ -220,14 +264,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateStartFolderItems() {
-        if let path = configuredStartFolder {
-            let availability = validStartFolder == nil ? " (Unavailable)" : ""
-            startFolderItem.title = "Start Folder: \(displayPath(path))\(availability)"
-            changeFolderItem.title = "Change Start Folder…"
-        } else {
-            startFolderItem.title = "Start Folder: Not set"
-            changeFolderItem.title = "Set Start Folder…"
-        }
+        let availability = validStartFolder == nil ? " (Unavailable)" : ""
+        startFolderItem.title = "Start Folder: \(displayPath(configuredStartFolder))\(availability)"
+        changeFolderItem.title = "Change Start Folder…"
     }
 
     private func updateLaunchAtLoginItem() {
@@ -266,6 +305,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatus() {
+        if upgradeInFlight {
+            disableRuntimeActions()
+            return
+        }
         disableRuntimeActions()
         let result = runZodexSync(["local", "status", "--json"])
         guard !commandInFlight else {
@@ -303,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stopItem.isEnabled = false
             liveboardItem.isEnabled = false
             copyLiveboardItem.isEnabled = false
+            applyPendingAutomaticUpdateIfIdle()
         case "unconfigured":
             startItem.title = "Start Zodex"
             disableRuntimeActions()
@@ -395,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func changeStartFolder() {
         let panel = NSOpenPanel()
-        panel.title = configuredStartFolder == nil ? "Set Zodex Start Folder" : "Change Zodex Start Folder"
+        panel.title = "Change Zodex Start Folder"
         panel.prompt = "Choose"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -423,6 +467,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshLoginPreferences()
         updateStartFolderItems()
         refreshStatus()
+    }
+
+    @objc private func setLiveboardPort() {
+        let alert = NSAlert()
+        alert.messageText = "Set Liveboard Port"
+        alert.informativeText = "Enter a port from 1024 to 65535. Restart Zodex Local to apply it. The default is 64973."
+        let input = NSTextField(string: String(liveboardPort))
+        input.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = input
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let port = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = runZodexSync(["local", "preferences", "liveboard-port", port])
+        guard result.exitCode == 0 else {
+            showCommandError("Could not save Liveboard port", result: result)
+            return
+        }
+        refreshLoginPreferences()
+        showInformation("Liveboard port saved", detail: "Restart Zodex Local to use port \(liveboardPort).")
+    }
+
+    @objc private func toggleAutomaticUpdates() {
+        let result = runZodexSync([
+            "local", "preferences", "automatic-updates", automaticUpdatesEnabled ? "false" : "true"
+        ])
+        if result.exitCode != 0 {
+            showCommandError("Could not change automatic updates", result: result)
+        }
+        refreshLoginPreferences()
+        if automaticUpdatesEnabled && result.exitCode == 0 {
+            checkAutomaticUpdatesIfDue()
+        }
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -467,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             arguments = ["local", "autostart", "disable"]
         } else {
             guard let path = validStartFolder else {
-                showError("Start Folder required", detail: "Choose an existing Start Folder before enabling Launch Tunnel at Login.")
+                showError("Start folder unavailable", detail: "Your home or selected Start Folder is unavailable.")
                 refreshLoginPreferences()
                 return
             }
@@ -483,13 +561,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func updateZodex() {
         if let version = availableUpdateVersion {
-            beginUpgrade(version: version, stopLocal: false)
+            beginUpgrade(version: version, stopLocal: false, automatic: false)
         } else {
-            refreshUpgradeStatus(force: true, reportUpToDate: true)
+            refreshUpgradeStatus(force: true, reportUpToDate: true, automatic: false)
         }
     }
 
-    private func refreshUpgradeStatus(force: Bool, reportUpToDate: Bool) {
+    private func checkAutomaticUpdatesIfDue() {
+        refreshLoginPreferences()
+        guard automaticUpdatesEnabled, !upgradeCheckInFlight, !upgradeInFlight else { return }
+        runZodex(["local", "preferences", "claim-update-check"]) { [weak self] result in
+            guard let self, self.automaticUpdatesEnabled,
+                  result.exitCode == 0,
+                  let data = result.output.data(using: .utf8),
+                  let claim = try? JSONDecoder().decode(AutomaticUpdateClaim.self, from: data),
+                  claim.due else { return }
+            self.refreshUpgradeStatus(force: true, reportUpToDate: false, automatic: true)
+        }
+    }
+
+    private func applyPendingAutomaticUpdateIfIdle() {
+        guard automaticUpdatesEnabled,
+              !commandInFlight, !upgradeCheckInFlight, !upgradeInFlight,
+              let version = pendingAutomaticUpdateVersion else { return }
+        // Only the upgrade CLI can definitively decide whether Local has
+        // stopped. Checking status here avoids knowingly disrupting work.
+        let result = runZodexSync(["local", "status", "--json"])
+        guard result.exitCode == 0,
+              let data = result.output.data(using: .utf8),
+              let status = try? JSONDecoder().decode(LocalStatus.self, from: data),
+              status.state == "stopped" || status.state == "unconfigured" else { return }
+        beginUpgrade(version: version, stopLocal: false, automatic: true)
+    }
+
+    private func refreshUpgradeStatus(force: Bool, reportUpToDate: Bool, automatic: Bool) {
         guard !upgradeCheckInFlight, !upgradeInFlight else {
             return
         }
@@ -525,22 +630,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if event.update_available == true, let target = event.target_version {
                 self.availableUpdateVersion = target
                 self.updateItem.title = "Update to v\(target)…"
+                if automatic && self.automaticUpdatesEnabled {
+                    self.pendingAutomaticUpdateVersion = target
+                }
             } else {
                 self.availableUpdateVersion = nil
                 self.updateItem.title = "Check for Updates…"
+                if automatic { self.pendingAutomaticUpdateVersion = nil }
                 if reportUpToDate {
                     self.showInformation("Zodex is up to date", detail: event.message)
                 }
             }
             self.updateItem.isEnabled = true
+            if automatic {
+                self.applyPendingAutomaticUpdateIfIdle()
+            }
         }
     }
 
-    private func beginUpgrade(version: String, stopLocal: Bool) {
+    private func beginUpgrade(version: String, stopLocal: Bool, automatic: Bool) {
         guard !upgradeInFlight else {
             return
         }
         upgradeInFlight = true
+        disableRuntimeActions()
         updateItem.title = "Preparing Update…"
         updateItem.isEnabled = false
 
@@ -558,8 +671,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.upgradeInFlight = false
                 if exitCode == 0 {
                     self.availableUpdateVersion = nil
+                    self.pendingAutomaticUpdateVersion = nil
                     self.updateItem.title = "Check for Updates…"
                     self.updateItem.isEnabled = true
+                    self.refreshStatus()
                     return
                 }
 
@@ -567,18 +682,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if failure?.code == "local_running", !stopLocal {
                     self.updateItem.title = "Update to v\(version)…"
                     self.updateItem.isEnabled = true
-                    self.confirmStopAndUpdate(version: version)
+                    if automatic {
+                        self.pendingAutomaticUpdateVersion = version
+                    } else {
+                        self.confirmStopAndUpdate(version: version)
+                    }
+                    self.refreshStatus()
                     return
                 }
 
                 self.updateItem.title = "Update to v\(version)…"
                 self.updateItem.isEnabled = true
+                self.refreshStatus()
                 let detail = failure?.message
                     ?? stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.showError(
-                    "Zodex update failed",
-                    detail: detail.isEmpty ? "The upgrade command exited with status \(exitCode)." : detail
-                )
+                if automatic {
+                    self.pendingAutomaticUpdateVersion = nil
+                    NSLog("Zodex automatic update failed: %@", detail)
+                } else {
+                    self.showError(
+                        "Zodex update failed",
+                        detail: detail.isEmpty ? "The upgrade command exited with status \(exitCode)." : detail
+                    )
+                }
             }
         )
     }
@@ -609,7 +735,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "Stop and Update")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
-            beginUpgrade(version: version, stopLocal: true)
+            beginUpgrade(version: version, stopLocal: true, automatic: false)
         }
     }
 

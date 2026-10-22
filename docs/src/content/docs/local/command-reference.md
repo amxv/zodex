@@ -136,7 +136,7 @@ On Apple Silicon macOS, this opens the Swift menu bar app. On Windows and graphi
 
 **Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) is enabled by default after `zodex local setup`. Only the lightweight control app opens; the Local tunnel stays stopped unless you also enable **Launch Tunnel at Login**. The latter is off by default, uses your saved Start Folder, and takes effect at the next login. Enabling tunnel autostart automatically enables the menu/tray login item. Turning off the menu/tray login item disables tunnel autostart too.
 
-Choosing **Quit** only exits the current menu/tray session; it does not change the Local runtime or the saved login settings.
+The main menu groups non-lifecycle controls in **Configure**. Choosing **Quit Menu Bar App** or **Quit Tray Icon App** only exits the convenience app; it does not change the Local runtime or the saved login settings. On fresh installs, Start Folder defaults to the user's home directory without additional setup; an explicitly selected folder is never overwritten.
 
 ## `zodex local autostart`
 
@@ -151,7 +151,20 @@ zodex local autostart folder /absolute/workspace/path
 zodex local autostart disable
 ```
 
-`enable` uses the last saved Start Folder, or the current directory if none was configured. Passing an explicit folder also saves that location for subsequent login launches and manual Start actions. The folder must exist and be accessible. `folder` changes that location without enabling autostart. `disable` stops **future automatic login starts** but does not stop an already-running Local runtime, and leaves **Launch Menu Bar at Login** or **Launch Tray at Login** as-is.
+`enable` uses the last saved Start Folder, or the user's home directory if none was configured. Passing an explicit folder also saves that location for subsequent login launches and manual Start actions. The folder must exist and be accessible. `folder` changes that location without enabling autostart. `disable` stops **future automatic login starts** but does not stop an already-running Local runtime, and leaves **Launch Menu Bar at Login** or **Launch Tray at Login** as-is.
+
+### Desktop settings
+
+In **Configure** on macOS, Windows, or graphical Linux, use **Set Liveboard Port** to change the loopback port and **Automatic Updates (Daily)** to turn daily checks/automatic installation on or off. The matching terminal commands are:
+
+```bash
+zodex local preferences liveboard-port 65000
+zodex local preferences liveboard-port 64973 # restore the default
+zodex local preferences automatic-updates true
+zodex local preferences automatic-updates false
+```
+
+Ports must be between `1024` and `65535`. Changing the port requires restarting Zodex Local; the current runtime keeps its original Liveboard URL until then. Automatic update checks run once per 24 hours while the desktop app is open, default to enabled, and install only when Local is stopped. They never terminate an active tunnel or its processes to upgrade.
 
 The setting persists in the user's non-secret Zodex desktop preferences. The menu/tray observes terminal changes without requiring another setup, and on your next graphical login it uses the same `zodex local start` lifecycle, credentials, and runtime behavior as a manual Start. Headless Linux does not automatically start a desktop tray; use an appropriate external service manager if you need headless boot-time operation.
 

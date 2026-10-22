@@ -19,15 +19,14 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::super::LocalPaths;
 use super::super::observer_client::LocalObserverClient;
+use super::super::{LocalLoginPreferences, LocalPaths};
 use super::assets;
 use super::bridge::LiveboardObserverBridge;
 use super::prefs::{LiveboardPreferencesPatch, LiveboardPreferencesStore};
 
 const PREFERENCE_BODY_LIMIT: usize = 64 * 1024;
 const LIVEBOARD_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-pub(crate) const LOCAL_LIVEBOARD_PORT: u16 = 64_973;
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'";
 
 #[derive(Clone)]
@@ -97,15 +96,15 @@ pub(crate) async fn start_liveboard_host(
     let observer = Arc::new(LiveboardObserverBridge::runtime_bound(observer_client));
     let preferences = LiveboardPreferencesStore::new(paths);
     preferences.load()?;
+    let configured_port = LocalLoginPreferences::load(paths)?.liveboard_port;
+    let port = liveboard_bind_port(configured_port, cfg!(test));
 
-    let listener = tokio::net::TcpListener::bind(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        liveboard_bind_port(),
-    ))
-    .await
-    .with_context(|| {
-        format!("failed to bind Liveboard loopback listener on 127.0.0.1:{LOCAL_LIVEBOARD_PORT}")
-    })?;
+    let listener =
+        tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+            .await
+            .with_context(|| {
+                format!("failed to bind Liveboard loopback listener on 127.0.0.1:{port}")
+            })?;
     let addr = listener
         .local_addr()
         .context("failed to inspect Liveboard loopback listener")?;
@@ -150,8 +149,20 @@ pub(crate) async fn start_liveboard_host(
     })
 }
 
-const fn liveboard_bind_port() -> u16 {
-    if cfg!(test) { 0 } else { LOCAL_LIVEBOARD_PORT }
+const fn liveboard_bind_port(configured: u16, test_mode: bool) -> u16 {
+    if test_mode { 0 } else { configured }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::liveboard_bind_port;
+
+    #[test]
+    fn user_selected_port_is_used_outside_parallel_test_mode() {
+        assert_eq!(liveboard_bind_port(64973, false), 64973);
+        assert_eq!(liveboard_bind_port(65017, false), 65017);
+        assert_eq!(liveboard_bind_port(65017, true), 0);
+    }
 }
 
 fn build_router(capability: &str, state: Arc<LiveboardState>, security: SecurityState) -> Router {

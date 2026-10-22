@@ -63,7 +63,7 @@ pub use lifecycle_start::start_via_linux_process;
 pub use lifecycle_start::start_via_windows_process;
 pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
 pub use liveboard::{copy_local_liveboard_url, local_liveboard_url, run_local_liveboard};
-pub use login_preferences::LocalLoginPreferences;
+pub use login_preferences::{DEFAULT_LIVEBOARD_PORT, LocalLoginPreferences};
 pub use observability::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
 };

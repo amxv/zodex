@@ -205,7 +205,7 @@ Find current IDs in Liveboard's **All Agents** drawer, `zodex local history`, or
 
 The stable Liveboard address responds while the Local runtime owns its loopback host. `zodex local watch` itself may exit after opening the browser because the host lives inside the Local runtime.
 
-If the browser did not open automatically, run `zodex local watch url` and open the printed `http://127.0.0.1:64973/` URL manually, or run `zodex local watch copyurl`. On macOS, **Copy Liveboard Link** remains available from the menu bar app.
+If the browser did not open automatically, run `zodex local watch url` and open the printed URL (default `http://127.0.0.1:64973/`, or your configured port) manually, or run `zodex local watch copyurl`. On macOS, **Copy Liveboard Link** remains available from the menu bar app.
 
 If the page reports a version mismatch or observer failure, confirm the running Local runtime and the `zodex` binary you launched agree:
 

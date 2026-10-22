@@ -21,13 +21,14 @@ use std::{
 };
 use tray_icon::{
     Icon, TrayIconBuilder, TrayIconEvent,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 // A tray that is supposed to report the truth must reconcile independently
 // of Start/Stop command completion, including when a CLI is slow or wedged.
 const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 const TRANSITION_STATUS_INTERVAL: Duration = Duration::from_millis(500);
+const AUTO_UPDATE_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Clone, Debug)]
 enum Task {
@@ -37,7 +38,8 @@ enum Task {
     OpenLiveboard,
     CopyLiveboard,
     CheckUpgrade,
-    Upgrade(String, bool),
+    CheckAutomaticUpdate,
+    Upgrade(String, bool, bool), // version, stop Local, automatic
 }
 
 enum Response {
@@ -51,6 +53,7 @@ enum Response {
         result: CommandResult,
     },
     FolderSelected(Result<Option<PathBuf>, String>),
+    PortSelected(Result<Option<String>, String>),
 }
 
 struct MenuItems {
@@ -60,7 +63,9 @@ struct MenuItems {
     copy: MenuItem,
     folder_label: MenuItem,
     folder_change: MenuItem,
+    liveboard_port: MenuItem,
     update: MenuItem,
+    automatic_updates: CheckMenuItem,
     launch_at_login: CheckMenuItem,
     launch_tunnel_at_login: CheckMenuItem,
     version: MenuItem,
@@ -75,9 +80,13 @@ impl MenuItems {
             stop: MenuItem::new("Stop Zodex", false, None),
             liveboard: MenuItem::new("Open Liveboard", false, None),
             copy: MenuItem::new("Copy Liveboard Link", false, None),
-            folder_label: MenuItem::new("Start Folder: Not set", false, None),
-            folder_change: MenuItem::new("Set Start Folder…", true, None),
+            folder_label: MenuItem::new("Start Folder: ~", false, None),
+            folder_change: MenuItem::new("Change Start Folder…", true, None),
+            liveboard_port: MenuItem::new("Set Liveboard Port…", true, None),
             update: MenuItem::new("Check for Updates…", true, None),
+            automatic_updates: CheckMenuItem::new(
+                "Automatic Updates (Daily)", true, platform::preferences().automatic_updates, None,
+            ),
             launch_at_login: CheckMenuItem::new(
                 "Launch Tray at Login",
                 true,
@@ -95,25 +104,30 @@ impl MenuItems {
                 false,
                 None,
             ),
-            quit: MenuItem::new("Quit", true, None),
+            quit: MenuItem::new("Quit Tray Icon App", true, None),
         };
-        let divider1 = PredefinedMenuItem::separator();
-        let divider2 = PredefinedMenuItem::separator();
-        let divider3 = PredefinedMenuItem::separator();
+        let configure = Submenu::new("Configure", true);
+        configure.append_items(&[
+            &items.folder_label,
+            &items.folder_change,
+            &items.liveboard_port,
+            &PredefinedMenuItem::separator(),
+            &items.update,
+            &items.automatic_updates,
+            &PredefinedMenuItem::separator(),
+            &items.launch_at_login,
+            &items.launch_tunnel_at_login,
+            &items.version,
+        ])
+        .map_err(|e| e.to_string())?;
         menu.append_items(&[
             &items.start,
             &items.stop,
             &items.liveboard,
             &items.copy,
-            &divider1,
-            &items.folder_label,
-            &items.folder_change,
-            &divider2,
-            &items.update,
-            &items.launch_at_login,
-            &items.launch_tunnel_at_login,
-            &items.version,
-            &divider3,
+            &PredefinedMenuItem::separator(),
+            &configure,
+            &PredefinedMenuItem::separator(),
             &items.quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -134,6 +148,9 @@ struct App {
     status_in_flight: bool,
     update_in_flight: bool,
     available_update: Option<String>,
+    pending_automatic_update: Option<String>,
+    next_auto_update_poll: Instant,
+    installing_update: bool,
     last_status: Instant,
 }
 
@@ -157,6 +174,9 @@ impl App {
             status_in_flight: false,
             update_in_flight: false,
             available_update: None,
+            pending_automatic_update: None,
+            next_auto_update_poll: Instant::now() + Duration::from_secs(30),
+            installing_update: false,
             last_status: Instant::now(),
         };
         app.refresh_folder();
@@ -171,19 +191,16 @@ impl App {
     }
 
     fn refresh_folder(&mut self) {
-        let value = match self.preferences.start_folder.as_deref() {
+        let value = match self.preferences.effective_start_folder().as_deref() {
             Some(path) if path.is_dir() => format!("Start Folder: {}", abbreviated_path(path)),
             Some(path) => format!("Start Folder: {} (Unavailable)", abbreviated_path(path)),
-            None => "Start Folder: Not set".to_owned(),
+            None => "Start Folder: Home unavailable".to_owned(),
         };
         self.items.folder_label.set_text(value);
-        self.items
-            .folder_change
-            .set_text(if self.preferences.start_folder.is_some() {
-                "Change Start Folder…"
-            } else {
-                "Set Start Folder…"
-            });
+        self.items.folder_change.set_text("Change Start Folder…");
+        self.items.liveboard_port.set_text(format!(
+            "Set Liveboard Port… ({})", self.preferences.liveboard_port
+        ));
     }
 
     fn refresh_login_preferences(&mut self) {
@@ -193,9 +210,14 @@ impl App {
             self.refresh_folder();
             self.render_status();
         }
+        self.refresh_folder();
         self.items
             .launch_tunnel_at_login
             .set_checked(self.preferences.launch_tunnel_at_login);
+        self.items.automatic_updates.set_checked(self.preferences.automatic_updates);
+        if !self.preferences.automatic_updates {
+            self.pending_automatic_update = None;
+        }
         self.items
             .launch_at_login
             .set_checked(platform::launch_at_login_enabled());
@@ -204,7 +226,7 @@ impl App {
     fn login_start_folder(preferences: &platform::Preferences) -> Option<PathBuf> {
         preferences
             .launch_tunnel_at_login
-            .then(|| preferences.start_folder.clone())
+            .then(|| preferences.effective_start_folder())
             .flatten()
             .filter(|path| path.is_dir())
     }
@@ -222,11 +244,20 @@ impl App {
                 self.status_in_flight = true;
                 self.last_status = Instant::now();
             }
-            Task::CheckUpgrade | Task::Upgrade(_, _) if self.update_in_flight => return,
-            Task::CheckUpgrade | Task::Upgrade(_, _) => {
+            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _)
+                if self.update_in_flight => return,
+            Task::CheckAutomaticUpdate if self.active_command.is_some() => return,
+            Task::Upgrade(_, _, true) if self.active_command.is_some() => return,
+            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _) => {
                 self.update_in_flight = true;
                 self.items.update.set_enabled(false);
-                self.items.update.set_text("Working on update…");
+                self.installing_update = matches!(task, Task::Upgrade(_, _, _));
+                self.items.update.set_text(if self.installing_update {
+                    "Installing Update…"
+                } else {
+                    "Checking for Updates…"
+                });
+                self.render_status();
             }
             _ if self.active_command.is_some() => return,
             _ => {
@@ -276,7 +307,22 @@ impl App {
                     ],
                     false,
                 ),
-                Task::Upgrade(version, stop) => {
+                Task::CheckAutomaticUpdate => {
+                    let claim = commands::run(&executable, &["local", "preferences", "claim-update-check"], false);
+                    if !claim.ok {
+                        let _ = sender.send(Response::Finished { task, id, result: claim });
+                        return;
+                    }
+                    if !claim.output.contains("\"due\":true") {
+                        let _ = sender.send(Response::Finished {
+                            task, id,
+                            result: CommandResult { ok: true, output: String::new() },
+                        });
+                        return;
+                    }
+                    (vec!["upgrade".into(), "--check".into(), "--refresh".into(), "--format".into(), "json".into()], false)
+                }
+                Task::Upgrade(version, stop, _) => {
                     let mut args = vec![
                         "upgrade".into(),
                         "--version".into(),
@@ -306,11 +352,7 @@ impl App {
         if id == self.items.quit.id() {
             return false;
         } else if id == self.items.start.id() {
-            if let Some(path) = self
-                .preferences
-                .start_folder
-                .clone()
-                .filter(|path| path.is_dir())
+            if let Some(path) = self.preferences.effective_start_folder().filter(|path| path.is_dir())
             {
                 self.submit(Task::Start(path));
             } else {
@@ -327,11 +369,18 @@ impl App {
         } else if id == self.items.copy.id() {
             self.submit(Task::CopyLiveboard);
         } else if id == self.items.folder_change.id() {
-            let path = self.preferences.start_folder.clone();
+            let path = self.preferences.effective_start_folder();
             let sender = self.sender.clone();
             thread::spawn(move || {
                 let selection = platform::choose_folder(path.as_deref());
                 let _ = sender.send(Response::FolderSelected(selection));
+            });
+        } else if id == self.items.liveboard_port.id() {
+            let port = self.preferences.liveboard_port;
+            let sender = self.sender.clone();
+            thread::spawn(move || {
+                let selection = platform::choose_liveboard_port(port);
+                let _ = sender.send(Response::PortSelected(selection));
             });
         } else if id == self.items.launch_at_login.id() {
             let desired = !platform::launch_at_login_enabled();
@@ -356,17 +405,13 @@ impl App {
         } else if id == self.items.launch_tunnel_at_login.id() {
             let enabling = !platform::preferences().launch_tunnel_at_login;
             let path = if enabling {
-                match self
-                    .preferences
-                    .start_folder
-                    .as_deref()
-                    .filter(|folder| folder.is_dir())
+                match self.preferences.effective_start_folder().filter(|folder| folder.is_dir())
                 {
                     Some(path) => path.to_string_lossy().into_owned(),
                     None => {
                         platform::show_message(
-                            "Start Folder required",
-                            "Choose an existing Start Folder before enabling Launch Tunnel at Login.",
+                            "Start folder unavailable",
+                            "Your home or selected Start Folder is unavailable.",
                             false,
                         );
                         self.refresh_login_preferences();
@@ -395,9 +440,19 @@ impl App {
             self.refresh_login_preferences();
         } else if id == self.items.update.id() {
             if let Some(version) = &self.available_update {
-                self.submit(Task::Upgrade(version.clone(), false));
+                self.submit(Task::Upgrade(version.clone(), false, false));
             } else {
                 self.submit(Task::CheckUpgrade);
+            }
+        } else if id == self.items.automatic_updates.id() {
+            let enabled = !self.preferences.automatic_updates;
+            let result = commands::run(&self.binary, &["local", "preferences", "automatic-updates", if enabled { "true" } else { "false" }], false);
+            if !result.ok {
+                platform::show_message("Could not change automatic updates", &result.output, false);
+            }
+            self.refresh_login_preferences();
+            if enabled && result.ok {
+                self.next_auto_update_poll = Instant::now();
             }
         }
         true
@@ -416,13 +471,13 @@ impl App {
                     // The CLI can toggle tunnel autostart while the folder
                     // picker is open. Reload first so a stale in-memory copy
                     // cannot overwrite the independently saved login option.
-                    let mut updated = platform::preferences();
-                    updated.start_folder = Some(path.canonicalize().unwrap_or(path));
-                    if let Err(error) = platform::save_preferences(&updated) {
-                        platform::show_message("Could not save Start Folder", &error, false);
-                    } else {
-                        self.preferences = updated;
+                    let saved = path.canonicalize().unwrap_or(path);
+                    let saved = saved.to_string_lossy().into_owned();
+                    let result = commands::run(&self.binary, &["local", "autostart", "folder", &saved], false);
+                    if !result.ok {
+                        platform::show_message("Could not save Start Folder", &result.output, false);
                     }
+                    self.refresh_login_preferences();
                     self.refresh_folder();
                     self.render_status();
                     self.submit(Task::Status);
@@ -432,6 +487,19 @@ impl App {
                 platform::show_message("Could not choose Start Folder", &error, false);
             }
             Response::FolderSelected(Ok(None)) => {}
+            Response::PortSelected(Ok(Some(port))) => {
+                let result = commands::run(&self.binary, &["local", "preferences", "liveboard-port", &port], false);
+                if !result.ok {
+                    platform::show_message("Could not set Liveboard port", &result.output, false);
+                } else {
+                    platform::show_message("Liveboard port saved", "Restart Zodex Local to use the new port.", false);
+                }
+                self.refresh_login_preferences();
+            }
+            Response::PortSelected(Err(error)) => {
+                platform::show_message("Could not choose Liveboard port", &error, false);
+            }
+            Response::PortSelected(Ok(None)) => {}
             Response::Status { epoch, result } => {
                 self.status_in_flight = false;
                 self.refresh_login_preferences();
@@ -445,6 +513,14 @@ impl App {
                         self.active_command = None;
                     }
                     self.render_status();
+                    if self.preferences.automatic_updates
+                        && matches!(state, RuntimeState::Stopped | RuntimeState::Unconfigured)
+                        && let Some(version) = self.pending_automatic_update.clone()
+                        && !self.update_in_flight
+                        && self.active_command.is_none()
+                    {
+                        self.submit(Task::Upgrade(version, false, true));
+                    }
                 } else {
                     // An in-flight pre-click status response was stale;
                     // schedule a fresh observation on the next event tick.
@@ -453,10 +529,12 @@ impl App {
             }
             Response::Finished { task, id, result } => match task {
                 Task::Status => unreachable!("status has its own response type"),
-                Task::CheckUpgrade | Task::Upgrade(_, _) => {
+                Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _) => {
                     self.update_in_flight = false;
+                    self.installing_update = false;
                     self.items.update.set_enabled(true);
                     self.apply_upgrade(task, &result);
+                    self.render_status();
                 }
                 _ => {
                     if self.active_command != Some(id) {
@@ -487,12 +565,12 @@ impl App {
     fn render_status(&self) {
         let start_folder_valid = self
             .preferences
-            .start_folder
+            .effective_start_folder()
             .as_deref()
             .is_some_and(Path::is_dir);
         let ui = self
             .lifecycle
-            .presentation(start_folder_valid, self.active_command.is_some());
+            .presentation(start_folder_valid, self.active_command.is_some() || self.installing_update);
         self.items.start.set_text(ui.label);
         self.items.start.set_enabled(ui.start_enabled);
         self.items.stop.set_enabled(ui.stop_enabled);
@@ -518,7 +596,37 @@ impl App {
                     platform::show_message("Update check failed", &result.output, false);
                 }
             }
-            Task::Upgrade(version, false)
+            Task::CheckAutomaticUpdate => {
+                if let Some(event) = commands::upgrade_event(result, "check_complete") {
+                    self.items
+                        .version
+                        .set_text(format!("Zodex v{}", event.current_version));
+                    self.available_update = event
+                        .target_version
+                        .filter(|_| event.update_available == Some(true));
+                    self.pending_automatic_update = self.available_update.clone();
+                    if self.preferences.automatic_updates
+                        && event.local_blocks_upgrade == Some(false)
+                        && let Some(version) = self.pending_automatic_update.clone()
+                    {
+                        self.submit(Task::Upgrade(version, false, true));
+                    }
+                } else if !result.ok {
+                    eprintln!("Zodex automatic update check failed: {}", result.output);
+                }
+            }
+            Task::Upgrade(version, false, true)
+                if !result.ok
+                    && commands::upgrade_event(result, "failed")
+                        .as_ref()
+                        .and_then(|event| event.code.as_deref())
+                        == Some("local_running") =>
+            {
+                // An agent became active since the check. Defer, never stop
+                // a live tunnel or interrupt developer work unattended.
+                self.pending_automatic_update = Some(version);
+            }
+            Task::Upgrade(version, false, false)
                 if !result.ok
                     && commands::upgrade_event(result, "failed")
                         .as_ref()
@@ -530,35 +638,44 @@ impl App {
                     "The update requires stopping the Local runtime. Active Zodex processes will be stopped.",
                     true,
                 ) {
-                    self.submit(Task::Upgrade(version, true));
+                    self.submit(Task::Upgrade(version, true, false));
                     return;
                 }
             }
-            Task::Upgrade(_, _) if result.ok => {
+            Task::Upgrade(_, _, automatic) if result.ok => {
                 self.available_update = None;
-                platform::show_message(
-                    "Zodex update initiated",
-                    "The update will complete shortly. The tray may restart as the installed files are replaced.",
-                    false,
-                );
+                self.pending_automatic_update = None;
+                if !automatic {
+                    platform::show_message(
+                        "Zodex update initiated",
+                        "The update will complete shortly. The tray may restart as the installed files are replaced.",
+                        false,
+                    );
+                }
             }
-            Task::Upgrade(_, _) => {
-                platform::show_message(
-                    "Zodex update failed",
-                    &commands::upgrade_event(result, "failed")
-                        .map(|event| event.message)
-                        .unwrap_or_else(|| result.output.clone()),
-                    false,
-                );
+            Task::Upgrade(_, _, automatic) => {
+                let detail = commands::upgrade_event(result, "failed")
+                    .map(|event| event.message)
+                    .unwrap_or_else(|| result.output.clone());
+                if automatic {
+                    // An unexpected installer failure should not retrigger on
+                    // every two-second status poll. Check again tomorrow.
+                    self.pending_automatic_update = None;
+                    eprintln!("Zodex automatic update failed: {detail}");
+                } else {
+                    platform::show_message("Zodex update failed", &detail, false);
+                }
             }
             _ => {}
         }
-        self.items
-            .update
-            .set_text(self.available_update.as_ref().map_or_else(
-                || "Check for Updates…".to_owned(),
-                |version| format!("Update to v{version}…"),
-            ));
+        if !self.update_in_flight {
+            self.items
+                .update
+                .set_text(self.available_update.as_ref().map_or_else(
+                    || "Check for Updates…".to_owned(),
+                    |version| format!("Update to v{version}…"),
+                ));
+        }
     }
 }
 
@@ -647,6 +764,7 @@ mod tests {
         let mut prefs = platform::Preferences {
             start_folder: Some(workspace.path().to_path_buf()),
             launch_tunnel_at_login: false,
+            ..platform::Preferences::default()
         };
         assert_eq!(App::login_start_folder(&prefs), None);
         prefs.launch_tunnel_at_login = true;
@@ -750,6 +868,12 @@ fn run() -> Result<(), String> {
         };
         if app.last_status.elapsed() >= interval && !app.status_in_flight {
             app.submit(Task::Status);
+        }
+        if Instant::now() >= app.next_auto_update_poll {
+            app.next_auto_update_poll = Instant::now() + AUTO_UPDATE_POLL_INTERVAL;
+            if app.preferences.automatic_updates {
+                app.submit(Task::CheckAutomaticUpdate);
+            }
         }
         thread::sleep(Duration::from_millis(80));
     }

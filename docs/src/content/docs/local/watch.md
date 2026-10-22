@@ -16,7 +16,7 @@ On Linux, macOS, and Windows, the default viewer is **Liveboard**, a browser UI 
 zodex local watch
 ```
 
-Zodex exposes Liveboard at the stable local-only address `http://127.0.0.1:64973/`, prints that URL, and opens it in your default browser. The browser-visible address stays stable across Local restarts; Zodex still keeps the internal read-only API behind a per-run private capability path. The Liveboard host is owned by the Local runtime, so the `watch` command does not need to stay running.
+Zodex exposes Liveboard at the stable local-only address `http://127.0.0.1:64973/` by default, prints that URL, and opens it in your default browser. You can change the port in the desktop **Configure** submenu or with `zodex local preferences liveboard-port PORT` (restart Local to apply). The browser-visible address stays stable across Local restarts unless you change this port; Zodex still keeps the internal read-only API behind a per-run private capability path. The Liveboard host is owned by the Local runtime, so the `watch` command does not need to stay running.
 
 To print or copy the same stable URL without opening a browser:
 
@@ -138,7 +138,7 @@ The observability listener requires a managed Bearer token and deliberately does
 
 Instead, the Local runtime owns a separate loopback **same-origin capability host**. That host reads the observer bearer on the native side, proxies only the allowlisted read-only observer resources Liveboard needs, serves the embedded frontend, and keeps the bearer out of browser JavaScript. `zodex local watch` only resolves that runtime-owned host and opens, prints, or copies its URL.
 
-The browser-visible root is the stable `http://127.0.0.1:64973/` address. A random per-run capability path is injected into the page internally for asset and API requests, so it does not need to appear in the address bar or copied Liveboard links.
+The browser-visible root defaults to the stable `http://127.0.0.1:64973/` address, or the port you configured. A random per-run capability path is injected into the page internally for asset and API requests, so it does not need to appear in the address bar or copied Liveboard links.
 
 ## Build another viewer
 

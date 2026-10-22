@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.12 - 2026-10-22
+
+- Simplified macOS menu bar and Windows/Linux tray controls to **Start**, **Stop**, **Open Liveboard**, **Copy Liveboard Link**, **Configure**, and an explicitly app-only **Quit**. Start Folder, folder picker, updates, login toggles, and Liveboard port are in the hoverable **Configure** submenu.
+- New users start from their home directory automatically, without selecting a Start Folder first. Existing selected folders are preserved. CLI tunnel autostart also defaults to home when no folder was saved.
+- Added a user-configurable Liveboard loopback port (default `64973`; restart Local after changing it) and an enabled-by-default **Automatic Updates (Daily)** setting. The desktop controls check once per 24 hours, automatically install new releases when Local is stopped, and defer installations while the tunnel is running without disrupting sessions. Automatic updates can be disabled in Configure or using `zodex local preferences automatic-updates false`.
+
 ## 0.5.11 - 2026-10-22
 
 - Fixed Windows Local failing to start with "captured Local developer environment contains an invalid variable name" when Windows supplies special environment entries other than the usual `=C:` / `=D:` drive-directory entries. All Windows-only `=`-prefixed bookkeeping names are now omitted from the runtime environment handoff while ordinary variable names continue to be validated and developer values are preserved.

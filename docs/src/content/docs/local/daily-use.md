@@ -14,7 +14,9 @@ On all supported graphical desktops, `zodex local setup` enables the menu bar or
 zodex local menu
 ```
 
-Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, or update Zodex from the menu. The Mac app refreshes status when you open its menu, without background polling. The Windows/Linux tray independently polls the actual Local status every two seconds, and every half-second during Start/Stop transitions; as soon as the CLI reports running or stopped, the corresponding controls update even if a launch/shutdown subprocess is still finishing. It shows **Status Unavailable**, not an invented runtime state, if the CLI check fails. The tray icon is a transparent Z, and hovering it shows the latest known status. The Mac app checks for updates when you open its menu; Windows/Linux check on request. **Quit** does not stop the Zodex Local runtime.
+The default Start Folder is your home directory, so you can use **Start Zodex** immediately after setup. Existing custom Start Folders remain unchanged. The main menu offers **Start Zodex**, **Stop Zodex**, **Open Liveboard**, **Copy Liveboard Link**, **Configure**, and **Quit Menu Bar App** (or **Quit Tray Icon App**). Hover over **Configure** for the current folder, **Change Start Folder**, **Set Liveboard Port**, **Check for Updates**, **Automatic Updates (Daily)**, and login settings. Quit exits only the convenience app; it does not stop the Local tunnel.
+
+Automatic updates are on by default. While the menu bar/tray is running it checks for releases once per 24 hours and installs updates when Local is stopped. A running or stale Local tunnel is never stopped automatically for an update: the update waits until Local is stopped. You can switch off **Automatic Updates (Daily)** in Configure or run `zodex local preferences automatic-updates false`. The Mac app refreshes runtime status when you open its menu; the Windows/Linux tray continues polling status every two seconds, or every half-second during lifecycle transitions.
 
 ### Launch the tunnel automatically at login (optional)
 

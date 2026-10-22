@@ -128,7 +128,7 @@ On success, Zodex:
 
 Setup is idempotent, so running it again is also the repair/update path.
 
-All three desktop controls are convenience wrappers around the installed CLI. **Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) launches only the convenience app by default, without starting Zodex Local, the tunnel, or an Agent process. If you want the tunnel to start with your next desktop login, enable the separate **Launch Tunnel at Login** option or run `zodex local autostart enable /absolute/workspace/path`. The tunnel option is off by default and uses your saved Start Folder. If you do not want the menu app on macOS or the tray on Windows/Linux, opt out during setup:
+All three desktop controls are convenience wrappers around the installed CLI. Their **Start Folder** defaults to your home directory; changing it is optional, and a previously selected folder is preserved. Open **Configure** from the minimal main menu for the Start Folder, update, port, and login settings. **Launch Menu Bar at Login** (macOS) or **Launch Tray at Login** (Windows/Linux) launches only the convenience app by default, without starting Zodex Local, the tunnel, or an Agent process. If you want the tunnel to start with your next desktop login, enable the separate **Launch Tunnel at Login** option or run `zodex local autostart enable /absolute/workspace/path`. The tunnel option is off by default and uses your saved Start Folder, or home when none is saved. **Automatic Updates (Daily)** is enabled by default, but never stops an active tunnel to install an update. If you do not want the menu app on macOS or the tray on Windows/Linux, opt out during setup:
 
 ```bash
 zodex local setup --no-menu-bar

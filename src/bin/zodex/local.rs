@@ -104,6 +104,12 @@ enum LocalCommand {
         #[command(subcommand)]
         command: LocalAutostartCommand,
     },
+    /// Settings shared by the menu bar and Windows/Linux tray apps.
+    #[command(after_help = "Examples:\n  zodex local preferences liveboard-port 65000\n  zodex local preferences liveboard-port 64973\n  zodex local preferences automatic-updates true\n  zodex local preferences automatic-updates false")]
+    Preferences {
+        #[command(subcommand)]
+        command: LocalPreferencesCommand,
+    },
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
     History {
@@ -178,6 +184,20 @@ enum LocalAutostartCommand {
     Folder {
         path: PathBuf,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum LocalPreferencesCommand {
+    /// Choose the Liveboard loopback port. Requires restarting Local to take effect.
+    LiveboardPort { port: u16 },
+    /// Enable/disable daily automatic updates (enabled by default).
+    AutomaticUpdates {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// Claim a due daily check without racing another tray/menu process.
+    #[command(hide = true)]
+    ClaimUpdateCheck,
 }
 
 #[derive(Debug, Subcommand)]
@@ -284,6 +304,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             ensure_local_runtime_host()?;
             handle_local_autostart(&paths, command)
         }
+        LocalCommand::Preferences { command } => handle_local_preferences(&paths, command),
         LocalCommand::History {
             last,
             since,
@@ -519,9 +540,9 @@ fn set_native_menu_login(enable_at_login: bool) -> Result<()> {
 }
 
 fn handle_local_autostart(paths: &LocalPaths, command: LocalAutostartCommand) -> Result<()> {
-    let mut prefs = LocalLoginPreferences::load(paths)?;
     match command {
         LocalAutostartCommand::Status { json } => {
+            let prefs = LocalLoginPreferences::load(paths)?;
             if json {
                 println!("{}", serde_json::to_string(&prefs)?);
             } else {
@@ -531,42 +552,125 @@ fn handle_local_autostart(paths: &LocalPaths, command: LocalAutostartCommand) ->
                 );
                 println!(
                     "Start Folder: {}",
-                    prefs.start_folder.as_deref().map_or_else(
-                        || "Not set".to_owned(),
-                        |folder| folder.display().to_string()
-                    )
+                    prefs.effective_start_folder()?.display()
                 );
             }
             Ok(())
         }
         LocalAutostartCommand::Folder { path } => {
-            prefs.set_start_folder(&path)?;
-            prefs.save(paths)?;
-            println!("Saved Start Folder: {}", prefs.start_folder.as_deref().unwrap().display());
+            let saved = LocalLoginPreferences::update(paths, |prefs| {
+                prefs.set_start_folder(&path)?;
+                prefs.effective_start_folder()
+            })?;
+            println!("Saved Start Folder: {}", saved.display());
             Ok(())
         }
         LocalAutostartCommand::Enable { path } => {
-            let folder = match path.or_else(|| prefs.start_folder.clone()) {
-                Some(path) => path,
-                None => env::current_dir().context("Could not resolve current Start Folder")?,
-            };
-            prefs.set_start_folder(&folder)?;
+            let prefs = LocalLoginPreferences::load(paths)?;
+            let folder = path.unwrap_or(prefs.effective_start_folder()?);
+            let folder = zodex::local::validate_runtime_start_directory(&folder)?;
             // Login depends on a desktop control surface being registered.
             // Configure that first without launching the tray/menu bar now.
             set_native_menu_login(true)?;
-            prefs.launch_tunnel_at_login = true;
-            prefs.save(paths)?;
+            LocalLoginPreferences::update(paths, |prefs| {
+                prefs.set_start_folder(&folder)?;
+                prefs.launch_tunnel_at_login = true;
+                Ok(())
+            })?;
             println!("Launch Tunnel at Login: enabled");
-            println!("Start Folder: {}", prefs.start_folder.as_deref().unwrap().display());
+            println!("Start Folder: {}", folder.display());
             println!("The tray/menu bar will open and start the tunnel after your next login.");
             Ok(())
         }
         LocalAutostartCommand::Disable => {
-            prefs.launch_tunnel_at_login = false;
-            prefs.save(paths)?;
+            LocalLoginPreferences::update(paths, |prefs| {
+                prefs.launch_tunnel_at_login = false;
+                Ok(())
+            })?;
             println!("Launch Tunnel at Login: disabled (tray/menu bar login unchanged)");
             Ok(())
         }
+    }
+}
+
+fn handle_local_preferences(paths: &LocalPaths, command: LocalPreferencesCommand) -> Result<()> {
+    match command {
+        LocalPreferencesCommand::LiveboardPort { port } => {
+            LocalLoginPreferences::validate_liveboard_port(port)?;
+            LocalLoginPreferences::update(paths, |prefs| {
+                prefs.liveboard_port = port;
+                Ok(())
+            })?;
+            println!("Liveboard port: {port} (restart Zodex Local to apply)");
+        }
+        LocalPreferencesCommand::AutomaticUpdates { enabled } => {
+            LocalLoginPreferences::update(paths, |prefs| {
+                if enabled && !prefs.automatic_updates {
+                    prefs.last_automatic_update_check = None;
+                }
+                prefs.automatic_updates = enabled;
+                Ok(())
+            })?;
+            println!("Automatic updates: {}", if enabled { "enabled" } else { "disabled" });
+        }
+        LocalPreferencesCommand::ClaimUpdateCheck => {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            let due = LocalLoginPreferences::update(paths, |prefs| {
+                Ok(prefs.claim_automatic_update_check(now))
+            })?;
+            println!("{{\"due\":{due}}}");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod desktop_preferences_tests {
+    use super::{
+        Cli, Commands, LocalCommand, LocalPreferencesCommand, handle_local_preferences,
+    };
+    use clap::Parser as _;
+    use zodex::local::{LocalLoginPreferences, LocalPaths};
+
+    #[test]
+    fn automatic_updates_accepts_explicit_true_and_false_from_cli() {
+        for (value, expected) in [("true", true), ("false", false)] {
+            let parsed = Cli::try_parse_from([
+                "zodex", "local", "preferences", "automatic-updates", value,
+            ])
+            .expect("automatic-updates must accept a boolean argument, not a flag");
+            match parsed.command {
+                Commands::Local {
+                    command:
+                        LocalCommand::Preferences {
+                            command: LocalPreferencesCommand::AutomaticUpdates { enabled },
+                        },
+                } => assert_eq!(enabled, expected),
+                _ => panic!("unexpected parsed command"),
+            }
+        }
+    }
+
+    #[test]
+    fn port_and_auto_update_commands_preserve_legacy_start_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = LocalPaths::from_roots(
+            dir.path().join("config"),
+            dir.path().join("data"),
+            dir.path().join("state"),
+        ).unwrap();
+        LocalLoginPreferences::update(&paths, |prefs| prefs.set_start_folder(dir.path())).unwrap();
+        handle_local_preferences(&paths, LocalPreferencesCommand::LiveboardPort { port: 65017 }).unwrap();
+        handle_local_preferences(&paths, LocalPreferencesCommand::AutomaticUpdates { enabled: false }).unwrap();
+        let prefs = LocalLoginPreferences::load(&paths).unwrap();
+        assert_eq!(prefs.start_folder, Some(dir.path().canonicalize().unwrap()));
+        assert_eq!(prefs.liveboard_port, 65017);
+        assert!(!prefs.automatic_updates);
+        assert!(prefs.last_automatic_update_check.is_none());
+        assert!(handle_local_preferences(&paths, LocalPreferencesCommand::LiveboardPort { port: 0 }).is_err());
+        assert_eq!(LocalLoginPreferences::load(&paths).unwrap().liveboard_port, 65017);
+        handle_local_preferences(&paths, LocalPreferencesCommand::AutomaticUpdates { enabled: true }).unwrap();
+        assert!(LocalLoginPreferences::load(&paths).unwrap().automatic_updates);
     }
 }
 

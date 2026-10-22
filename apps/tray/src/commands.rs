@@ -24,6 +24,7 @@ pub struct UpgradeEvent {
     pub current_version: String,
     pub target_version: Option<String>,
     pub update_available: Option<bool>,
+    pub local_blocks_upgrade: Option<bool>,
     pub code: Option<String>,
     pub message: String,
 }

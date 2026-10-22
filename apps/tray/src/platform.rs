@@ -10,11 +10,40 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+pub const DEFAULT_LIVEBOARD_PORT: u16 = 64_973;
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub start_folder: Option<PathBuf>,
     pub launch_tunnel_at_login: bool,
+    pub automatic_updates: bool,
+    pub last_automatic_update_check: Option<i64>,
+    pub liveboard_port: u16,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            start_folder: None,
+            launch_tunnel_at_login: false,
+            automatic_updates: true,
+            last_automatic_update_check: None,
+            liveboard_port: DEFAULT_LIVEBOARD_PORT,
+        }
+    }
+}
+
+impl Preferences {
+    pub fn effective_start_folder(&self) -> Option<PathBuf> {
+        self.start_folder.clone().or_else(user_home)
+    }
+}
+
+fn user_home() -> Option<PathBuf> {
+    env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(target_os = "linux")]
@@ -28,10 +57,12 @@ fn home() -> Result<PathBuf, String> {
 fn config_root() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
-        env::var_os("APPDATA")
+        env::var_os("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .or_else(|| env::var_os("APPDATA"))
             .map(PathBuf::from)
-            .map(|p| p.join("Zodex"))
-            .ok_or_else(|| "APPDATA is missing".to_owned())
+            .map(|p| p.join("zodex"))
+            .ok_or_else(|| "XDG_CONFIG_HOME and APPDATA are missing".to_owned())
     }
     #[cfg(target_os = "linux")]
     {
@@ -50,13 +81,6 @@ pub fn preferences() -> Preferences {
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
-}
-
-pub fn save_preferences(preferences: &Preferences) -> Result<(), String> {
-    let directory = config_root()?;
-    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-    let data = serde_json::to_vec_pretty(preferences).map_err(|e| e.to_string())?;
-    fs::write(directory.join("tray.json"), data).map_err(|e| e.to_string())
 }
 
 pub fn single_instance() -> Result<Option<File>, String> {
@@ -363,6 +387,70 @@ pub fn choose_folder(_current: Option<&Path>) -> Result<Option<PathBuf>, String>
     }
 }
 
+/// Return the text entered by the user, or None if the dialog was cancelled.
+/// The CLI validates and persists the value; the tray never edits its JSON
+/// directly, so settings cannot clobber one another.
+pub fn choose_liveboard_port(current: u16) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        let root = env::var_os("SystemRoot").ok_or("SystemRoot missing")?;
+        let script = format!(concat!(
+            "Add-Type -AssemblyName Microsoft.VisualBasic;",
+            "$port = [Microsoft.VisualBasic.Interaction]::InputBox(",
+            "'Choose a Liveboard port (1024-65535). Restart Local to apply.',",
+            "'Zodex Liveboard Port', {});",
+            "[Console]::Out.Write($port)"
+        ), current);
+        let output = Command::new(
+            PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+        )
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Sta", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        let port = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Ok((!port.is_empty()).then_some(port))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let kde = env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .to_uppercase()
+            .contains("KDE");
+        let order = if kde {
+            ["kdialog", "zenity", "yad"]
+        } else {
+            ["zenity", "kdialog", "yad"]
+        };
+        for name in order {
+            let mut command = Command::new(name);
+            if name == "kdialog" {
+                command.args(["--inputbox", "Liveboard port (1024-65535):", &current.to_string()]);
+            } else {
+                command.args([
+                    "--entry",
+                    "--title=Zodex Liveboard Port",
+                    "--text=Liveboard port (1024-65535). Restart Local to apply.",
+                ]).arg(format!("--entry-text={current}"));
+            }
+            match command.output() {
+                Ok(output) if output.status.success() => {
+                    return Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()));
+                }
+                Ok(_) => return Ok(None),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Err("No desktop text-entry dialog is available. Install zenity or kdialog.".into())
+    }
+}
+
 pub fn show_message(title: &str, detail: &str, question: bool) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -471,6 +559,7 @@ mod tests {
         let value = Preferences {
             start_folder: Some(PathBuf::from("/tmp/zodex start folder")),
             launch_tunnel_at_login: true,
+            ..Preferences::default()
         };
         let text = serde_json::to_string(&value).unwrap();
         assert_eq!(
@@ -487,10 +576,21 @@ mod tests {
         let old = r#"{"start_folder":"/tmp/previous-workspace"}"#;
         let loaded: Preferences = serde_json::from_str(old).unwrap();
         assert!(!loaded.launch_tunnel_at_login);
+        assert!(loaded.automatic_updates);
+        assert_eq!(loaded.liveboard_port, DEFAULT_LIVEBOARD_PORT);
         assert_eq!(
             loaded.start_folder,
             Some(PathBuf::from("/tmp/previous-workspace"))
         );
+    }
+
+    #[test]
+    fn new_tray_users_start_in_home_without_overwriting_selected_folder() {
+        let new = Preferences::default();
+        assert!(new.effective_start_folder().unwrap().is_dir());
+        let mut existing = new;
+        existing.start_folder = Some(PathBuf::from("/older/project"));
+        assert_eq!(existing.effective_start_folder().unwrap(), PathBuf::from("/older/project"));
     }
 
     #[cfg(target_os = "linux")]
