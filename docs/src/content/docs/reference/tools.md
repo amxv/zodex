@@ -98,6 +98,17 @@ workdir  required absolute existing directory
 
 Use it for targeted source/document edits instead of constructing fragile shell replacement commands.
 
+When a valid multi-file patch contains stale context in one file, Zodex still
+applies independent file operations that match. The MCP error text lists the
+files already changed and the specific operations that failed. **Retry only
+the failed file operations** after reading their current content. A successful
+file operation is not rolled back because a different file failed.
+
+Within one file, Zodex only recovers out-of-order edits when all original
+regions match uniquely and do not overlap. Ambiguous context stays an error;
+Zodex never guesses which occurrence the agent intended. Malformed patch
+syntax is rejected before applying any file operations.
+
 The declared workdir is routing context, not confinement: a deliberately absolute path in a supported patch/command can still reach elsewhere if the deployment's OS permissions allow it.
 
 ## Workdir rules

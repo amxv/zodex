@@ -627,6 +627,7 @@ async fn apply_patch_mcp_parity_with_service() {
             patch: patch.to_string(),
             workdir: direct_dir.path().to_string_lossy().to_string(),
         })
+        .await
         .expect("direct apply_patch should succeed");
     let mcp_output = mcp
         .apply_patch(

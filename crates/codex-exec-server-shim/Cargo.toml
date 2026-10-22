@@ -1,0 +1,11 @@
+[package]
+name = "codex-exec-server"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Zodex's minimal local filesystem adapter for upstream codex-apply-patch"
+publish = false
+
+[dependencies]
+codex-utils-path-uri = { git = "https://github.com/openai/codex.git", rev = "a3d93e1e692f1144cf8685175a5d1f6bf7294f57" }
+tokio = { version = "1.44", features = ["fs"] }

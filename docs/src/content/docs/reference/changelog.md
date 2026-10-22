@@ -8,6 +8,14 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.14 - 2026-10-23
+
+- Updated OpenAI's upstream Codex `apply_patch` engine to the October 22, 2026 commit, including improved line-ending preservation, path handling, and partial-change evidence. Zodex retains its original `apply_patch(patch, workdir)` MCP interface.
+- Kept builds lean by replacing Codex's unrelated remote execution-server dependency with a narrow local filesystem adapter. No new WebSocket, authentication, or remote process infrastructure is linked into Zodex.
+- Improved multi-file patch reliability: independent files keep applying after a context mismatch, with a single detailed MCP error identifying both successfully applied files and the exact failed operations to retry. Invalid patch syntax is rejected before any writes.
+- Added conservative recovery for uniquely matched, non-overlapping hunks authored in reverse order. Ambiguous contexts, explicit location anchors, and end-of-file constraints are never guessed or overridden.
+- Refreshed compatible dependency locks (`anyhow`, `clap`, `tokio`, and `toml`), Node type definitions, and selected GitHub Actions used by Zodex.
+
 ## 0.5.13 - 2026-10-22
 
 - A scheduled automatic update can now proceed while the tunnel is running **only after 15 minutes without agent activity**. Zodex checks the running process registry, unfinished tool invocations, patches, process polls, and streamed output. Any uncertain/busy status is treated as unsafe, and activity is checked again immediately before shutdown.

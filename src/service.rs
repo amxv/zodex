@@ -143,6 +143,7 @@ impl ZodexService {
                 .map(ServiceResponse::ToolOutput),
             ServiceRequest::ApplyPatch { input } => self
                 .apply_patch(input)
+                .await
                 .map(|output| ServiceResponse::ApplyPatchOutput(ApplyPatchOutput { output })),
         }
     }
@@ -168,8 +169,8 @@ impl ZodexService {
             .into_tool_output()
     }
 
-    pub fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
-        apply_patch::apply_patch(&input.patch, &input.workdir)
+    pub async fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
+        apply_patch::apply_patch(&input.patch, &input.workdir).await
     }
 
     pub fn accepting_new_sessions(&self) -> bool {
@@ -295,6 +296,7 @@ mod tests {
                 patch: patch.to_string(),
                 workdir: dir.path().to_string_lossy().to_string(),
             })
+            .await
             .expect("apply_patch should succeed");
 
         let created = dir.path().join("created.txt");

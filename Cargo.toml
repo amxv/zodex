@@ -1,6 +1,6 @@
 [package]
 name = "zodex"
-version = "0.5.13"
+version = "0.5.14"
 edition = "2024"
 
 [[bin]]
@@ -28,7 +28,9 @@ anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
-codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
+codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a3d93e1e692f1144cf8685175a5d1f6bf7294f57" }
+codex-exec-server = { path = "crates/codex-exec-server-shim" }
+codex-utils-path-uri = { git = "https://github.com/openai/codex.git", rev = "a3d93e1e692f1144cf8685175a5d1f6bf7294f57" }
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 jsonwebtoken = "9.3"
@@ -84,6 +86,11 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+
+# Keep the upstream Codex patch parser/matcher without compiling its unrelated
+# remote execution, WebSocket, sandbox server, and process infrastructure.
+[patch."https://github.com/openai/codex.git"]
+codex-exec-server = { path = "crates/codex-exec-server-shim" }
 
 # Keep local edit/build/test loops fast while retaining useful file/line
 # backtraces. Dependencies do not need debug info for normal development.
