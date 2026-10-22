@@ -39,7 +39,7 @@ enum Task {
     CopyLiveboard,
     CheckUpgrade,
     CheckAutomaticUpdate,
-    Upgrade(String, bool, bool), // version, stop Local, automatic
+    Upgrade(String, bool), // version, stop Local
 }
 
 enum Response {
@@ -151,7 +151,6 @@ struct App {
     status_in_flight: bool,
     update_in_flight: bool,
     available_update: Option<String>,
-    pending_automatic_update: Option<String>,
     next_auto_update_poll: Instant,
     installing_update: bool,
     last_status: Instant,
@@ -177,7 +176,6 @@ impl App {
             status_in_flight: false,
             update_in_flight: false,
             available_update: None,
-            pending_automatic_update: None,
             next_auto_update_poll: Instant::now() + Duration::from_secs(30),
             installing_update: false,
             last_status: Instant::now(),
@@ -218,9 +216,6 @@ impl App {
             .launch_tunnel_at_login
             .set_checked(self.preferences.launch_tunnel_at_login);
         self.items.automatic_updates.set_checked(self.preferences.automatic_updates);
-        if !self.preferences.automatic_updates {
-            self.pending_automatic_update = None;
-        }
         self.items
             .launch_at_login
             .set_checked(platform::launch_at_login_enabled());
@@ -247,14 +242,13 @@ impl App {
                 self.status_in_flight = true;
                 self.last_status = Instant::now();
             }
-            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _)
+            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _)
                 if self.update_in_flight => return,
             Task::CheckAutomaticUpdate if self.active_command.is_some() => return,
-            Task::Upgrade(_, _, true) if self.active_command.is_some() => return,
-            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _) => {
+            Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _) => {
                 self.update_in_flight = true;
                 self.items.update.set_enabled(false);
-                self.installing_update = matches!(task, Task::Upgrade(_, _, _));
+                self.installing_update = matches!(task, Task::Upgrade(_, _));
                 self.items.update.set_text(if self.installing_update {
                     "Installing Update…"
                 } else {
@@ -311,21 +305,9 @@ impl App {
                     false,
                 ),
                 Task::CheckAutomaticUpdate => {
-                    let claim = commands::run(&executable, &["local", "preferences", "claim-update-check"], false);
-                    if !claim.ok {
-                        let _ = sender.send(Response::Finished { task, id, result: claim });
-                        return;
-                    }
-                    if !claim.output.contains("\"due\":true") {
-                        let _ = sender.send(Response::Finished {
-                            task, id,
-                            result: CommandResult { ok: true, output: String::new() },
-                        });
-                        return;
-                    }
-                    (vec!["upgrade".into(), "--check".into(), "--refresh".into(), "--format".into(), "json".into()], false)
+                    (vec!["local".into(), "__automatic-update".into()], true)
                 }
-                Task::Upgrade(version, stop, _) => {
+                Task::Upgrade(version, stop) => {
                     let mut args = vec![
                         "upgrade".into(),
                         "--version".into(),
@@ -443,7 +425,7 @@ impl App {
             self.refresh_login_preferences();
         } else if id == self.items.update.id() {
             if let Some(version) = &self.available_update {
-                self.submit(Task::Upgrade(version.clone(), false, false));
+                self.submit(Task::Upgrade(version.clone(), false));
             } else {
                 self.submit(Task::CheckUpgrade);
             }
@@ -516,14 +498,6 @@ impl App {
                         self.active_command = None;
                     }
                     self.render_status();
-                    if self.preferences.automatic_updates
-                        && matches!(state, RuntimeState::Stopped | RuntimeState::Unconfigured)
-                        && let Some(version) = self.pending_automatic_update.clone()
-                        && !self.update_in_flight
-                        && self.active_command.is_none()
-                    {
-                        self.submit(Task::Upgrade(version, false, true));
-                    }
                 } else {
                     // An in-flight pre-click status response was stale;
                     // schedule a fresh observation on the next event tick.
@@ -532,7 +506,7 @@ impl App {
             }
             Response::Finished { task, id, result } => match task {
                 Task::Status => unreachable!("status has its own response type"),
-                Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _, _) => {
+                Task::CheckUpgrade | Task::CheckAutomaticUpdate | Task::Upgrade(_, _) => {
                     self.update_in_flight = false;
                     self.installing_update = false;
                     self.items.update.set_enabled(true);
@@ -600,36 +574,14 @@ impl App {
                 }
             }
             Task::CheckAutomaticUpdate => {
-                if let Some(event) = commands::upgrade_event(result, "check_complete") {
-                    self.items
-                        .version
-                        .set_text(format!("Zodex v{}", event.current_version));
-                    self.available_update = event
-                        .target_version
-                        .filter(|_| event.update_available == Some(true));
-                    self.pending_automatic_update = self.available_update.clone();
-                    if self.preferences.automatic_updates
-                        && event.local_blocks_upgrade == Some(false)
-                        && let Some(version) = self.pending_automatic_update.clone()
-                    {
-                        self.submit(Task::Upgrade(version, false, true));
-                    }
-                } else if !result.ok {
+                // The CLI handles the 24h/boot claim, the idle safety guard,
+                // stop/install/restart and all deferrals. The tray is only a
+                // scheduler; an update may relaunch this process.
+                if !result.ok {
                     eprintln!("Zodex automatic update check failed: {}", result.output);
                 }
             }
-            Task::Upgrade(version, false, true)
-                if !result.ok
-                    && commands::upgrade_event(result, "failed")
-                        .as_ref()
-                        .and_then(|event| event.code.as_deref())
-                        == Some("local_running") =>
-            {
-                // An agent became active since the check. Defer, never stop
-                // a live tunnel or interrupt developer work unattended.
-                self.pending_automatic_update = Some(version);
-            }
-            Task::Upgrade(version, false, false)
+            Task::Upgrade(version, false)
                 if !result.ok
                     && commands::upgrade_event(result, "failed")
                         .as_ref()
@@ -641,33 +593,23 @@ impl App {
                     "The update requires stopping the Local runtime. Active Zodex processes will be stopped.",
                     true,
                 ) {
-                    self.submit(Task::Upgrade(version, true, false));
+                    self.submit(Task::Upgrade(version, true));
                     return;
                 }
             }
-            Task::Upgrade(_, _, automatic) if result.ok => {
+            Task::Upgrade(_, _) if result.ok => {
                 self.available_update = None;
-                self.pending_automatic_update = None;
-                if !automatic {
-                    platform::show_message(
-                        "Zodex update initiated",
-                        "The update will complete shortly. The tray may restart as the installed files are replaced.",
-                        false,
-                    );
-                }
+                platform::show_message(
+                    "Zodex update initiated",
+                    "The update will complete shortly. The tray may restart as the installed files are replaced.",
+                    false,
+                );
             }
-            Task::Upgrade(_, _, automatic) => {
+            Task::Upgrade(_, _) => {
                 let detail = commands::upgrade_event(result, "failed")
                     .map(|event| event.message)
                     .unwrap_or_else(|| result.output.clone());
-                if automatic {
-                    // An unexpected installer failure should not retrigger on
-                    // every two-second status poll. Check again tomorrow.
-                    self.pending_automatic_update = None;
-                    eprintln!("Zodex automatic update failed: {detail}");
-                } else {
-                    platform::show_message("Zodex update failed", &detail, false);
-                }
+                platform::show_message("Zodex update failed", &detail, false);
             }
             _ => {}
         }

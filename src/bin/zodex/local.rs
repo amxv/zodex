@@ -110,6 +110,9 @@ enum LocalCommand {
         #[command(subcommand)]
         command: LocalPreferencesCommand,
     },
+    /// Internal daily / next-boot update coordinator used by desktop controls.
+    #[command(name = "__automatic-update", hide = true)]
+    AutomaticUpdate,
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
     History {
@@ -305,6 +308,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             handle_local_autostart(&paths, command)
         }
         LocalCommand::Preferences { command } => handle_local_preferences(&paths, command),
+        LocalCommand::AutomaticUpdate => run_local_automatic_update(&paths).await,
         LocalCommand::History {
             last,
             since,
@@ -631,6 +635,16 @@ mod desktop_preferences_tests {
     };
     use clap::Parser as _;
     use zodex::local::{LocalLoginPreferences, LocalPaths};
+
+    #[test]
+    fn automatic_update_is_an_internal_desktop_command() {
+        let parsed = Cli::try_parse_from(["zodex", "local", "__automatic-update"])
+            .expect("desktop auto-update command must be available on every platform");
+        assert!(matches!(
+            parsed.command,
+            Commands::Local { command: LocalCommand::AutomaticUpdate }
+        ));
+    }
 
     #[test]
     fn automatic_updates_accepts_explicit_true_and_false_from_cli() {

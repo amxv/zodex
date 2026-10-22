@@ -52,6 +52,7 @@ semver = "1.0"
 sha2 = "0.10"
 similar = "2.7"
 strip-ansi-escapes = "0.2.1"
+sysinfo = "0.39"
 tempfile = "3.14"
 time = { version = "0.3", features = ["formatting", "local-offset", "parsing"] }
 tokio = { version = "1.44", features = ["full"] }
@@ -73,7 +74,6 @@ zip = { version = "5.1", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = "4.2"
-sysinfo = "0.39"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

@@ -164,7 +164,7 @@ zodex local preferences automatic-updates true
 zodex local preferences automatic-updates false
 ```
 
-Ports must be between `1024` and `65535`. Changing the port requires restarting Zodex Local; the current runtime keeps its original Liveboard URL until then. Automatic update checks run once per 24 hours while the desktop app is open, default to enabled, and install only when Local is stopped. They never terminate an active tunnel or its processes to upgrade.
+Ports must be between `1024` and `65535`. Changing the port requires restarting Zodex Local; the current runtime keeps its original Liveboard URL until then. Automatic update checks run once per 24 hours while the desktop app is open and default to enabled. They can update a running tunnel **only after 15 minutes without active processes or agent tool activity**. Downloads and checksums are verified before stopping; then Local restarts in its previous directory with the remaining TTL. An offline or busy check retries once on the next computer restart (not merely on app relaunch), or at the next daily check.
 
 The setting persists in the user's non-secret Zodex desktop preferences. The menu/tray observes terminal changes without requiring another setup, and on your next graphical login it uses the same `zodex local start` lifecycle, credentials, and runtime behavior as a manual Start. Headless Linux does not automatically start a desktop tray; use an appropriate external service manager if you need headless boot-time operation.
 

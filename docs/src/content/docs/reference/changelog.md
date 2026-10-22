@@ -10,6 +10,9 @@ This changelog tracks code and product changes in zodex. It intentionally skips 
 
 ## 0.5.13 - 2026-10-22
 
+- A scheduled automatic update can now proceed while the tunnel is running **only after 15 minutes without agent activity**. Zodex checks the running process registry, unfinished tool invocations, patches, process polls, and streamed output. Any uncertain/busy status is treated as unsafe, and activity is checked again immediately before shutdown.
+- Release download, unpacking, and checksum verification happen **before** stopping Local. On success, Local restarts from its previous folder with the original TTL deadline preserved; the Windows upgrade helper handles restart after binary replacement.
+- Offline or busy scheduled checks retry **once on the next computer boot**, without changing the existing daily check cadence. Merely restarting the menu/tray app no longer causes repeated retries.
 - Added a gear icon next to **Configure** and a network icon next to **Change Liveboard Port** on macOS and in Windows/Linux tray menus.
 - Fixed macOS menu bar upgrades to force a fresh instance after replacing the bundle, rather than letting LaunchServices return the stale running process. The menu app also detects an updated bundle on disk and relaunches itself when needed. An upgrade relaunch does not trigger opt-in login-only tunnel autostart or stop a running tunnel.
 - Documented macOS signing-key Keychain prompts and Apple's **Always Allow** one-time authorization. Zodex continues to retain its stable code-signing identity and never weakens Keychain protections to hide prompts.

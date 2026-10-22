@@ -152,6 +152,7 @@ jobs:
         shell: bash
         env:
           ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
+          ZODEX_SERIAL_RUST_TESTS: "1"
         run: |
           set -euo pipefail
           log="$(mktemp)"
@@ -277,6 +278,7 @@ jobs:
           cargo test --locked --lib local::liveboard::server_tests -- --nocapture
           cargo test --locked --lib local::liveboard::server::port_tests -- --nocapture
           cargo test --locked --lib local::login_preferences::tests -- --nocapture
+          cargo test --locked --lib local::history::query::automatic_update_tests -- --nocapture
           cargo test --locked --lib local::liveboard::launch::tests::supported_platform_has_browser_and_clipboard_attempts -- --exact
           cargo test --locked --lib local::environment_handoff::tests::environment_handoff_round_trips_and_is_consumed -- --exact
           cargo test --locked --lib local::environment_handoff::tests::windows_environment_handoff_preserves_utf16_values -- --exact
@@ -292,6 +294,9 @@ jobs:
           cargo test --locked --lib session::process::tests::windows_current_process_uses_creation_time_identity -- --exact
           cargo test --locked --bin zodex operator_cli::local_cli_tests::setup_env_input_is_scriptable_without_secret_argv -- --exact
           cargo test --locked --bin zodex operator_cli::desktop_preferences_tests::automatic_updates_accepts_explicit_true_and_false_from_cli -- --exact
+          cargo test --locked --bin zodex operator_cli::desktop_preferences_tests::automatic_update_is_an_internal_desktop_command -- --exact
+          cargo test --locked --bin zodex operator_upgrade::automatic_update_safety_tests -- --nocapture
+          cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_deferred_replacement_can_restore_idle_tunnel -- --exact
           cargo test --locked --bin zodex operator_cli::desktop_preferences_tests::port_and_auto_update_commands_preserve_legacy_start_folder -- --exact
           cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_operator_target_and_binary_name_match_release_contract -- --exact
           cargo test --locked --bin zodex operator_upgrade::operator_upgrade_tests::windows_upgrade_uses_builtin_powershell -- --exact

@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory=$true)][string]$TraySource,
     [Parameter(Mandatory=$true)][string]$TrayDestination,
     [Parameter(Mandatory=$true)][int]$ParentPid,
-    [Parameter(Mandatory=$true)][string]$ScriptPath
+    [Parameter(Mandatory=$true)][string]$ScriptPath,
+    [string]$RestartDirectory = '',
+    [string]$RestartExpiresAt = ''
 )
 $ErrorActionPreference = 'Stop'
 try {
@@ -49,5 +51,29 @@ try {
         Start-Process -FilePath $TrayDestination -WindowStyle Hidden
     }
 } finally {
+    if ($RestartDirectory -and (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+        # The parent CLI exits before replacement on Windows. Restart from
+        # this detached helper *after* the new executable has been installed.
+        # A failed replacement still restarts with the previous usable binary.
+        try {
+            $argsForStart = @('local', 'start', $RestartDirectory)
+            if ($RestartExpiresAt) {
+                $deadline = [DateTimeOffset]::Parse($RestartExpiresAt)
+                $ttlSeconds = [math]::Floor(($deadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+                if ($ttlSeconds -le 0) {
+                    throw 'The original Zodex Local TTL expired during upgrade; not extending it'
+                }
+                $argsForStart += @('--ttl', "$ttlSeconds" + 's')
+            }
+            & $Destination @argsForStart
+            if ($LASTEXITCODE -ne 0) {
+                throw "Zodex Local restart exited with code $LASTEXITCODE"
+            }
+        } catch {
+            # A failed restart is significant, but should not hide the
+            # installer result or prevent temporary helper cleanup.
+            Write-Warning "Zodex automatic update could not restart Local: $_"
+        }
+    }
     Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
 }

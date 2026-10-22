@@ -22,6 +22,10 @@ pub struct LocalLoginPreferences {
     pub launch_tunnel_at_login: bool,
     pub automatic_updates: bool,
     pub last_automatic_update_check: Option<i64>,
+    /// Retry a busy/offline scheduled attempt on the next *computer boot*,
+    /// not every time the menu app relaunches.
+    pub automatic_update_retry_next_boot: bool,
+    pub automatic_update_attempt_boot: Option<u64>,
     pub liveboard_port: u16,
 }
 
@@ -32,6 +36,8 @@ impl Default for LocalLoginPreferences {
             launch_tunnel_at_login: false,
             automatic_updates: true,
             last_automatic_update_check: None,
+            automatic_update_retry_next_boot: false,
+            automatic_update_attempt_boot: None,
             liveboard_port: DEFAULT_LIVEBOARD_PORT,
         }
     }
@@ -134,6 +140,38 @@ impl LocalLoginPreferences {
         self.last_automatic_update_check = Some(now);
         true
     }
+
+    /// Distinguish a daily scheduled check from a reboot retry. A reboot
+    /// retry leaves the 24-hour cadence unchanged. Called while holding the
+    /// desktop preferences file lock, so two menu processes cannot race.
+    pub fn claim_automatic_update_attempt(&mut self, now: i64, boot_time: u64) -> bool {
+        if !self.automatic_updates {
+            return false;
+        }
+        let due = self.last_automatic_update_check.is_none_or(|last| {
+            now < last || now.saturating_sub(last) >= AUTOMATIC_UPDATE_INTERVAL_SECONDS
+        });
+        // sysinfo computes boot time on some platforms; tolerate a few
+        // seconds of rounding drift without mistaking it for a reboot.
+        let new_boot = self
+            .automatic_update_attempt_boot
+            .is_some_and(|last| last.abs_diff(boot_time) > 5);
+        if !due && !(self.automatic_update_retry_next_boot && new_boot) {
+            return false;
+        }
+        if due {
+            self.last_automatic_update_check = Some(now);
+        }
+        self.automatic_update_attempt_boot = Some(boot_time);
+        self.automatic_update_retry_next_boot = false;
+        true
+    }
+
+    pub fn defer_automatic_update_until_reboot(&mut self) {
+        if self.automatic_updates {
+            self.automatic_update_retry_next_boot = true;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +264,26 @@ mod tests {
             prefs.last_automatic_update_check,
             Some(100_000 + AUTOMATIC_UPDATE_INTERVAL_SECONDS)
         );
+    }
+
+    #[test]
+    fn busy_or_offline_checks_retry_once_on_next_boot_without_changing_daily_clock() {
+        let mut prefs = LocalLoginPreferences::default();
+        assert!(prefs.claim_automatic_update_attempt(100_000, 80_000));
+        prefs.defer_automatic_update_until_reboot();
+        assert!(!prefs.claim_automatic_update_attempt(100_100, 80_001));
+        assert!(prefs.claim_automatic_update_attempt(100_100, 80_100));
+        assert_eq!(prefs.last_automatic_update_check, Some(100_000));
+        assert!(!prefs.claim_automatic_update_attempt(100_101, 80_100));
+        assert!(
+            prefs.claim_automatic_update_attempt(
+                100_000 + AUTOMATIC_UPDATE_INTERVAL_SECONDS,
+                80_100
+            )
+        );
+        prefs.defer_automatic_update_until_reboot();
+        prefs.automatic_updates = false;
+        assert!(!prefs.claim_automatic_update_attempt(300_000, 90_000));
     }
 
     #[test]

@@ -35,7 +35,7 @@ mod timeline_tests;
 
 pub use query::{
     HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence, HistoryFormat,
-    HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
+    HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader, LocalRecentActivity,
 };
 pub use schema::HISTORY_SCHEMA_VERSION;
 pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};

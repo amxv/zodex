@@ -194,9 +194,74 @@ pub struct HistoryStoreStatus {
     pub last_retention_error: Option<String>,
 }
 
+/// Conservative activity evidence for a Local automatic update. This is
+/// intentionally raw, not the presentation timeline (which folds polls).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LocalRecentActivity {
+    pub last_activity_ms: Option<i64>,
+    pub unfinished_invocations: u64,
+    pub running_processes: u64,
+}
+
 pub struct LocalHistoryReader;
 
 impl LocalHistoryReader {
+    /// Include every invocation, continuation poll, file patch, process
+    /// lifecycle update, and streamed output chunk. Any unreadable database
+    /// fails closed in the caller instead of treating missing evidence as idle.
+    pub fn recent_activity(path: &Path, runtime_started_ms: i64) -> Result<LocalRecentActivity> {
+        if !path.exists() {
+            return Ok(LocalRecentActivity::default());
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let (started, completed, updated, ended, unfinished, running): (
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            i64,
+            i64,
+        ) = connection
+            .query_row(
+                "SELECT MAX(started_at_ms), MAX(completed_at_ms),
+                    MAX(process_updated_at_ms), MAX(process_ended_at_ms),
+                    COALESCE(SUM(CASE WHEN completed_at_ms IS NULL AND started_at_ms >= ?1
+                                      THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN process_state = 'running'
+                                      AND process_started_at_ms >= ?1
+                                      THEN 1 ELSE 0 END), 0)
+             FROM invocations",
+                [runtime_started_ms],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .context("failed to inspect recent Local invocation activity")?;
+        let output: Option<i64> = connection
+            .query_row(
+                "SELECT MAX(observed_at_ms) FROM invocation_output_chunks",
+                [],
+                |row| row.get(0),
+            )
+            .context("failed to inspect recent Local process output activity")?;
+        Ok(LocalRecentActivity {
+            last_activity_ms: [started, completed, updated, ended, output]
+                .into_iter()
+                .flatten()
+                .max(),
+            unfinished_invocations: u64::try_from(unfinished.max(0)).unwrap_or(u64::MAX),
+            running_processes: u64::try_from(running.max(0)).unwrap_or(u64::MAX),
+        })
+    }
+
     pub fn agent_count(path: &Path, runtime_id: Option<&str>) -> Result<usize> {
         if !path.exists() {
             return Ok(0);
@@ -928,4 +993,88 @@ fn render_markdown(records: &[HistoryInvocation], raw: bool) -> String {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod automatic_update_tests {
+    use rusqlite::{Connection, params};
+    use tempfile::tempdir;
+
+    use super::{LocalHistoryReader, LocalRecentActivity};
+    use crate::local::history::schema::initialize_or_migrate;
+
+    #[test]
+    fn activity_probe_tracks_patches_polls_output_and_unfinished_work() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        assert_eq!(
+            LocalHistoryReader::recent_activity(&path, 1000).unwrap(),
+            LocalRecentActivity::default()
+        );
+        let mut database = Connection::open(&path).unwrap();
+        initialize_or_migrate(&mut database).unwrap();
+        assert_eq!(
+            LocalHistoryReader::recent_activity(&path, 1000).unwrap(),
+            LocalRecentActivity::default()
+        );
+
+        database
+            .execute(
+                "INSERT INTO invocations(
+                correlation_id, tool_name, args_json, started_at_ms,
+                completed_at_ms, evidence_state, capture_state
+             ) VALUES ('patch', 'apply_patch', '{}', 1000, 1100, 'complete', 'not_applicable')",
+                [],
+            )
+            .unwrap();
+        let patch = database.last_insert_rowid();
+        let status = LocalHistoryReader::recent_activity(&path, 900).unwrap();
+        assert_eq!(status.last_activity_ms, Some(1100));
+        assert_eq!(status.unfinished_invocations, 0);
+
+        database
+            .execute(
+                "INSERT INTO invocations(
+                correlation_id, tool_name, args_json, started_at_ms,
+                evidence_state, capture_state, continuation_kind
+             ) VALUES ('poll', 'write_stdin', '{}', 1200, 'pending', 'not_applicable', 'poll')",
+                [],
+            )
+            .unwrap();
+        let status = LocalHistoryReader::recent_activity(&path, 900).unwrap();
+        assert_eq!(status.last_activity_ms, Some(1200));
+        assert_eq!(status.unfinished_invocations, 1);
+
+        database
+            .execute(
+                "UPDATE invocations SET completed_at_ms = 1300 WHERE correlation_id = 'poll'",
+                [],
+            )
+            .unwrap();
+        database.execute(
+            "INSERT INTO invocation_output_chunks(invocation_id, sequence, observed_at_ms, text)
+             VALUES (?1, 1, 1500, 'new output')",
+            params![patch],
+        ).unwrap();
+        assert_eq!(
+            LocalHistoryReader::recent_activity(&path, 900)
+                .unwrap()
+                .last_activity_ms,
+            Some(1500)
+        );
+
+        database
+            .execute(
+                "UPDATE invocations SET process_state = 'running',
+               process_started_at_ms = 1600, process_updated_at_ms = 1700
+             WHERE correlation_id = 'patch'",
+                [],
+            )
+            .unwrap();
+        let status = LocalHistoryReader::recent_activity(&path, 900).unwrap();
+        assert_eq!(status.last_activity_ms, Some(1700));
+        assert_eq!(status.running_processes, 1);
+        let newer_runtime = LocalHistoryReader::recent_activity(&path, 1800).unwrap();
+        assert_eq!(newer_runtime.running_processes, 0);
+    }
 }

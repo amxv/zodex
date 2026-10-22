@@ -40,7 +40,7 @@ pub use environment_handoff::{consume_environment_handoff, write_environment_han
 pub use history::{
     HISTORY_SCHEMA_VERSION, HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence,
     HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
-    LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
+    LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalRecentActivity, clear_local_history,
 };
 pub use launchd::{
     LOCAL_LAUNCHD_LABEL, LaunchdController, LocalLaunchdJob, SystemLaunchdController,

@@ -23,10 +23,6 @@ private struct LocalLoginPreferences: Decodable {
     let liveboard_port: UInt16
 }
 
-private struct AutomaticUpdateClaim: Decodable {
-    let due: Bool
-}
-
 private struct UpgradeEvent: Decodable {
     let schema_version: Int
     let event: String
@@ -123,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var tunnelAutostartEnabled = false
     private var automaticUpdatesEnabled = true
     private var liveboardPort: UInt16 = 64973
-    private var pendingAutomaticUpdateVersion: String?
+    private var automaticUpdateInFlight = false
     private var automaticUpdateTimer: Timer?
     private var versionCheckTimer: Timer?
     private var relaunchingUpdatedApp = false
@@ -190,11 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         automaticUpdateTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) {
             [weak self] _ in
             self?.checkAutomaticUpdatesIfDue()
-            self?.applyPendingAutomaticUpdateIfIdle()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
             self?.checkAutomaticUpdatesIfDue()
-            self?.applyPendingAutomaticUpdateIfIdle()
         }
         // The installer normally relaunches us. This also recovers when an
         // older installer replaced the bundle without replacing the process.
@@ -211,7 +205,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         refreshStatus()
-        applyPendingAutomaticUpdateIfIdle()
     }
 
     private func menuItem(
@@ -300,9 +293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         launchTunnelAtLoginItem.state = tunnelAutostartEnabled ? .on : .off
         automaticUpdatesItem.state = automaticUpdatesEnabled ? .on : .off
         liveboardPortItem.title = "Change Liveboard Port… (\(liveboardPort))"
-        if !automaticUpdatesEnabled {
-            pendingAutomaticUpdateVersion = nil
-        }
     }
 
     private var validStartFolder: String? {
@@ -397,7 +387,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stopItem.isEnabled = false
             liveboardItem.isEnabled = false
             copyLiveboardItem.isEnabled = false
-            applyPendingAutomaticUpdateIfIdle()
         case "unconfigured":
             startItem.title = "Start Zodex"
             disableRuntimeActions()
@@ -614,38 +603,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let version = availableUpdateVersion {
             beginUpgrade(version: version, stopLocal: false, automatic: false)
         } else {
-            refreshUpgradeStatus(force: true, reportUpToDate: true, automatic: false)
+            refreshUpgradeStatus(force: true, reportUpToDate: true)
         }
     }
 
     private func checkAutomaticUpdatesIfDue() {
         refreshLoginPreferences()
-        guard automaticUpdatesEnabled, !upgradeCheckInFlight, !upgradeInFlight else { return }
-        runZodex(["local", "preferences", "claim-update-check"]) { [weak self] result in
-            guard let self, self.automaticUpdatesEnabled,
-                  result.exitCode == 0,
-                  let data = result.output.data(using: .utf8),
-                  let claim = try? JSONDecoder().decode(AutomaticUpdateClaim.self, from: data),
-                  claim.due else { return }
-            self.refreshUpgradeStatus(force: true, reportUpToDate: false, automatic: true)
+        guard automaticUpdatesEnabled, !automaticUpdateInFlight,
+              !commandInFlight, !upgradeCheckInFlight, !upgradeInFlight else { return }
+        automaticUpdateInFlight = true
+        // Run in the captured login-shell environment so the post-upgrade
+        // restart has the same developer tools and PATH as a manual Start.
+        runZodexWithLoginEnvironment(["local", "__automatic-update"]) { [weak self] result in
+            guard let self else { return }
+            self.automaticUpdateInFlight = false
+            if result.exitCode != 0 {
+                NSLog("Zodex automatic update: %@", result.output)
+            }
         }
     }
 
-    private func applyPendingAutomaticUpdateIfIdle() {
-        guard automaticUpdatesEnabled,
-              !commandInFlight, !upgradeCheckInFlight, !upgradeInFlight,
-              let version = pendingAutomaticUpdateVersion else { return }
-        // Only the upgrade CLI can definitively decide whether Local has
-        // stopped. Checking status here avoids knowingly disrupting work.
-        let result = runZodexSync(["local", "status", "--json"])
-        guard result.exitCode == 0,
-              let data = result.output.data(using: .utf8),
-              let status = try? JSONDecoder().decode(LocalStatus.self, from: data),
-              status.state == "stopped" || status.state == "unconfigured" else { return }
-        beginUpgrade(version: version, stopLocal: false, automatic: true)
-    }
-
-    private func refreshUpgradeStatus(force: Bool, reportUpToDate: Bool, automatic: Bool) {
+    private func refreshUpgradeStatus(force: Bool, reportUpToDate: Bool) {
         guard !upgradeCheckInFlight, !upgradeInFlight else {
             return
         }
@@ -681,21 +659,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if event.update_available == true, let target = event.target_version {
                 self.availableUpdateVersion = target
                 self.updateItem.title = "Update to v\(target)…"
-                if automatic && self.automaticUpdatesEnabled {
-                    self.pendingAutomaticUpdateVersion = target
-                }
             } else {
                 self.availableUpdateVersion = nil
                 self.updateItem.title = "Check for Updates…"
-                if automatic { self.pendingAutomaticUpdateVersion = nil }
                 if reportUpToDate {
                     self.showInformation("Zodex is up to date", detail: event.message)
                 }
             }
             self.updateItem.isEnabled = true
-            if automatic {
-                self.applyPendingAutomaticUpdateIfIdle()
-            }
         }
     }
 
@@ -722,7 +693,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.upgradeInFlight = false
                 if exitCode == 0 {
                     self.availableUpdateVersion = nil
-                    self.pendingAutomaticUpdateVersion = nil
                     self.updateItem.title = "Check for Updates…"
                     self.updateItem.isEnabled = true
                     self.refreshStatus()
@@ -733,9 +703,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if failure?.code == "local_running", !stopLocal {
                     self.updateItem.title = "Update to v\(version)…"
                     self.updateItem.isEnabled = true
-                    if automatic {
-                        self.pendingAutomaticUpdateVersion = version
-                    } else {
+                    if !automatic {
                         self.confirmStopAndUpdate(version: version)
                     }
                     self.refreshStatus()
@@ -748,7 +716,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let detail = failure?.message
                     ?? stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 if automatic {
-                    self.pendingAutomaticUpdateVersion = nil
                     NSLog("Zodex automatic update failed: %@", detail)
                 } else {
                     self.showError(
@@ -805,6 +772,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func runZodexStart(path: String, completion: @escaping (CommandResult) -> Void) {
+        runZodexWithLoginEnvironment(["local", "start", path], completion: completion)
+    }
+
+    private func runZodexWithLoginEnvironment(
+        _ arguments: [String], completion: @escaping (CommandResult) -> Void
+    ) {
         let executable = zodexURL
         DispatchQueue.global(qos: .userInitiated).async {
             guard let environment = captureLoginShellEnvironment() else {
@@ -819,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let process = Process()
             let outputPipe = Pipe()
             process.executableURL = executable
-            process.arguments = ["local", "start", path]
+            process.arguments = arguments
             process.environment = environment
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = outputPipe

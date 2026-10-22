@@ -13,6 +13,197 @@ const EMBEDDED_OPERATOR_INSTALLER: &str = include_str!("../../../scripts/install
 const EMBEDDED_WINDOWS_UPGRADE_HELPER: &str = include_str!("../../../scripts/finish-windows-upgrade.ps1");
 const UPGRADE_CHECK_CACHE_SECONDS: i64 = 5 * 60;
 const UPGRADE_DOWNLOAD_ATTEMPTS: usize = 3;
+const AUTOMATIC_UPDATE_IDLE_SECONDS: i64 = 15 * 60;
+
+fn idle_window_elapsed(now_ms: i64, last_activity_ms: i64) -> bool {
+    now_ms >= last_activity_ms
+        && now_ms.saturating_sub(last_activity_ms) >= AUTOMATIC_UPDATE_IDLE_SECONDS * 1000
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutomaticRestartPlan {
+    start_directory: PathBuf,
+    /// Preserve the original absolute TTL deadline; an update must not
+    /// silently extend a time-bounded Local session.
+    expires_at: Option<OffsetDateTime>,
+}
+
+impl AutomaticRestartPlan {
+    fn remaining_ttl_seconds(&self, now: OffsetDateTime) -> Option<u64> {
+        self.expires_at.map(|expires| {
+            let remaining = (expires - now).whole_seconds();
+            u64::try_from(remaining).unwrap_or(0)
+        })
+    }
+}
+
+fn automatic_update_idle_plan(
+    paths: &zodex::local::LocalPaths,
+    now: OffsetDateTime,
+) -> std::result::Result<Option<AutomaticRestartPlan>, UpgradeFailure> {
+    use zodex::local::{LocalHistoryReader, LocalStatusDocument, LocalStatusState};
+
+    let fail = |message: String| UpgradeFailure::new("local_busy", message);
+    let prefs = zodex::local::LocalLoginPreferences::load(paths).map_err(|error| {
+        fail(format!("Cannot verify desktop update preferences: {error:#}"))
+    })?;
+    if !prefs.automatic_updates {
+        return Err(fail("Automatic updates are disabled".into()));
+    }
+    let status = LocalStatusDocument::inspect(paths).map_err(|error| {
+        fail(format!("Cannot establish Local idle status: {error:#}"))
+    })?;
+    match status.state {
+        LocalStatusState::Unconfigured | LocalStatusState::Stopped => return Ok(None),
+        LocalStatusState::Stale => {
+            return Err(fail("Local has stale lifecycle state; automatic update deferred".into()));
+        }
+        LocalStatusState::Running => {}
+    }
+    if status.active_process_count > 0 {
+        return Err(fail(format!(
+            "{} agent process(es) are still active",
+            status.active_process_count
+        )));
+    }
+    if status.history.store_state != "healthy" || !status.history.database_exists {
+        return Err(fail("Local activity history is unavailable; cannot prove an idle window".into()));
+    }
+    let runtime = status.runtime.as_ref().ok_or_else(|| fail("Missing Local runtime state".into()))?;
+    let started = runtime.started_at.as_deref()
+        .ok_or_else(|| fail("Missing Local runtime start timestamp".into()))
+        .and_then(|value| {
+            OffsetDateTime::parse(value, &Rfc3339)
+                .map_err(|error| fail(format!("Invalid Local start timestamp: {error}")))
+        })?;
+    let started_ms = i64::try_from(started.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| fail("Local runtime timestamp is out of range".into()))?;
+    let now_ms = i64::try_from(now.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| fail("Current timestamp is out of range".into()))?;
+    if !idle_window_elapsed(now_ms, started_ms) {
+        return Err(fail("The tunnel has been running for less than 15 minutes".into()));
+    }
+    let activity = LocalHistoryReader::recent_activity(&paths.history_database(), started_ms)
+        .map_err(|error| fail(format!("Cannot verify recent agent activity: {error:#}")))?;
+    if activity.unfinished_invocations > 0 {
+        return Err(fail(format!(
+            "{} agent tool invocation(s) have not finished",
+            activity.unfinished_invocations
+        )));
+    }
+    if activity.running_processes > 0 {
+        return Err(fail(format!(
+            "{} agent process(es) are marked running in history",
+            activity.running_processes
+        )));
+    }
+    if let Some(latest) = activity.last_activity_ms
+        && !idle_window_elapsed(now_ms, latest)
+    {
+        return Err(fail(
+            "An agent process, patch, poll, or output was active within the last 15 minutes"
+                .to_string(),
+        ));
+    }
+    let directory = runtime.start_directory.clone()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| fail("The previous Local start folder is unavailable".into()))?;
+    let expires_at = runtime.expires_at.as_deref().map(|value| {
+        OffsetDateTime::parse(value, &Rfc3339)
+            .map_err(|error| fail(format!("Invalid Local TTL expiration: {error}")))
+    }).transpose()?;
+    if expires_at.is_some_and(|expires| expires <= now) {
+        return Err(fail("The Local session TTL has already expired".into()));
+    }
+    Ok(Some(AutomaticRestartPlan { start_directory: directory, expires_at }))
+}
+
+async fn run_local_automatic_update(paths: &zodex::local::LocalPaths) -> Result<()> {
+    use zodex::local::LocalLoginPreferences;
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let boot_time = sysinfo::System::boot_time();
+    let claimed = LocalLoginPreferences::update(paths, |prefs| {
+        Ok(prefs.claim_automatic_update_attempt(now, boot_time))
+    })?;
+    if !claimed {
+        return Ok(());
+    }
+    let emitter = UpgradeEmitter::new(UpgradeFormat::Json);
+    let options = OperatorUpgradeOptions {
+        version: "latest",
+        check: false,
+        format: UpgradeFormat::Json,
+        stop_local: true,
+        refresh: true,
+        automatic_restart: true,
+    };
+    if let Err(failure) = run_operator_upgrade(options, &emitter).await {
+        // Never spin on network errors or busy agent activity. Tomorrow's
+        // scheduled check still happens; a new OS boot gets one extra retry.
+        LocalLoginPreferences::update(paths, |prefs| {
+            prefs.defer_automatic_update_until_reboot();
+            Ok(())
+        })?;
+        eprintln!("Zodex automatic update deferred until next boot or daily check: {}", failure.message);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restart_automatic_local(
+    executable: &Path,
+    plan: &AutomaticRestartPlan,
+) -> std::result::Result<(), UpgradeFailure> {
+    let mut command = Command::new(executable);
+    command.arg("local").arg("start").arg(&plan.start_directory);
+    if let Some(ttl) = plan.remaining_ttl_seconds(OffsetDateTime::now_utc()) {
+        if ttl == 0 {
+            return Err(UpgradeFailure::new(
+                "local_restart_failed",
+                "Local's original TTL expired during the update; not extending it",
+            ));
+        }
+        command.args(["--ttl", &format!("{ttl}s")]);
+    }
+    let output = command.stdin(Stdio::null()).output().map_err(|error| {
+        UpgradeFailure::new("local_restart_failed", format!("Cannot restart Local after updating: {error}"))
+    })?;
+    if !output.status.success() {
+        return Err(UpgradeFailure::new(
+            "local_restart_failed",
+            format!("Could not restart Local after update: {}",
+                String::from_utf8_lossy(&output.stderr).trim()),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod automatic_update_safety_tests {
+    use super::{AutomaticRestartPlan, idle_window_elapsed};
+    use time::{Duration, OffsetDateTime};
+
+    #[test]
+    fn exactly_fifteen_minutes_of_inactivity_is_eligible() {
+        let cutoff = 15 * 60 * 1000;
+        assert!(!idle_window_elapsed(cutoff - 1, 0));
+        assert!(idle_window_elapsed(cutoff, 0));
+        assert!(!idle_window_elapsed(cutoff, cutoff + 1));
+    }
+
+    #[test]
+    fn restarting_preserves_absolute_ttl_instead_of_granting_a_new_session() {
+        let now = OffsetDateTime::UNIX_EPOCH + Duration::hours(10);
+        let plan = AutomaticRestartPlan {
+            start_directory: std::env::temp_dir(),
+            expires_at: Some(now + Duration::minutes(90)),
+        };
+        assert_eq!(plan.remaining_ttl_seconds(now), Some(5400));
+        assert_eq!(plan.remaining_ttl_seconds(now + Duration::minutes(30)), Some(3600));
+        assert_eq!(plan.remaining_ttl_seconds(now + Duration::minutes(91)), Some(0));
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct OperatorUpgradeOptions<'a> {
@@ -21,6 +212,7 @@ struct OperatorUpgradeOptions<'a> {
     format: UpgradeFormat,
     stop_local: bool,
     refresh: bool,
+    automatic_restart: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -329,30 +521,24 @@ async fn continue_operator_upgrade(
     }
 
     let _lock = OperatorUpgradeLock::acquire()?;
-    let mut local_state = operator_upgrade_local_state()?;
-    if local_state.blocks_upgrade() {
-        if !options.stop_local {
-            return Err(UpgradeFailure::new(
-                "local_running",
-                "Zodex Local must be stopped before upgrading. Run `zodex local stop`, or retry with `zodex upgrade --stop-local`.",
-            ));
-        }
-        let client = operator_upgrade_http_client()?;
-        ensure_operator_release_exists(&client, &target).await?;
-        emitter.progress(
-            "stopping_local",
-            Some(&target.to_string()),
-            "Stopping Zodex Local…",
-        );
-        stop_local_for_operator_upgrade().await?;
-        local_state = operator_upgrade_local_state()?;
-        if local_state.blocks_upgrade() {
-            return Err(UpgradeFailure::new(
-                "local_stop_failed",
-                "Zodex Local still has blocking runtime state after the stop request.",
-            ));
-        }
+    let local_state = operator_upgrade_local_state()?;
+    if local_state.blocks_upgrade() && !options.stop_local {
+        return Err(UpgradeFailure::new(
+            "local_running",
+            "Zodex Local must be stopped before upgrading. Run `zodex local stop`, or retry with `zodex upgrade --stop-local`.",
+        ));
     }
+    let auto_paths = if options.automatic_restart {
+        let paths = zodex::local::LocalPaths::discover().map_err(|error| {
+            UpgradeFailure::new("local_busy", format!("Cannot inspect Local paths: {error:#}"))
+        })?;
+        // Reject busy work before spending bandwidth, then *re-check* at the
+        // point of shutdown because new tool calls may arrive during download.
+        let _ = automatic_update_idle_plan(&paths, OffsetDateTime::now_utc())?;
+        Some(paths)
+    } else {
+        None
+    };
 
     let target_text = target.to_string();
     emitter.progress(
@@ -405,7 +591,57 @@ async fn continue_operator_upgrade(
             ),
         ));
     }
-    install_extracted_operator(&installer_path, &extracted_dir)?;
+    // Download, checksum-verify, and unpack *before* stopping the tunnel.
+    // Once stopped, only local installation and startup remain.
+    let mut restart_plan = None;
+    if let Some(paths) = auto_paths.as_ref() {
+        let still_enabled = zodex::local::LocalLoginPreferences::load(paths)
+            .map_err(|error| UpgradeFailure::new(
+                "local_busy", format!("Cannot check automatic-update opt-out: {error:#}")
+            ))?
+            .automatic_updates;
+        if !still_enabled {
+            return Err(UpgradeFailure::new(
+                "local_busy", "Automatic updates were disabled during download",
+            ));
+        }
+    }
+    let current_state = operator_upgrade_local_state()?;
+    if current_state.blocks_upgrade() {
+        if !options.stop_local {
+            return Err(UpgradeFailure::new(
+                "local_running",
+                "Local became active during update download; retry after stopping it.",
+            ));
+        }
+        if let Some(paths) = auto_paths.as_ref() {
+            restart_plan = automatic_update_idle_plan(paths, OffsetDateTime::now_utc())?;
+        }
+        emitter.progress("stopping_local", Some(&target_text), "Stopping Zodex Local for update…");
+        stop_local_for_operator_upgrade().await?;
+        if operator_upgrade_local_state()?.blocks_upgrade() {
+            return Err(UpgradeFailure::new(
+                "local_stop_failed", "Zodex Local still has blocking state after the stop request",
+            ));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let installed_operator = env::current_exe().map_err(|error| {
+        UpgradeFailure::new("install_failed", format!("Cannot resolve operator executable: {error}"))
+    })?;
+    if let Err(error) = install_extracted_operator(&installer_path, &extracted_dir, restart_plan.as_ref()) {
+        #[cfg(not(target_os = "windows"))]
+        if let Some(plan) = restart_plan.as_ref() {
+            // Even a failed replacement must not leave a previously running
+            // tunnel stopped indefinitely when an operator binary is usable.
+            let _ = restart_automatic_local(&installed_operator, plan);
+        }
+        return Err(error);
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(plan) = restart_plan.as_ref() {
+        restart_automatic_local(&installed_operator, plan)?;
+    }
 
     emitter.progress(
         "complete",
@@ -771,15 +1007,17 @@ fn extract_upgrade_archive(
 fn install_extracted_operator(
     installer: &Path,
     extracted_dir: &Path,
+    restart_plan: Option<&AutomaticRestartPlan>,
 ) -> std::result::Result<(), UpgradeFailure> {
     #[cfg(target_os = "windows")]
     {
         let _ = installer;
-        return install_extracted_operator_windows(extracted_dir);
+        return install_extracted_operator_windows(extracted_dir, restart_plan);
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+    let _ = restart_plan;
     let current = env::current_exe().map_err(|error| {
         UpgradeFailure::new("install_failed", format!("Could not resolve current zodex executable: {error}"))
     })?;
@@ -813,6 +1051,7 @@ fn install_extracted_operator(
 #[cfg(target_os = "windows")]
 fn install_extracted_operator_windows(
     extracted_dir: &Path,
+    restart_plan: Option<&AutomaticRestartPlan>,
 ) -> std::result::Result<(), UpgradeFailure> {
     use std::os::windows::process::CommandExt as _;
     use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
@@ -854,7 +1093,8 @@ fn install_extracted_operator_windows(
             format!("Could not write Windows upgrade helper {}: {error}", helper.display()),
         )
     })?;
-    Command::new(windows_powershell_path()?)
+    let mut command = Command::new(windows_powershell_path()?);
+    command
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&helper)
         .arg("-Source")
@@ -868,7 +1108,16 @@ fn install_extracted_operator_windows(
         .arg("-ParentPid")
         .arg(std::process::id().to_string())
         .arg("-ScriptPath")
-        .arg(&helper)
+        .arg(&helper);
+    if let Some(plan) = restart_plan {
+        command.arg("-RestartDirectory").arg(&plan.start_directory);
+        if let Some(deadline) = plan.expires_at {
+            command.arg("-RestartExpiresAt").arg(deadline.format(&Rfc3339).map_err(|error| {
+                UpgradeFailure::new("install_failed", format!("Cannot serialize Local TTL: {error}"))
+            })?);
+        }
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1053,6 +1302,14 @@ mod operator_upgrade_tests {
         let expected = PathBuf::from(system_root)
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         assert_eq!(windows_powershell_path().unwrap(), expected);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_deferred_replacement_can_restore_idle_tunnel() {
+        assert!(EMBEDDED_WINDOWS_UPGRADE_HELPER.contains("RestartDirectory"));
+        assert!(EMBEDDED_WINDOWS_UPGRADE_HELPER.contains("RestartExpiresAt"));
+        assert!(EMBEDDED_WINDOWS_UPGRADE_HELPER.contains("& $Destination @argsForStart"));
     }
 
     #[test]

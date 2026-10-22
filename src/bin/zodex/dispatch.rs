@@ -17,6 +17,7 @@ pub(crate) async fn run() -> Result<()> {
                 format,
                 stop_local,
                 refresh,
+                automatic_restart: false,
             })
             .await?;
         }

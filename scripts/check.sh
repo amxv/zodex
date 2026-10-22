@@ -31,4 +31,11 @@ echo "==> cargo clippy --all-targets -- -D warnings"
 cargo clippy --quiet --all-targets -- -D warnings
 
 echo "==> cargo test"
-cargo test --quiet
+if [[ "${ZODEX_SERIAL_RUST_TESTS:-0}" == "1" ]]; then
+  # CI's small Linux runners can make independent SQLite history tests
+  # contend under libtest's default high parallelism. Keep the full test
+  # suite, but run those test functions one at a time for reliability.
+  cargo test --quiet -- --test-threads=1
+else
+  cargo test --quiet
+fi
