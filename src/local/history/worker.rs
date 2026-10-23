@@ -258,6 +258,27 @@ pub struct LocalHistoryRuntime {
 type AgentFirstSeenObserver = Arc<dyn Fn(String) + Send + Sync>;
 
 impl LocalHistoryRuntime {
+    pub(crate) fn identify_agent(&self, context: InvocationContext) -> Result<InvocationContext> {
+        let identity = self.store.identify_agent(context)?;
+        if identity.first_seen_in_runtime
+            && let Some(agent_id) = identity.context.agent_id.as_deref()
+        {
+            let observer = self
+                .agent_first_seen_observer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(observer) = observer {
+                observer(agent_id.to_string());
+            }
+            self.events
+                .emit_with("agent_first_seen", Some(agent_id), None, None, None, || {
+                    json!({})
+                });
+        }
+        Ok(identity.context)
+    }
+
     pub fn open(config: LocalHistoryRuntimeConfig) -> Result<Arc<Self>> {
         Self::open_with_store(config, None)
     }

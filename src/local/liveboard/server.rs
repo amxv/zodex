@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,14 +8,16 @@ use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, RawQuery, Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use futures_util::TryStreamExt as _;
+use futures_util::{StreamExt as _, TryStreamExt as _};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::WatchStream;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -34,6 +37,7 @@ struct LiveboardState {
     observer: Arc<LiveboardObserverBridge>,
     preferences: LiveboardPreferencesStore,
     private_base_path: String,
+    shutdown: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -88,13 +92,26 @@ impl LocalLiveboardHost {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn start_liveboard_host(
     paths: &LocalPaths,
     observer_client: LocalObserverClient,
 ) -> Result<LocalLiveboardHost> {
+    start_liveboard_host_with_preferences(
+        paths,
+        observer_client,
+        LiveboardPreferencesStore::new(paths),
+    )
+    .await
+}
+
+pub(crate) async fn start_liveboard_host_with_preferences(
+    paths: &LocalPaths,
+    observer_client: LocalObserverClient,
+    preferences: LiveboardPreferencesStore,
+) -> Result<LocalLiveboardHost> {
     assets::ensure_available()?;
     let observer = Arc::new(LiveboardObserverBridge::runtime_bound(observer_client));
-    let preferences = LiveboardPreferencesStore::new(paths);
     preferences.load()?;
     let configured_port = LocalLoginPreferences::load(paths)?.liveboard_port;
     let port = liveboard_bind_port(configured_port, cfg!(test));
@@ -119,19 +136,20 @@ pub(crate) async fn start_liveboard_host(
     let origin = format!("http://{addr}");
     let expected_origin = HeaderValue::from_str(&origin)
         .context("Liveboard listener address was not a valid Origin header")?;
+    let cancellation = CancellationToken::new();
     let app = build_router(
         &capability,
         Arc::new(LiveboardState {
             observer,
             preferences,
             private_base_path: private_base_path.clone(),
+            shutdown: cancellation.clone(),
         }),
         SecurityState {
             expected_host,
             expected_origin,
         },
     );
-    let cancellation = CancellationToken::new();
     let shutdown = cancellation.clone();
     let task = tokio::spawn(async move {
         axum::serve(listener, app.into_make_service())
@@ -170,6 +188,7 @@ fn build_router(capability: &str, state: Arc<LiveboardState>, security: Security
     let scoped = Router::new()
         .route("/assets/{*path}", get(asset))
         .route("/preferences", get(preferences).patch(patch_preferences))
+        .route("/preferences/events", get(preferences_events))
         .route("/api/status", get(proxy_status))
         .route("/api/agents", get(proxy_agents))
         .route("/api/agents/{id}", get(proxy_agent))
@@ -251,6 +270,21 @@ async fn preferences(State(state): State<Arc<LiveboardState>>) -> Response {
         Ok(Err(error)) => internal_error(error),
         Err(error) => internal_error(error),
     }
+}
+
+async fn preferences_events(
+    State(state): State<Arc<LiveboardState>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    // This channel carries no aliases or credentials, only a one-way change
+    // signal. On reconnect, the browser fetches the canonical preferences.
+    let stream = WatchStream::from_changes(state.preferences.subscribe())
+        .take_until(state.shutdown.clone().cancelled_owned())
+        .map(|revision| {
+            Ok(Event::default()
+                .event("preferences_changed")
+                .data(revision.to_string()))
+        });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn patch_preferences(

@@ -13,7 +13,8 @@ use crate::invocation::{
     McpResultContextProvider,
 };
 use crate::local::{
-    HistoryQuery, LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
+    HistoryQuery, LiveboardPreferencesStore, LocalAgentAliasService, LocalHistoryReader,
+    LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalPaths,
 };
 use crate::protocol::{CommandStatus, TerminationReason, ToolOutput};
 use crate::service::ZodexService;
@@ -152,6 +153,232 @@ fn text_content(value: &Value) -> Vec<&str> {
         .iter()
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect()
+}
+
+#[tokio::test]
+async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_timeline() {
+    let root = tempdir().unwrap();
+    let paths = LocalPaths::from_roots(
+        root.path().join("config"),
+        root.path().join("data"),
+        root.path().join("state"),
+    )
+    .unwrap();
+    let preferences = LiveboardPreferencesStore::new(&paths);
+    let history = history_runtime(paths.history_database());
+    let service = local_service_with_history(Config::default(), history.clone());
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN)
+            .with_invocation_recorder(history.clone())
+            .with_alias_service(LocalAgentAliasService::new(
+                history.clone(),
+                preferences.clone(),
+            )),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+
+    let tools = json_response(post_mcp(
+        &client,
+        &server.url(),
+        Some(TOKEN),
+        Some("tools/list"),
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/list", "params":{"_meta":modern_meta(None)}}),
+    ).await).await;
+    let names = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 4);
+    assert!(names.contains(&"set_agent_alias"));
+    let alias_schema = &tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "set_agent_alias")
+        .unwrap()["inputSchema"];
+    assert_eq!(alias_schema["required"], json!(["alias"]));
+    assert!(alias_schema["properties"].get("agent_id").is_none());
+
+    // First call is the alias tool: it must allocate a stable Agent ID without
+    // creating an invocation, command timeline card, or process.
+    let renamed = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                2,
+                "set_agent_alias",
+                json!({"alias":"Rindle implementation"}),
+                "alias-first-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(renamed["result"]["isError"], false);
+    let id = renamed["result"]["structuredContent"]["agent_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(id.len(), 4);
+    assert_eq!(
+        renamed["result"]["structuredContent"]["alias"],
+        "Rindle implementation"
+    );
+    assert_eq!(
+        preferences.load().unwrap().agents[id].alias.as_deref(),
+        Some("Rindle implementation")
+    );
+    assert_eq!(
+        LocalHistoryReader::agent_count(&paths.history_database(), None).unwrap(),
+        1
+    );
+    assert!(
+        LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(10))
+            .unwrap()
+            .is_empty()
+    );
+
+    // A normal execution in the same conversation must retain that identity.
+    let execution = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                3,
+                "exec_command",
+                json!({"cmd":"printf 'ok'", "workdir":root.path(), "yield_time_ms":2000}),
+                "alias-first-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(execution["result"]["isError"], false);
+    let recorded =
+        LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(20)).unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].agent_id.as_deref(), Some(id));
+
+    // Another thread can skip naming and execute normally, still receiving
+    // its own independent Agent ID, with no default alias in preferences.
+    let plain = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                4,
+                "exec_command",
+                json!({"cmd":"true", "workdir":root.path(), "yield_time_ms":2000}),
+                "plain-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(plain["result"]["isError"], false);
+    let recorded =
+        LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(20)).unwrap();
+    let plain_id = recorded
+        .iter()
+        .find(|call| call.provider_session_key.as_deref() == Some("plain-session"))
+        .and_then(|call| call.agent_id.clone())
+        .unwrap();
+    assert_ne!(plain_id, id);
+    assert!(!preferences.load().unwrap().agents.contains_key(&plain_id));
+
+    let updated = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                5,
+                "set_agent_alias",
+                json!({"alias":"Rindle CLI tests"}),
+                "alias-first-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(updated["result"]["structuredContent"]["agent_id"], id);
+    assert_eq!(
+        preferences.load().unwrap().agents[id].alias.as_deref(),
+        Some("Rindle CLI tests")
+    );
+    let cleared = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                6,
+                "set_agent_alias",
+                json!({"alias":"  "}),
+                "alias-first-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(cleared["result"]["structuredContent"]["alias"].is_null());
+    assert!(preferences.load().unwrap().agents[id].alias.is_none());
+
+    let invalid = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                7,
+                "set_agent_alias",
+                json!({"alias":"A".repeat(81)}),
+                "alias-first-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(invalid["result"]["isError"], true);
+    assert!(preferences.load().unwrap().agents[id].alias.is_none());
+
+    let unauthenticated = json_response(post_mcp(
+        &client, &server.url(), Some(TOKEN), Some("tools/call"),
+        json!({"jsonrpc":"2.0", "id":8, "method":"tools/call", "params":{
+            "name":"set_agent_alias", "arguments":{"alias":"Not my agent"}, "_meta":modern_meta(None)
+        }}),
+    ).await).await;
+    assert_eq!(unauthenticated["result"]["isError"], true);
+    assert_eq!(
+        LocalHistoryReader::agent_count(&paths.history_database(), None).unwrap(),
+        2
+    );
+    let invocations =
+        LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(20)).unwrap();
+    assert_eq!(invocations.len(), 2);
+    assert!(
+        invocations
+            .iter()
+            .all(|call| call.tool_name == "exec_command")
+    );
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
 }
 
 struct FixedResultContextProvider;

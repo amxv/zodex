@@ -12,7 +12,7 @@ The built-in [Liveboard and terminal viewer](/docs/local/watch) use this same ob
 
 Local deliberately separates **execution** from **observation**:
 
-- ChatGPT uses the authenticated Local MCP listener and the three model-visible tools.
+- ChatGPT uses the authenticated Local MCP listener and three execution tools plus the optional `set_agent_alias` Liveboard label tool.
 - Viewer clients use a different read-only observer listener.
 - The observer has no command/control route.
 

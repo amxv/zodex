@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.18 - 2026-10-24
+
+- Added the **Local-only** `set_agent_alias` MCP tool. A ChatGPT conversation can name itself with a short, descriptive Liveboard label and update that label when changing tasks. The tool accepts only an `alias`, never an Agent ID, and uses the same stable four-character identity as existing execution tools.
+- Naming is strongly encouraged but **optional**. The first tool call can be `set_agent_alias` without creating a command or timeline entry; starting with `exec_command`, `apply_patch`, or `write_stdin` instead works exactly as before and leaves the Agent shown by its ID until named. Added one-time guidance suggesting **2–7 words**.
+- Added server-to-browser Liveboard preference notifications so agent or manual alias changes appear immediately across open tabs, including **All Agents**. Aliases remain UI-only preferences, with **last write wins** and no changes to Sprite tools, execution routing, or invocation history.
+
 ## 0.5.17 - 2026-10-23
 
 - Zodex Local automatically disables Zsh's `EQUALS` expansion for agent commands with a single shell builtin, after user startup files run. It preserves the selected login shell, environment, other Zsh options, and native scalar splitting, without spawning another process.

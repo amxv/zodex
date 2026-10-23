@@ -1,12 +1,12 @@
 ---
 title: "Tools"
-description: "Learn the three tools ChatGPT gets from Zodex and the command, process-session, workdir, and patch patterns that work in both Sprite and Local modes."
+description: "Learn Zodex's three shared execution tools and the optional Local-only Liveboard alias tool."
 order: 2
 category: Reference
 summary: "The shared ChatGPT-facing surface: exec_command, write_stdin, and apply_patch."
 ---
 
-Zodex exposes exactly three ChatGPT-facing MCP tools in both Sprite and Local modes:
+Zodex exposes the same three execution tools in Sprite and Local modes:
 
 ```text
 exec_command
@@ -14,7 +14,19 @@ write_stdin
 apply_patch
 ```
 
-The infrastructure and permissions around those tools differ by mode, but the coding workflow is the same.
+Local also offers the optional `set_agent_alias` tool to label the current ChatGPT conversation in Liveboard. The infrastructure and permissions around the shared execution tools differ by mode, but the coding workflow is the same.
+
+## `set_agent_alias` (Local only)
+
+Assign a short, descriptive **2–7-word** display label for the current Agent, such as `Rindle implementation`, and update it when the main task changes. The tool has a single input:
+
+```text
+alias    required string (max 80 characters; empty string clears the alias)
+```
+
+Using this tool is encouraged but **not required**. If it is the first tool call, Local assigns the conversation its normal four-character Agent ID without recording a timeline invocation. If you call `exec_command`, `apply_patch`, or `write_stdin` first instead, everything works as usual and Liveboard displays the Agent ID until it is named.
+
+The Agent ID is resolved from conversation metadata, not passed as a model-visible input. Agent alias updates and manual pencil-button edits are persistent, **last-write-wins**, and reflected immediately in every connected Liveboard. Alias changes do not appear in the execution timeline or affect process routing, permissions, or history. This tool is not available in Sprite mode.
 
 ## `exec_command`
 

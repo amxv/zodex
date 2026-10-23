@@ -15,7 +15,11 @@ use crate::local::{
 };
 
 use super::assets;
+use super::prefs::{
+    LiveboardAgentPreferencePatch, LiveboardPreferencesPatch, LiveboardPreferencesStore,
+};
 use super::server::start_liveboard_host;
+use super::server::start_liveboard_host_with_preferences;
 
 const BEARER: &str = "liveboard-host-observer-bearer-0123456789abcdef";
 
@@ -80,6 +84,93 @@ impl ObserverFixture {
 
 fn capability_url(host_url: &str, suffix: &str) -> String {
     format!("{}{}", host_url, suffix)
+}
+
+#[tokio::test]
+async fn alias_mutations_notify_all_liveboards_and_manual_updates_remain_last_write_wins() {
+    if assets::ensure_available().is_err() {
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let observer = ObserverFixture::start(dir.path(), "runtime-alias-updates").await;
+    let preferences = LiveboardPreferencesStore::new(&observer.paths);
+    let host = start_liveboard_host_with_preferences(
+        &observer.paths,
+        observer.client(),
+        preferences.clone(),
+    )
+    .await
+    .unwrap();
+    let client = reqwest::Client::new();
+    let event_url = capability_url(host.private_url(), "preferences/events");
+    let first = client.get(&event_url).send().await.unwrap();
+    let second = client.get(&event_url).send().await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let mut first_events = first.bytes_stream();
+    let mut second_events = second.bytes_stream();
+
+    let patch = |alias: &str| LiveboardPreferencesPatch {
+        agents: [(
+            "k7m2".to_string(),
+            LiveboardAgentPreferencePatch {
+                alias: Some(alias.to_string()),
+                ..Default::default()
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    preferences
+        .mutate(&patch("Agent started implementation"))
+        .unwrap();
+    for events in [&mut first_events, &mut second_events] {
+        let bytes = tokio::time::timeout(Duration::from_secs(3), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("event: preferences_changed"), "{text}");
+        assert!(!text.contains("Agent started implementation"));
+    }
+
+    // The pencil-button API is another ordinary writer to the same canonical
+    // store; no model-facing tool or reverse notification channel is needed.
+    let manual = client
+        .patch(capability_url(host.private_url(), "preferences"))
+        .json(&json!({"agents":{"k7m2":{"alias":"Manual Liveboard label"}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(manual.status(), StatusCode::OK);
+    for events in [&mut first_events, &mut second_events] {
+        let text = String::from_utf8(
+            tokio::time::timeout(Duration::from_secs(3), events.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("event: preferences_changed"), "{text}");
+    }
+    assert_eq!(
+        preferences.load().unwrap().agents["k7m2"].alias.as_deref(),
+        Some("Manual Liveboard label")
+    );
+
+    preferences
+        .mutate(&patch("Agent works on a new task"))
+        .unwrap();
+    assert_eq!(
+        preferences.load().unwrap().agents["k7m2"].alias.as_deref(),
+        Some("Agent works on a new task")
+    );
+
+    host.shutdown().await.unwrap();
+    observer.shutdown().await;
 }
 
 #[tokio::test]

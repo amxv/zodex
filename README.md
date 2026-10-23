@@ -4,7 +4,7 @@
 
 Zodex is a small MCP coding harness that gives ChatGPT the command, stdin, and patch primitives coding agents already know—without wrapping your development environment in a new abstraction.
 
-Run it directly on a trusted Apple Silicon Mac, 64-bit Linux machine, or x86_64 Windows machine with **Zodex Local**, or use the same tool surface on a wake-on-demand remote Linux workspace with **Zodex Sprite**.
+Run it directly on a trusted Apple Silicon Mac, 64-bit Linux machine, or x86_64 Windows machine with **Zodex Local**, or use the same core execution tools on a wake-on-demand remote Linux workspace with **Zodex Sprite**.
 
 <p align="center">
   <img src=".github/assets/zodex-local-liveboard.png" alt="ChatGPT coding on a Mac through Zodex Local, with the Zodex Liveboard showing commands and file changes beside it" width="100%">
@@ -17,7 +17,7 @@ Local puts ChatGPT on your trusted Linux, macOS, or Windows host through an **Op
 One Local runtime can serve multiple ChatGPT conversations at once. Zodex gives each conversation its own short Agent identity, keeps durable execution history, and lets you watch every command and file change in real time through the cross-platform browser **Liveboard** or terminal viewer.
 
 - **Your real environment** — shell, Git, language toolchains, credentials, and files run as your logged-in user. Linux and macOS use the captured login shell; Windows Local executes commands through Windows PowerShell with the captured user environment.
-- **Three MCP tools** — `exec_command`, `write_stdin`, and `apply_patch`.
+- **Four Local MCP tools** — the three shared execution tools (`exec_command`, `write_stdin`, `apply_patch`) plus optional `set_agent_alias` for Liveboard naming.
 - **Many Agents, one runtime** — multiple ChatGPT conversations can work concurrently across repos and worktrees.
 - **Live observability** — commands, output, diffs, process state, and Agent timelines in the browser Liveboard or terminal TUI.
 - **Durable history** — inspect previous tool activity even after the viewer or Local runtime stops.
@@ -70,7 +70,7 @@ See the [Local quick start](https://zodex.ashray.xyz/docs/local) for tunnel setu
 
 ## Two execution modes
 
-The model-facing interface stays the same. You choose where it runs and which trust model you want.
+The core execution interface stays the same. You choose where it runs and which trust model you want. Local also provides agent-managed Liveboard aliases.
 
 | | Local | Sprite |
 | --- | --- | --- |
@@ -91,13 +91,15 @@ See the [Sprite quick start](https://zodex.ashray.xyz/docs/sprite).
 
 ## The entire MCP surface
 
-ChatGPT sees exactly three tools:
+ChatGPT sees three execution tools in both modes:
 
 ```text
 exec_command  run a command in an explicit absolute workdir
 write_stdin   poll, interact with, or stop a running process
 apply_patch   edit files with the Codex-style patch format
 ```
+
+**Zodex Local only** also offers `set_agent_alias` to name the current conversation's Liveboard column, for example `Rindle implementation`. This optional tool preserves the Agent's four-character identity, doesn't enter the command timeline, and pushes alias updates to every open Liveboard.
 
 That is deliberately the whole abstraction. Zodex handles the runtime, interactive command I/O, process lifecycle, transport, observation, and host-specific security boundaries underneath it.
 

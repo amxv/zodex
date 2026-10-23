@@ -11,6 +11,9 @@ mod lifecycle_start;
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
 mod liveboard;
+#[cfg(test)]
+pub(crate) use liveboard::LiveboardPreferencesStore;
+pub(crate) use liveboard::LocalAgentAliasService;
 mod login_preferences;
 mod mcp_context;
 mod observability;

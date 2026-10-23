@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tower::{ServiceExt, service_fn};
 
 use crate::invocation::{InvocationEvidenceRecorder, McpResultContextProvider};
+use crate::local::LocalAgentAliasService;
 use crate::service::ZodexService;
 use crate::workdir::validate_absolute_existing_workdir;
 
@@ -29,6 +30,7 @@ pub struct LocalMcpServerConfig {
     pub token: Arc<str>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
     result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
+    alias_service: Option<LocalAgentAliasService>,
 }
 
 impl LocalMcpServerConfig {
@@ -38,6 +40,7 @@ impl LocalMcpServerConfig {
             token: token.into(),
             invocation_recorder: None,
             result_context_provider: None,
+            alias_service: None,
         }
     }
 
@@ -54,6 +57,11 @@ impl LocalMcpServerConfig {
         provider: Arc<dyn McpResultContextProvider>,
     ) -> Self {
         self.result_context_provider = Some(provider);
+        self
+    }
+
+    pub(crate) fn with_alias_service(mut self, service: LocalAgentAliasService) -> Self {
+        self.alias_service = Some(service);
         self
     }
 }
@@ -106,7 +114,7 @@ pub(super) async fn start_local_mcp_server_with_observer(
     )?;
     let token = validate_token(config.token)?;
     let instructions: Arc<str> = Arc::from(format!(
-        "Zodex Local runtime start directory: {}. Use it as the suggested initial explicit workdir. Every exec_command and apply_patch call must still provide an absolute existing workdir; the server never substitutes this path when workdir is missing.",
+        "Zodex Local runtime start directory: {}. Use it as the suggested initial explicit workdir. Every exec_command and apply_patch call must still provide an absolute existing workdir; the server never substitutes this path when workdir is missing. At the start of a substantial task, preferably call set_agent_alias with a 2-7-word description; it is optional, and all ordinary tools work unchanged without it. Update the alias when your main task changes.",
         start_directory.display()
     ));
 
@@ -123,6 +131,7 @@ pub(super) async fn start_local_mcp_server_with_observer(
             provider_metadata_observer,
             invocation_recorder: config.invocation_recorder,
             result_context_provider: config.result_context_provider,
+            alias_service: config.alias_service,
         },
     );
     let app = local_mcp_app(mcp, token);

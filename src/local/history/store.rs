@@ -39,6 +39,11 @@ pub(super) struct HistoryBeginResult {
     pub(super) presentation_root_invocation_id: Option<i64>,
 }
 
+pub(super) struct HistoryAgentIdentity {
+    pub(super) context: InvocationContext,
+    pub(super) first_seen_in_runtime: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum OutputEvent {
     Chunk {
@@ -60,6 +65,39 @@ pub(super) enum OutputEvent {
 }
 
 impl HistoryStore {
+    /// Resolve or allocate the same stable Agent ID used by executable MCP
+    /// calls, without creating an invocation or a timeline presentation.
+    pub(super) fn identify_agent(
+        &self,
+        mut context: InvocationContext,
+    ) -> Result<HistoryAgentIdentity> {
+        let provider = context
+            .provider
+            .clone()
+            .context("Agent identity requires ChatGPT conversation metadata")?;
+        let now = now_ms()?;
+        self.with_foreground_connection(|connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let (agent_id, first_seen_in_runtime) = resolve_agent(
+                &transaction,
+                Some(&provider),
+                now,
+                &self.runtime_id,
+                &self.agent_id_source,
+            )?;
+            ensure_context_session(&transaction, &provider)?;
+            context.global_context_pending = agent_global_context_pending(&transaction, &provider)?;
+            transaction.commit()?;
+            context.agent_id = agent_id.map(Arc::from);
+            Ok(HistoryAgentIdentity {
+                context,
+                first_seen_in_runtime,
+            })
+        })
+        .context("failed to identify Local Agent without an invocation")
+    }
+
     pub(super) fn open(path: PathBuf, runtime_id: Arc<str>) -> Result<Self> {
         Self::open_with_agent_id_source(path, runtime_id, Arc::new(random_agent_id))
     }

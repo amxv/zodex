@@ -65,6 +65,10 @@ Each Agent column can also be:
 
 Aliases are labels for your browser view. The public Agent ID remains the four-character Zodex identity everywhere else.
 
+ChatGPT Agents can also name themselves using the **Local-only** `set_agent_alias` MCP tool. Zodex strongly encourages a concise **2–7-word** task description, such as `Rindle implementation`, and encourages changing it when the main task changes. This call is **optional**: an Agent can start directly with `exec_command`, `apply_patch`, or another existing tool as before and simply display its four-character ID. If `set_agent_alias` is the first call, Zodex assigns that conversation its normal stable Agent ID without creating a timeline entry. Supplying an empty alias clears the label.
+
+Agent- and user-initiated alias edits use the same persisted preferences, with **last write wins**. A one-way server notification updates every connected Liveboard immediately, including the **All Agents** drawer. A manually edited alias is not sent back to the ChatGPT Agent, and changing an alias does not affect permissions, execution routing, or command history.
+
 A newly observed Agent does not evict an Agent you intentionally kept visible when the board is full. Open **All Agents** to decide what should be on the board.
 
 ## Command output

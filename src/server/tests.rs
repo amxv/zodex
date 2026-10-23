@@ -69,6 +69,7 @@ fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPoli
         provider_metadata_observer: observer,
         invocation_recorder: None,
         result_context_provider: None,
+        alias_service: None,
     }
 }
 
@@ -189,6 +190,7 @@ fn server_info_accepts_runtime_supplied_workdir_guidance() {
     let service = ZodexMcpService::with_options(
         ZodexService::new(test_config()),
         instructions.clone(),
+        None,
         None,
         None,
         None,

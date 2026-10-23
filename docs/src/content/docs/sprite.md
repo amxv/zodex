@@ -6,7 +6,7 @@ category: Sprite
 summary: "Install the operator, create a Sprite and two GitHub Apps, run one setup command, claim/auth Cloudflare if needed, and connect ChatGPT."
 ---
 
-Sprite is Zodex's **wake-on-demand remote Linux** mode. It exposes the same three MCP tools as [Zodex Local](/docs/local), but uses a different lifecycle and trust boundary:
+Sprite is Zodex's **wake-on-demand remote Linux** mode. It exposes the same three **execution** MCP tools as [Zodex Local](/docs/local), without Local's optional Liveboard alias tool, and uses a different lifecycle and trust boundary:
 
 ```text
 ChatGPT custom app

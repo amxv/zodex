@@ -17,7 +17,10 @@ use crate::session::{
 
 #[cfg(target_os = "macos")]
 use super::liveboard::{LiveboardLinkNotifier, LocalLiveboardDiscovery};
-use super::liveboard::{LocalLiveboardHost, start_liveboard_host};
+use super::liveboard::{
+    LiveboardPreferencesStore, LocalAgentAliasService, LocalLiveboardHost,
+    start_liveboard_host_with_preferences,
+};
 use super::mcp_context::LocalMcpContextProvider;
 use super::observer_client::LocalObserverClient;
 use super::{
@@ -238,6 +241,8 @@ pub async fn start_local_host_runtime(
         local_config.history.max_age.seconds(),
         local_config.history.max_size.bytes(),
     ))?;
+    let preferences = LiveboardPreferencesStore::new(&options.paths);
+    let alias_service = LocalAgentAliasService::new(history.clone(), preferences.clone());
     let process_observer = Arc::new(LocalProcessObservers {
         registry,
         history: history.clone(),
@@ -256,7 +261,8 @@ pub async fn start_local_host_runtime(
         service.clone(),
         LocalMcpServerConfig::new(options.start_directory, options.mcp_token)
             .with_invocation_recorder(history.clone())
-            .with_result_context_provider(result_context_provider),
+            .with_result_context_provider(result_context_provider)
+            .with_alias_service(alias_service),
     )
     .await?;
     let bearer = fs::read_to_string(options.paths.observability_bearer_file()).with_context(|| {
@@ -285,17 +291,19 @@ pub async fn start_local_host_runtime(
         bearer.trim(),
         history.runtime_id(),
     ) {
-        Ok(client) => match start_liveboard_host(&options.paths, client).await {
-            Ok(host) => Some(host),
-            Err(error) => {
-                warn!(
-                    event = "local_liveboard_sidecar_unavailable",
-                    error = %error,
-                    "Local MCP runtime will continue without Liveboard"
-                );
-                None
+        Ok(client) => {
+            match start_liveboard_host_with_preferences(&options.paths, client, preferences).await {
+                Ok(host) => Some(host),
+                Err(error) => {
+                    warn!(
+                        event = "local_liveboard_sidecar_unavailable",
+                        error = %error,
+                        "Local MCP runtime will continue without Liveboard"
+                    );
+                    None
+                }
             }
-        },
+        }
         Err(error) => {
             warn!(
                 event = "local_liveboard_sidecar_unavailable",

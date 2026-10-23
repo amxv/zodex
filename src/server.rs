@@ -18,7 +18,7 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceExt, service_fn};
@@ -29,6 +29,7 @@ use crate::invocation::{
     InvocationContext, InvocationContinuationKind, InvocationEvidenceRecorder, InvocationOutcome,
     InvocationStart, McpResultContextProvider, ProviderCallMetadata,
 };
+use crate::local::LocalAgentAliasService;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::{ServiceRequest, ZodexService};
 use crate::session::{SessionCreatorContext, SessionOrigin};
@@ -78,6 +79,7 @@ struct McpServerPolicy {
     provider_metadata_observer: Option<ProviderMetadataObserver>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
     result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
+    alias_service: Option<LocalAgentAliasService>,
 }
 
 impl Default for McpServerPolicy {
@@ -91,6 +93,7 @@ impl Default for McpServerPolicy {
             provider_metadata_observer: None,
             invocation_recorder: None,
             result_context_provider: None,
+            alias_service: None,
         }
     }
 }
@@ -103,6 +106,21 @@ struct ZodexMcpService {
     provider_metadata_observer: Option<ProviderMetadataObserver>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
     result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
+    alias_service: Option<LocalAgentAliasService>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetAgentAliasInput {
+    /// Short display name (ideally 2–7 words); an empty string clears it.
+    alias: String,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct SetAgentAliasOutput {
+    agent_id: String,
+    alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zodex_context: Option<String>,
 }
 
 // Keep this wrapper named `Json`: rmcp's #[tool] macro recognizes Json<T>
@@ -117,6 +135,12 @@ trait StructuredModelContext {
 }
 
 impl StructuredModelContext for ToolOutput {
+    fn set_zodex_context(&mut self, context: String) {
+        self.zodex_context = Some(context);
+    }
+}
+
+impl StructuredModelContext for SetAgentAliasOutput {
     fn set_zodex_context(&mut self, context: String) {
         self.zodex_context = Some(context);
     }
@@ -213,6 +237,7 @@ impl ZodexMcpService {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -222,14 +247,20 @@ impl ZodexMcpService {
         provider_metadata_observer: Option<ProviderMetadataObserver>,
         invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
         result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
+        alias_service: Option<LocalAgentAliasService>,
     ) -> Self {
+        let mut tool_router = Self::tool_router();
+        if alias_service.is_none() {
+            tool_router.remove_route("set_agent_alias");
+        }
         Self {
             zodex_service,
-            tool_router: Self::tool_router(),
+            tool_router,
             instructions,
             provider_metadata_observer,
             invocation_recorder,
             result_context_provider,
+            alias_service,
         }
     }
 
@@ -376,6 +407,47 @@ impl ZodexMcpService {
 #[tool_router]
 impl ZodexMcpService {
     #[tool(
+        name = "set_agent_alias",
+        description = "Set this conversation's Liveboard display alias (prefer 2-7 descriptive words). Optional; ordinary tool calls work without an alias. Call again when the main task changes. An empty alias clears it. Never changes the stable Agent ID.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn set_agent_alias(
+        &self,
+        Parameters(input): Parameters<SetAgentAliasInput>,
+        request_meta: RequestMetaObject,
+    ) -> Json<SetAgentAliasOutput> {
+        self.observe_provider_metadata(&request_meta);
+        let Some(service) = self.alias_service.clone() else {
+            return Json::new(
+                Err("Agent aliases are available only in Zodex Local".into()),
+                None,
+            );
+        };
+        let context = invocation_context(&request_meta);
+        let result =
+            tokio::task::spawn_blocking(move || service.set_alias(context, input.alias)).await;
+        match result {
+            Ok(Ok(updated)) => {
+                let appended = self.appended_context(&updated.context, None, true);
+                Json::new(
+                    Ok(SetAgentAliasOutput {
+                        agent_id: updated.agent_id,
+                        alias: updated.alias,
+                        zodex_context: None,
+                    }),
+                    appended,
+                )
+            }
+            Ok(Err(error)) => Json::new(Err(error.to_string()), None),
+            Err(error) => Json::new(Err(format!("Alias update task failed: {error}")), None),
+        }
+    }
+
+    #[tool(
         name = "exec_command",
         description = "Run a shell command in a required absolute existing workdir",
         annotations(
@@ -500,6 +572,7 @@ fn build_mcp_service_with_policy(
     let provider_metadata_observer = policy.provider_metadata_observer.clone();
     let invocation_recorder = policy.invocation_recorder.clone();
     let result_context_provider = policy.result_context_provider.clone();
+    let alias_service = policy.alias_service.clone();
     let mut config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(policy.legacy_session_mode)
         .with_json_response(policy.json_response)
@@ -516,6 +589,7 @@ fn build_mcp_service_with_policy(
                 provider_metadata_observer.clone(),
                 invocation_recorder.clone(),
                 result_context_provider.clone(),
+                alias_service.clone(),
             ))
         },
         LocalSessionManager::default().into(),

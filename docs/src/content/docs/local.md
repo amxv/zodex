@@ -141,11 +141,12 @@ For workspace-specific steps and tunnel visibility troubleshooting, see [Local s
 
 ## What Local gives ChatGPT
 
-The model sees exactly three Zodex tools:
+The model sees three shared execution tools and one optional Local-only display tool:
 
 - `exec_command` — run a command in an explicit absolute workdir;
 - `write_stdin` — continue, poll, type into, or kill a long-running process;
 - `apply_patch` — apply a patch in an explicit absolute workdir.
+- `set_agent_alias` — label the current Agent with a short task description for Liveboard; optional, and never changes its four-character identity.
 
 See [MCP tools](/docs/reference/tools) for the shared tool contract.
 

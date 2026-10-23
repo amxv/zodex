@@ -10,6 +10,7 @@ import {
 
 import {
   loadBootstrap,
+  fetchPreferences,
   patchPreferences,
   type LiveboardPreferencesPatch,
 } from '../api/client'
@@ -57,13 +58,33 @@ function LiveboardWorkspace(props: {
     view: props.view,
   })
   let mutationQueue: Promise<void> = Promise.resolve()
+  let preferenceEvents: EventSource | undefined
 
   createEffect(() => applyTheme(preferences().theme))
   createEffect(() =>
     runtime.setDiffProjection(preferences().diffs_expanded ? 'full' : 'summary'),
   )
-  onMount(() => runtime.start())
-  onCleanup(() => runtime.dispose())
+  onMount(() => {
+    runtime.start()
+    preferenceEvents = new EventSource('preferences/events')
+    const refreshPreferences = () => {
+      // Serialize with local pencil-button saves: a stale fetch must never
+      // overwrite a more recent saved rename in this tab.
+      mutationQueue = mutationQueue
+        .then(async () => {
+          setPreferences(await fetchPreferences())
+        })
+        .catch((error: unknown) => {
+          setSaveError(error instanceof Error ? error.message : String(error))
+        })
+    }
+    preferenceEvents.onopen = refreshPreferences
+    preferenceEvents.addEventListener('preferences_changed', refreshPreferences)
+  })
+  onCleanup(() => {
+    runtime.dispose()
+    preferenceEvents?.close()
+  })
 
   const persistPreferences = (patch: LiveboardPreferencesPatch) => {
     const nextPatch =

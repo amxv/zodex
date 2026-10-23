@@ -296,6 +296,10 @@ export interface LiveboardPreferencesPatch {
   agents?: Record<string, LiveboardAgentPreference>
 }
 
+export function fetchPreferences(): Promise<LiveboardPreferences> {
+  return fetchJson<LiveboardPreferences>('preferences')
+}
+
 export async function openFileInEditor(path: string): Promise<void> {
   const response = await fetch('api/open-file', {
     method: 'POST',
@@ -624,7 +628,7 @@ export async function loadBootstrap(
 ) {
   const [status, preferences] = await Promise.all([
     fetchStatus(),
-    fetchJson<LiveboardPreferences>('preferences'),
+    fetchPreferences(),
   ])
   let agents: ApiAgentList
   if (view.kind === 'focused') {

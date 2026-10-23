@@ -307,4 +307,4 @@ It is idempotent; running it when Local is already stopped is safe.
 
 ## Shared MCP tools
 
-The CLI above manages/observes Local. ChatGPT itself receives only the shared [three MCP tools](/docs/reference/tools).
+The CLI above manages/observes Local. ChatGPT receives the [three shared execution tools and the Local-only alias tool](/docs/reference/tools).

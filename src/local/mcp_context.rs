@@ -19,6 +19,7 @@ const MAX_SKILL_FRONTMATTER_BYTES: usize = 64 * 1024;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
 const ZSH_SHELL_GUIDANCE: &str = "Zsh: Never use lowercase `path` as a variable (it is tied to `PATH` and can make installed commands disappear); use `route` or `file_path` instead. Use arrays, not scalar command strings, to execute a command with arguments.";
+const AGENT_ALIAS_GUIDANCE: &str = "Liveboard: Prefer calling `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes. This is optional: all normal tools work without an alias.";
 
 pub(crate) struct LocalMcpContextProvider {
     config_path: PathBuf,
@@ -52,12 +53,11 @@ impl LocalMcpContextProvider {
     }
 
     fn global_context(&self, config: &LocalConfig) -> String {
-        let mut sections = Vec::new();
+        let mut sections = vec![AGENT_ALIAS_GUIDANCE.to_owned()];
         if self.uses_zsh {
             sections.push(ZSH_SHELL_GUIDANCE.to_string());
         }
-        // The Zsh safety hint is intrinsic to the selected shell, not an
-        // optional user AGENTS.md/skills context setting.
+        // Intrinsic Local guidance is independent of optional AGENTS.md/skills.
         if !config.context.enabled {
             return sections.join("\n\n");
         }
@@ -158,11 +158,7 @@ impl McpResultContextProvider for LocalMcpContextProvider {
         }
         let config = LocalConfig::load(&self.config_path)?;
         let mut sections = Vec::new();
-        if context.global_context_pending
-            && (self.uses_zsh
-                || (config.context.enabled
-                    && (config.context.global_agents || config.context.skills.enabled)))
-        {
+        if context.global_context_pending {
             let global = self.global_context(&config);
             if !global.is_empty() && self.history.claim_global_context_injection(provider)? {
                 sections.push(global);
@@ -520,7 +516,7 @@ mod tests {
     use crate::local::{LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
     use super::{
-        LocalMcpContextProvider, ZSH_SHELL_GUIDANCE, parse_skill_frontmatter,
+        AGENT_ALIAS_GUIDANCE, LocalMcpContextProvider, ZSH_SHELL_GUIDANCE, parse_skill_frontmatter,
         repo_instruction_filename,
     };
 
@@ -716,23 +712,26 @@ mod tests {
             .appended_context(&first, repo.to_str(), true)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            first_hint,
-            format!("{} contains an AGENTS.override.md.", repo.display())
-        );
+        assert!(first_hint.contains(AGENT_ALIAS_GUIDANCE));
+        assert!(first_hint.contains(&format!(
+            "{} contains an AGENTS.override.md.",
+            repo.display()
+        )));
         assert!(
             provider
                 .appended_context(&first, repo.to_str(), true)
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(
-            provider
-                .appended_context(&second, repo.to_str(), true)
-                .unwrap()
-                .unwrap(),
-            format!("{} contains an AGENTS.override.md.", repo.display())
-        );
+        let second_hint = provider
+            .appended_context(&second, repo.to_str(), true)
+            .unwrap()
+            .unwrap();
+        assert!(second_hint.contains(AGENT_ALIAS_GUIDANCE));
+        assert!(second_hint.contains(&format!(
+            "{} contains an AGENTS.override.md.",
+            repo.display()
+        )));
 
         history.shutdown_blocking().unwrap();
     }
@@ -788,12 +787,13 @@ mod tests {
         let provider =
             LocalMcpContextProvider::new(config_path.clone(), &[], false, history.clone());
 
-        assert!(
-            provider
-                .appended_context(&repo_invocation, repo.to_str(), true)
-                .unwrap()
-                .is_none(),
-            "disabled repo skills must not inject or consume the workdir skill check"
+        let initial_hint = provider
+            .appended_context(&repo_invocation, repo.to_str(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            initial_hint, AGENT_ALIAS_GUIDANCE,
+            "only intrinsic Local guidance is expected"
         );
 
         config.context.repo_skills = true;
@@ -967,7 +967,7 @@ mod tests {
             zsh_provider
                 .appended_context(&first, Some("/tmp"), true)
                 .unwrap(),
-            Some(ZSH_SHELL_GUIDANCE.to_string())
+            Some(format!("{AGENT_ALIAS_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"))
         );
         assert!(
             zsh_provider
@@ -988,17 +988,17 @@ mod tests {
             zsh_provider
                 .appended_context(&second, Some("/tmp"), true)
                 .unwrap(),
-            Some(ZSH_SHELL_GUIDANCE.to_string())
+            Some(format!("{AGENT_ALIAS_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"))
         );
 
         let non_zsh_provider =
             LocalMcpContextProvider::new(config_path, &[], false, history.clone());
         let sh_session = invocation_for("sh-session");
-        assert!(
+        assert_eq!(
             non_zsh_provider
                 .appended_context(&sh_session, Some("/tmp"), true)
-                .unwrap()
-                .is_none()
+                .unwrap(),
+            Some(AGENT_ALIAS_GUIDANCE.to_string())
         );
         history.shutdown_blocking().unwrap();
     }

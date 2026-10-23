@@ -117,6 +117,85 @@ afterEach(() => {
 })
 
 describe('Liveboard board shell', () => {
+  it('applies external alias changes immediately in columns and All Agents, with last write winning', async () => {
+    const liveSources: Array<{
+      url: string
+      emit: () => void
+      closed: () => boolean
+    }> = []
+    vi.stubGlobal('EventSource', class {
+      onopen: (() => void) | null = null
+      onerror: (() => void) | null = null
+      private listeners = new Map<string, (event: Event) => void>()
+      private isClosed = false
+      constructor(readonly url: string) {
+        liveSources.push({
+          url,
+          emit: () => this.listeners.get('preferences_changed')?.(new Event('preferences_changed')),
+          closed: () => this.isClosed,
+        })
+      }
+      addEventListener(type: string, callback: (event: Event) => void) {
+        this.listeners.set(type, callback)
+      }
+      close() { this.isClosed = true }
+    })
+
+    let preferences: LiveboardPreferences = {
+      schema_version: 1,
+      theme: 'system',
+      max_visible_agents: 4,
+      command_outputs_expanded: false,
+      diffs_expanded: true,
+      show_raw_button: false,
+      editor_command: 'zed',
+      agents: {},
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input.toString()
+      if (path === 'preferences') {
+        if (init?.method === 'PATCH') {
+          preferences = mergePreferences(preferences, JSON.parse(String(init.body)) as LiveboardPreferencesPatch)
+        }
+        return Response.json(preferences)
+      }
+      if (path === 'api/status') return Response.json({
+        schema_version: 1, api_version: 1, presentation_version: 3,
+        runtime_id: 'alias-browser-runtime', current_runtime_agent_count: 1, active_process_count: 0,
+      })
+      if (path === 'api/agents?runtime=current') return Response.json({
+        schema_version: 1, runtime_id: 'alias-browser-runtime', agents: [agent('a111', 0)],
+      })
+      return Response.json({error: 'missing'}, {status: 404})
+    }))
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(() => <App />, container)
+    await vi.waitFor(() => expect(element<HTMLElement>('[data-agent-id="a111"] .agent-id').textContent).toBe('a111'))
+    expect(document.querySelector('.agent-alias')).toBeNull()
+
+    const aliasEvents = liveSources.find((source) => source.url === 'preferences/events')
+    expect(aliasEvents).toBeDefined()
+    preferences = mergePreferences(preferences, {agents: {a111: {alias: 'Rindle implementation'}}})
+    aliasEvents!.emit()
+    await vi.waitFor(() => expect(element<HTMLElement>('[data-agent-id="a111"] .agent-alias').textContent).toBe('Rindle implementation'))
+
+    buttonWithText('All Agents').click()
+    await vi.waitFor(() => expect(element<HTMLElement>('.drawer-agent-identity strong').textContent).toBe('Rindle implementation'))
+    preferences = mergePreferences(preferences, {agents: {a111: {alias: 'Rindle CLI test suite'}}})
+    aliasEvents!.emit()
+    await vi.waitFor(() => {
+      expect(element<HTMLElement>('[data-agent-id="a111"] .agent-alias').textContent).toBe('Rindle CLI test suite')
+      expect(element<HTMLElement>('.drawer-agent-identity strong').textContent).toBe('Rindle CLI test suite')
+    })
+
+    disposeCurrent?.()
+    disposeCurrent = undefined
+    expect(aliasEvents!.closed()).toBe(true)
+  })
+
   it('manages current Agents without eviction and persists UI-only board changes', async () => {
     const agents = [
       agent('a111', 0),
