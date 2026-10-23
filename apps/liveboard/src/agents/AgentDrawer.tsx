@@ -21,6 +21,10 @@ interface AgentDrawerProps {
   visibleIds: readonly string[]
   preferences: LiveboardPreferences
   nowMs: number
+  focusedAgentId?: string
+  loading?: boolean
+  error?: string
+  onRetry?: () => void
   onClose: () => void
   onAdd: (agentId: string) => void
 }
@@ -30,6 +34,7 @@ function AgentDrawerRow(props: {
   alias?: string
   onBoard: boolean
   boardFull: boolean
+  focused: boolean
   nowMs: number
   onAdd: () => void
 }) {
@@ -41,13 +46,13 @@ function AgentDrawerRow(props: {
   const activity = () => agentActivity(props.agent, props.nowMs)
   const workdirs = () => props.agent.workdirs.map((workdir) => workdir.normalized_workdir)
   const workdirsText = () => workdirs().join(', ')
-  const addDisabled = () => props.onBoard || props.boardFull
+  const addDisabled = () => props.onBoard || (!props.focused && props.boardFull)
   const toggleWorkdirs = () => {
     if (!workdirsOverflow()) return
     setWorkdirsExpanded((expanded) => !expanded)
   }
   const activateRow = () => {
-    if (props.onBoard || props.boardFull) {
+    if (addDisabled()) {
       toggleWorkdirs()
       return
     }
@@ -87,7 +92,11 @@ function AgentDrawerRow(props: {
         disabled={addDisabled() && !workdirsOverflow()}
         title={
           props.onBoard
-            ? `${props.agent.id} is already visible`
+            ? props.focused
+              ? `${props.agent.id} is already focused`
+              : `${props.agent.id} is already visible`
+            : props.focused
+              ? `Focus Agent ${props.agent.id}`
             : props.boardFull
               ? 'Board is at its configured maximum'
               : `Add Agent ${props.agent.id} to board`
@@ -194,13 +203,26 @@ export function AgentDrawer(props: AgentDrawerProps) {
           </button>
         </header>
         <div class="drawer-list">
-          <Show
-            when={props.agents.length > 0}
-            fallback={<p class="drawer-empty">No Agents have appeared in this runtime yet.</p>}
-          >
+          <Show when={props.loading}>
+            <p class="drawer-empty" role="status">Loading Agents…</p>
+          </Show>
+          <Show when={props.error}>
+            <div class="drawer-empty" role="alert">
+              Could not load Agents: {props.error}
+              <button type="button" class="text-button" onClick={props.onRetry}>
+                Retry
+              </button>
+            </div>
+          </Show>
+          <Show when={!props.loading && !props.error && props.agents.length === 0}>
+            <p class="drawer-empty">No Agents have appeared in this runtime yet.</p>
+          </Show>
+          <Show when={!props.loading && !props.error}>
             <For each={props.agents}>
               {(agent) => {
-                const onBoard = () => props.visibleIds.includes(agent.id)
+                const onBoard = () => props.focusedAgentId
+                  ? agent.id === props.focusedAgentId
+                  : props.visibleIds.includes(agent.id)
                 const preference = () => props.preferences.agents[agent.id]
                 return (
                   <AgentDrawerRow
@@ -208,6 +230,7 @@ export function AgentDrawer(props: AgentDrawerProps) {
                     alias={preference()?.alias}
                     onBoard={onBoard()}
                     boardFull={isFull()}
+                    focused={Boolean(props.focusedAgentId)}
                     nowMs={props.nowMs}
                     onAdd={() => props.onAdd(agent.id)}
                   />

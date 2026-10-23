@@ -97,9 +97,10 @@ afterEach(() => {
 })
 
 describe('responsive Agent board layout', () => {
-  it('renders focused mode as a fixed one-Agent board with navigation instead of layout controls', async () => {
+  it('opens a complete Agent drawer in focused mode without changing the focused timeline or board settings', async () => {
     const patches: unknown[] = []
-    let openedAll = 0
+    let rosterLoads = 0
+    const focusTargets: string[] = []
     const container = document.createElement('div')
     container.style.width = '900px'
     container.style.height = '600px'
@@ -115,9 +116,11 @@ describe('responsive Agent board layout', () => {
             nowMs={10_000}
             saving={false}
             onPatch={(patch) => patches.push(patch)}
-            onOpenAllAgents={() => {
-              openedAll += 1
+            onLoadAllAgents={async () => {
+              rosterLoads += 1
+              return [agent('a111', 0), agent('b222', 1), agent('c333', 2)]
             }}
+            onFocusAgent={(agentId) => focusTargets.push(agentId)}
           />
         </div>
       ),
@@ -128,10 +131,61 @@ describe('responsive Agent board layout', () => {
     expect(container.textContent).toContain('Focused · a111')
     expect(container.querySelector('[aria-label="Drag Agent a111 to reorder"]')).toBeNull()
     expect(container.querySelector('[aria-label="Remove Agent a111 from board"]')).toBeNull()
+    expect(rosterLoads).toBe(0)
+    const focusedColumn = container.querySelector('[data-agent-column]')
     const allAgents = container.querySelector<HTMLButtonElement>('[aria-label="All Agents"]')!
     allAgents.click()
-    expect(openedAll).toBe(1)
+    await vi.waitFor(() => expect(container.querySelectorAll('.drawer-agent')).toHaveLength(3))
+    expect(rosterLoads).toBe(1)
+    expect(container.querySelector('[data-agent-column]')).toBe(focusedColumn)
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
+    expect(container.textContent).toContain('Focused · a111')
+    expect(container.querySelector<HTMLButtonElement>('.drawer-agent-selected')?.title)
+      .toBe('a111 is already focused')
+    expect(container.querySelector<HTMLButtonElement>('[title="Focus Agent b222"]')).not.toBeNull()
     expect(patches).toEqual([])
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Close All Agents"]')!.click()
+    expect(container.querySelector('[data-agent-column]')).toBe(focusedColumn)
+    allAgents.click()
+    await vi.waitFor(() => expect(rosterLoads).toBe(2))
+    await vi.waitFor(() => expect(container.querySelector('[title="Focus Agent b222"]')).not.toBeNull())
+    container.querySelector<HTMLButtonElement>('[title="Focus Agent b222"]')!.click()
+    expect(focusTargets).toEqual(['b222'])
+    expect(patches).toEqual([])
+  })
+
+  it('allows retrying the focused Agent drawer roster after a fetch error', async () => {
+    let attempts = 0
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <Board
+          agents={[agent('a111', 0)]}
+          preferences={preferences}
+          focusedAgentId="a111"
+          nowMs={10_000}
+          saving={false}
+          onPatch={() => undefined}
+          onLoadAllAgents={async () => {
+            attempts += 1
+            if (attempts === 1) throw new Error('Observer offline')
+            return [agent('a111', 0), agent('b222', 1)]
+          }}
+        />
+      ),
+      container,
+    )
+
+    container.querySelector<HTMLButtonElement>('[aria-label="All Agents"]')!.click()
+    await vi.waitFor(() => expect(container.textContent).toContain('Observer offline'))
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
+    container.querySelector<HTMLButtonElement>('.drawer-empty button')!.click()
+    await vi.waitFor(() => expect(container.querySelectorAll('.drawer-agent')).toHaveLength(2))
+    expect(attempts).toBe(2)
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
   })
 
   it('handles 0/1/2/5 current Agents while respecting the configured four-column cap', async () => {

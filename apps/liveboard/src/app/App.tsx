@@ -11,6 +11,7 @@ import {
 import {
   loadBootstrap,
   fetchPreferences,
+  fetchCurrentAgents,
   patchPreferences,
   type LiveboardPreferencesPatch,
 } from '../api/client'
@@ -115,7 +116,8 @@ function LiveboardWorkspace(props: {
         onPatch={persistPreferences}
         onVisibleAgentsChange={runtime.setVisibleAgentIds}
         onFocusAgent={(agentId) => window.location.assign(focusedLiveboardUrl(agentId))}
-        onOpenAllAgents={() => window.location.assign(unifiedLiveboardUrl())}
+        onLoadAllAgents={async () =>
+          (await fetchCurrentAgents(runtime.runtimeId())).agents}
         renderTimeline={(agentId) => (
           <AgentTimeline
             controller={runtime.controllerFor(agentId)}

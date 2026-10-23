@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.20 - 2026-10-24
+
+- Fixed the **All Agents** button in a focused Liveboard: it now opens the Agent drawer in place instead of navigating to the unified board. The focused timeline remains mounted and keeps its scroll and expanded output state.
+- The focused drawer loads the full current-runtime Agent list only when opened, preserving lightweight focused-tab startup and the shared SSE connection. Selecting another Agent opens its focused view; the current Agent remains selected, and focused views never modify the unified board's visibility/layout preferences. Failed roster requests offer an inline **Retry** action.
+
 ## 0.5.19 - 2026-10-24
 
 - Marked the Local-only `set_agent_alias` MCP tool as `read_only_hint = true`, matching Zodex's three existing execution tools; it continues to advertise `open_world_hint = false` and `destructive_hint = false`.

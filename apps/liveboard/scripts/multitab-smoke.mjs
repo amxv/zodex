@@ -187,6 +187,19 @@ try {
   await unified.close()
   await until(() => peers.size === 1, 'one SSE after clicking Focus')
 
+  // Opening All Agents inside focus mode must be a local drawer, not a
+  // navigation to the unified board or another timeline subscription.
+  const focusBeforeDrawer = pages[0].url()
+  await pages[0].getByRole('button', {name: 'All Agents', exact: true}).click()
+  await pages[0].locator('.agent-drawer .drawer-agent').first().waitFor()
+  assert.equal(await pages[0].locator('.agent-drawer .drawer-agent').count(), agentIds.length)
+  assert.equal(pages[0].url(), focusBeforeDrawer)
+  assert.equal(await pages[0].locator('[data-agent-column]').count(), 1)
+  assert.equal(await pages[0].locator('.command-output-text').count(), 1)
+  assert.equal(peers.size, 1)
+  await pages[0].getByRole('button', {name: 'Close All Agents'}).click()
+  assert.equal(pages[0].url(), focusBeforeDrawer)
+
   // Navigate an already-open focused tab with 17 others still listening.
   await pages[0].goto(`${base}/?agent=${agentIds[5]}`, {waitUntil: 'domcontentloaded'})
   await pages[0].locator('.focused-agent-badge').getByText(`Focused · ${agentIds[5]}`).waitFor()
