@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.21 - 2026-10-24
+
+- Fixed `apply_patch` rejecting an adjacent `*** Delete File` / `*** Add File` pair for the same path. Zodex now treats the pair as one full-file replacement and stages the new contents before replacing the original, preserving normal file permissions and leaving the original intact if staging fails.
+- Kept strict protections for missing files, read-only files, symlinks, directories, nonadjacent or reversed operations, conflicting path aliases, and unrelated update hunks. Independent file operations still proceed when one fails.
+- Improved patch errors: distinguish completed writes from possible partial writes, avoid saying edits were "committed" to Git, and add an actionable hint for unmatched context lines. Liveboard's existing net-change handling continues to show a replacement as one edit, including for historical invocations.
+- Added regression coverage for full-file replacements, conflicts, file permissions, and failure isolation.
+
 ## 0.5.20 - 2026-10-24
 
 - Fixed the **All Agents** button in a focused Liveboard: it now opens the Agent drawer in place instead of navigating to the unified board. The focused timeline remains mounted and keeps its scroll and expanded output state.

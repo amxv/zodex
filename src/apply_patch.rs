@@ -1,6 +1,9 @@
 mod recovery;
+mod replacement;
+#[cfg(test)]
+mod replacement_tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -18,7 +21,7 @@ const MOVE_TO_PREFIX: &str = "*** Move to: ";
 
 /// Apply independent file operations even when another file has stale context.
 /// Each update hunk is calculated by upstream Codex before its file is written.
-/// Failures are returned as a single MCP error containing both the committed
+/// Failures are returned as a single MCP error containing both the applied
 /// operations and the operations the agent needs to retry.
 pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
     validate_absolute_existing_workdir(workdir)?;
@@ -29,14 +32,16 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
     }
 
     let cwd = PathUri::from_host_native_path(Path::new(workdir))?;
-    let conflicts = conflicting_hunks(&parsed.hunks);
+    let replacements = replacement_pairs(&parsed.hunks);
+    let replacement_additions: HashSet<_> = replacements.values().copied().collect();
+    let conflicts = conflicting_hunks(&parsed.hunks, &replacements);
     let mut applied = Vec::new();
     let mut failed = Vec::new();
     let mut recovered = Vec::new();
 
     // Preserve operation order, but don't let one file's failure stop unrelated
-    // files later in the batch. Overlapping paths (including move destinations)
-    // are intentionally excluded from partial application.
+    // files later in the batch. Only an adjacent delete-then-add of the exact
+    // same path may overlap; all other path conflicts remain excluded.
     for (index, hunk) in parsed.hunks.iter().enumerate() {
         let label = hunk_label(hunk);
         if conflicts.contains(&index) {
@@ -44,6 +49,33 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
                 "{label}: another operation in this patch targets the same path; combine those changes into a single file section"
             ));
             continue;
+        }
+
+        if let Some(&add_index) = replacements.get(&index) {
+            let Hunk::AddFile { path, contents } = &parsed.hunks[add_index] else {
+                unreachable!("replacement pair must end in AddFile");
+            };
+            let path_for_write = path.clone();
+            let contents_for_write = contents.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                replacement::replace_regular_file(&path_for_write, &contents_for_write)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => applied.push(format!("M {} (replaced)", path.display())),
+                Ok(Err(error)) => failed.push(format!(
+                    "M {}: {error:#}\n  Original file was left intact.",
+                    path.display()
+                )),
+                Err(error) => failed.push(format!(
+                    "M {}: replacement worker failed: {error}\n  Inspect the file before retrying.",
+                    path.display()
+                )),
+            }
+            continue;
+        }
+        if replacement_additions.contains(&index) {
+            continue; // Already applied atomically with the preceding DeleteFile.
         }
 
         let mut stdout = Vec::new();
@@ -90,13 +122,18 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
                             if !retry_failure.delta().is_empty()
                                 || !retry_failure.delta().is_exact() =>
                         {
-                            failed.push(format_failure(&label, &retry_failure, &retry_stderr));
+                            failed.push(format_failure(
+                                &label,
+                                hunk,
+                                &retry_failure,
+                                &retry_stderr,
+                            ));
                             continue;
                         }
                         Err(_) => {} // Keep the original actionable error.
                     }
                 }
-                failed.push(format_failure(&label, &failure, &stderr));
+                failed.push(format_failure(&label, hunk, &failure, &stderr));
             }
         }
     }
@@ -105,7 +142,7 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
     if failed.is_empty() {
         report.push_str("Success. Updated the following files:\n");
     } else if applied.is_empty() {
-        report.push_str("Patch failed. No file operations completed successfully; inspect the failed operation details for possible partial writes.\n");
+        report.push_str("Patch failed. No complete file operations applied; check individual failures for possible partial writes.\n");
     } else {
         report.push_str(&format!(
             "Partial success: {} file operation(s) applied; {} failed.\nSuccessfully applied:\n",
@@ -134,9 +171,11 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
             report.push_str(&reason);
             report.push('\n');
         }
-        report.push_str(
-            "Successful operations above have already been committed; do not resend them.\n",
-        );
+        if !applied.is_empty() {
+            report.push_str(
+                "Successful operations above are already applied to disk; do not resend them.\n",
+            );
+        }
         bail!("{}", report.trim_end());
     }
     Ok(report)
@@ -167,10 +206,11 @@ fn failure_reason(failure: &ApplyPatchFailure, stderr: &[u8]) -> String {
     }
 }
 
-fn format_failure(label: &str, failure: &ApplyPatchFailure, stderr: &[u8]) -> String {
-    let mut result = format!("{label}: {}", failure_reason(failure, stderr));
+fn format_failure(label: &str, hunk: &Hunk, failure: &ApplyPatchFailure, stderr: &[u8]) -> String {
+    let reason = failure_reason(failure, stderr);
+    let mut result = format!("{label}: {reason}");
     if !failure.delta().is_empty() {
-        result.push_str("\n  Changes already committed by this failed operation:");
+        result.push_str("\n  Changes already applied by this failed operation:");
         for change in failure.delta().changes() {
             result.push_str("\n  - ");
             result.push_str(&change.path.inferred_native_path_string());
@@ -180,6 +220,9 @@ fn format_failure(label: &str, failure: &ApplyPatchFailure, stderr: &[u8]) -> St
         result.push_str("\n  WARNING: the filesystem may have additional partial writes. Inspect before retrying.");
     } else if failure.delta().is_empty() {
         result.push_str("\n  No changes from this failed operation were applied.");
+        if is_context_failure(&reason) && matches!(hunk, Hunk::UpdateFile { .. }) {
+            result.push_str("\n  Hint: Re-read the current file and retry with whole matching lines, including line breaks and formatting; Zodex does not guess where mismatched text belongs.");
+        }
     }
     result
 }
@@ -195,7 +238,25 @@ fn hunk_label(hunk: &Hunk) -> String {
     format!("{status} {}", path.display())
 }
 
-fn conflicting_hunks(hunks: &[Hunk]) -> HashSet<usize> {
+/// Only an adjacent DeleteFile + AddFile for the same spelled path can be
+/// interpreted as a full-file replacement. Distinct symlink aliases are never
+/// paired, and all other overlapping operations remain conflicts.
+fn replacement_pairs(hunks: &[Hunk]) -> HashMap<usize, usize> {
+    hunks
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| match (&pair[0], &pair[1]) {
+            (Hunk::DeleteFile { path: deleted }, Hunk::AddFile { path: added, .. })
+                if lexical_normalize(deleted) == lexical_normalize(added) =>
+            {
+                Some((index, index + 1))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn conflicting_hunks(hunks: &[Hunk], replacements: &HashMap<usize, usize>) -> HashSet<usize> {
     let mut owners: Vec<(PathBuf, usize)> = Vec::new();
     let mut conflicts = HashSet::new();
     for (index, hunk) in hunks.iter().enumerate() {
@@ -211,6 +272,7 @@ fn conflicting_hunks(hunks: &[Hunk]) -> HashSet<usize> {
             // `file` while adding/updating `file/child` cannot safely proceed.
             for (existing, previous) in &owners {
                 if *previous != index
+                    && replacements.get(previous) != Some(&index)
                     && (resolved.starts_with(existing) || existing.starts_with(&resolved))
                 {
                     conflicts.insert(*previous);
@@ -523,7 +585,7 @@ mod tests {
         assert!(message.contains("Failed to find expected lines"));
         assert!(message.contains("two.txt"));
         assert!(message.contains("four.txt"));
-        assert!(message.contains("Successful operations above have already been committed"));
+        assert!(message.contains("Successful operations above are already applied to disk"));
         assert_eq!(
             fs::read_to_string(dir.path().join("one.txt")).unwrap(),
             "new one\n"
