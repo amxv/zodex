@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.16 - 2026-10-23
+
+- Fixed Liveboard's **Open in editor** action when Zodex Local is started with a restricted macOS `PATH`. Zed, VS Code, and Cursor CLI launchers are now resolved from standard macOS locations, with a native app-launch fallback when the CLI is unavailable.
+- Preserved absolute-path editor configurations and avoided blocking Liveboard's async request handler while launching an editor. Added regression tests for missing commands and restricted `PATH` environments.
+
 ## 0.5.15 - 2026-10-23
 
 - Fixed Windows CI and release builds after the upstream Codex update: use a short Windows Cargo cache path and enable Git long-path support so Codex's unrelated long-named snapshot fixtures no longer exceed the Windows path limit. No patch-tool runtime or MCP interface changes.
