@@ -322,41 +322,57 @@ export async function openFileInEditor(path: string): Promise<void> {
   }
 }
 
+// Local HTTP endpoints should respond quickly. In particular, a browser with
+// exhausted connections can leave fetch() queued indefinitely without ever
+// giving CommandOutputState an error. Bound each attempt so the UI can retry.
+const LOCAL_REQUEST_TIMEOUT_MS = 15_000
+
 export async function fetchJson<T>(path: string): Promise<T> {
   const retryDelaysMs = [25, 100]
   let lastNetworkError: unknown
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
-    let response: Response
+    let response: Response | undefined
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), LOCAL_REQUEST_TIMEOUT_MS)
     try {
       response = await fetch(path, {
         credentials: 'same-origin',
         headers: { Accept: 'application/json' },
+        signal: controller.signal,
       })
+      if (response.ok) return (await response.json()) as T
+
+      if ([502, 503, 504].includes(response.status) && attempt < retryDelaysMs.length) {
+        await response.body?.cancel().catch(() => undefined)
+        await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+        continue
+      }
+
+      let message = `Liveboard request failed (${response.status})`
+      try {
+        const body = (await response.json()) as { error?: string }
+        if (body.error) message = body.error
+      } catch {
+        // Keep the status-only fallback when the response is not JSON.
+      }
+      throw new Error(message)
     } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`Liveboard request timed out after ${LOCAL_REQUEST_TIMEOUT_MS / 1000}s`)
+      }
+      // Server-side errors are actionable, not transient network failures.
+      if (response && !response.ok && ![502, 503, 504].includes(response.status)) {
+        throw error
+      }
       lastNetworkError = error
       if (attempt < retryDelaysMs.length) {
         await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
         continue
       }
       throw error
+    } finally {
+      clearTimeout(timeout)
     }
-
-    if (response.ok) return (await response.json()) as T
-
-    if ([502, 503, 504].includes(response.status) && attempt < retryDelaysMs.length) {
-      await response.body?.cancel().catch(() => undefined)
-      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
-      continue
-    }
-
-    let message = `Liveboard request failed (${response.status})`
-    try {
-      const body = (await response.json()) as { error?: string }
-      if (body.error) message = body.error
-    } catch {
-      // Keep the status-only fallback when the response is not JSON.
-    }
-    throw new Error(message)
   }
   throw lastNetworkError instanceof Error
     ? lastNetworkError

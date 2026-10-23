@@ -13,7 +13,7 @@ use crate::service::ZodexService;
 use axum::http::Uri;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{RequestMetaObject, ToolAnnotations};
+use rmcp::model::RequestMetaObject;
 use serde_json::json;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -272,33 +272,34 @@ fn workdir_is_required_in_model_visible_exec_and_patch_schemas() {
 }
 
 #[test]
-fn tools_have_expected_annotations() {
+fn every_sprite_tool_advertises_read_only_closed_world_annotations() {
     let service = ZodexMcpService::new(ZodexService::new(test_config()));
-
-    let by_name = |name: &str| {
-        service
-            .tool_router
-            .list_all()
-            .iter()
-            .find(|tool| tool.name == name)
-            .and_then(|tool| tool.annotations.clone())
-            .unwrap_or_else(ToolAnnotations::default)
-    };
-
-    let exec = by_name("exec_command");
-    assert_eq!(exec.read_only_hint, Some(true));
-    assert_eq!(exec.destructive_hint, Some(false));
-    assert_eq!(exec.open_world_hint, Some(false));
-
-    let write = by_name("write_stdin");
-    assert_eq!(write.read_only_hint, Some(true));
-    assert_eq!(write.destructive_hint, Some(false));
-    assert_eq!(write.open_world_hint, Some(false));
-
-    let patch = by_name("apply_patch");
-    assert_eq!(patch.read_only_hint, Some(true));
-    assert_eq!(patch.destructive_hint, Some(false));
-    assert_eq!(patch.open_world_hint, Some(false));
+    let tools = service.tool_router.list_all();
+    assert_eq!(tools.len(), 3);
+    for tool in &tools {
+        let annotations = tool
+            .annotations
+            .as_ref()
+            .expect("every tool must declare annotations");
+        assert_eq!(
+            annotations.read_only_hint,
+            Some(true),
+            "{} must advertise read-only",
+            tool.name
+        );
+        assert_eq!(
+            annotations.open_world_hint,
+            Some(false),
+            "{} must disable open world",
+            tool.name
+        );
+        assert_eq!(
+            annotations.destructive_hint,
+            Some(false),
+            "{} must disable destructive hint",
+            tool.name
+        );
+    }
 }
 
 #[tokio::test]

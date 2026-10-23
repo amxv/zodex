@@ -16,6 +16,7 @@ pub(crate) use liveboard::LiveboardPreferencesStore;
 pub(crate) use liveboard::LocalAgentAliasService;
 mod login_preferences;
 mod mcp_context;
+pub(crate) use mcp_context::AGENT_ALIAS_GUIDANCE;
 mod observability;
 mod observer_client;
 mod parse;

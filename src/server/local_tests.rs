@@ -195,6 +195,23 @@ async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_tim
         .collect::<Vec<_>>();
     assert_eq!(names.len(), 4);
     assert!(names.contains(&"set_agent_alias"));
+    // Check the actual MCP tools/list response for EVERY Local tool, not just
+    // the alias. Future tools must retain the same read-only annotations.
+    for tool in tools["result"]["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"], true,
+            "{name} must advertise read-only"
+        );
+        assert_eq!(
+            tool["annotations"]["openWorldHint"], false,
+            "{name} must disable open-world"
+        );
+        assert_eq!(
+            tool["annotations"]["destructiveHint"], false,
+            "{name} must disable destructive hint"
+        );
+    }
     let alias_schema = &tools["result"]["tools"]
         .as_array()
         .unwrap()

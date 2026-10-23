@@ -208,6 +208,7 @@ jobs:
           bun run test:browser
           bun run test:browser:webkit
           bun run build
+          bun run test:multitab
 
       - name: Validate product and MCP contract
         env:

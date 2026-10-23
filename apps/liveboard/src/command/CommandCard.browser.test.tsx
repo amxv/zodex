@@ -589,6 +589,73 @@ describe('command card', () => {
     expect(container.textContent).not.toContain('Loading output…')
   })
 
+  it('shows a visible output error and lets the user retry after a transient failure', async () => {
+    const metadata = vi.fn(async (): Promise<ApiOutputMetadataDocument> => ({
+      schema_version: 1,
+      runtime_id: 'runtime-one',
+      invocation_id: 10,
+      output: {
+        available: true,
+        chunk_count: 1,
+        size_bytes: 25,
+        capture_state: 'complete',
+        capture_reason: null,
+        first_cursor: 0,
+        last_cursor: 0,
+      },
+    }))
+    let failed = false
+    const page = vi.fn(async (): Promise<ApiOutputPage> => {
+      if (!failed) {
+        failed = true
+        throw new Error('Liveboard request timed out after 15s')
+      }
+      return {
+        schema_version: 1,
+        runtime_id: 'runtime-one',
+        invocation_id: 10,
+        view: 'display',
+        chunks: [{ sequence: 0, observed_at_ms: 1, text: 'recovered output\n' }],
+        next_cursor: null,
+        display_state: 'available',
+      }
+    })
+    const stream = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 2_000,
+      loadHistoryPage: async () => ({
+        schema_version: 1, presentation_version: 3,
+        runtime_id: 'runtime-one', records: [], has_more: false, next_cursor: null,
+      }),
+      loadOutputMetadata: metadata,
+      loadDisplayOutputPage: page,
+    })
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(() => (
+      <CommandCard
+        record={command({status: 'exited', duration_ms: 10, exit_code: 0, termination_reason: 'exit'})}
+        controller={stream}
+        runtimeId="runtime-one"
+        nowMs={10_000}
+      />
+    ), container)
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    await vi.waitFor(() => expect(header.classList.contains('command-card-header-expandable')).toBe(true))
+    header.click()
+    await vi.waitFor(() => expect(container.textContent).toContain('Liveboard request timed out after 15s'))
+    expect(container.textContent).not.toContain('Loading output…')
+    const retry = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Retry output'))
+    expect(retry).toBeDefined()
+    retry!.click()
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Command output"]')?.textContent)
+      .toContain('recovered output'))
+    expect(page).toHaveBeenCalledTimes(2)
+    expect(container.textContent).not.toContain('Retry output')
+  })
+
   it('renders stdin and kill as distinct compact interaction cards with cross-Agent context', () => {
     const stream = controller()
     const base = {

@@ -111,7 +111,19 @@ export function ExpandedCommandOutput(props: {
         </div>
       </Show>
       <Show when={recoveryError()}>
-        {(message) => <div class="output-notice output-notice-warning">{message()}</div>}
+        {(message) => (
+          <div class="output-notice output-notice-warning" role="alert">
+            {message()}
+            {' · '}
+            <button
+              type="button"
+              class="text-button"
+              onClick={() => props.state.requestRecentTail()}
+            >
+              Retry output
+            </button>
+          </div>
+        )}
       </Show>
       <Show
         when={

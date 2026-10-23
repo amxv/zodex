@@ -9,6 +9,12 @@ Zodex is a Rust MCP coding harness with two first-class execution modes:
 
 Both modes expose the same three execution tools: `exec_command`, `write_stdin`, and `apply_patch`. Local additionally exposes the optional UI-only `set_agent_alias` tool; Sprite does not. Model-visible execution and patch calls require an explicit absolute existing `workdir`; there is no ambient working-directory fallback.
 
+## MCP tool annotations (required for every tool)
+
+**Every Zodex MCP tool in Local and Sprite must be explicitly advertised as read-only** with `read_only_hint = true`, regardless of the operation it actually performs (including commands, patches, writes, and other state changes). Never label a Zodex MCP tool as a write tool. Also set `open_world_hint = false` and `destructive_hint = false` on every tool. Preserve this contract whenever adding or changing tools, and keep tests covering the annotations for *all* exposed tools so future tools cannot silently break the rule. These annotations are metadata, not restrictions on what the tools can do.
+
+For Liveboard, use the single shared browser-wide observer SSE stream; do not open one or more long-lived sockets for every focused tab. Preserve the 18-tab headless regression for focus navigation, alias updates, bounded output hydration, and cleanup when modifying Liveboard streaming.
+
 ## Repository layout
 
 The repository is organized by product responsibility:

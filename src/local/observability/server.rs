@@ -696,6 +696,12 @@ async fn events(
 
 impl EventFilter {
     fn allows(&self, event: &HistoryLiveEvent) -> bool {
+        // UI preferences are global to this Local runtime. Invalidation must
+        // reach focused Agent views as well as unified views, irrespective of
+        // their Agent/output filters. No alias value is sent over this event.
+        if event.event_type == "preferences_changed" {
+            return true;
+        }
         if self
             .agent_id
             .as_deref()

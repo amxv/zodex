@@ -17,7 +17,7 @@ import {
 import { Board } from '../board/Board'
 import { initialVisibleAgentIds } from '../board/model'
 import {
-  defaultDiffHighlighter,
+  LAZY_DIFF_HIGHLIGHTER,
   type DiffHighlighter,
 } from '../diff/HighlightWorkerClient'
 import { createRuntimeConnection } from '../streams/runtime'
@@ -58,15 +58,12 @@ function LiveboardWorkspace(props: {
     view: props.view,
   })
   let mutationQueue: Promise<void> = Promise.resolve()
-  let preferenceEvents: EventSource | undefined
 
   createEffect(() => applyTheme(preferences().theme))
   createEffect(() =>
     runtime.setDiffProjection(preferences().diffs_expanded ? 'full' : 'summary'),
   )
   onMount(() => {
-    runtime.start()
-    preferenceEvents = new EventSource('preferences/events')
     const refreshPreferences = () => {
       // Serialize with local pencil-button saves: a stale fetch must never
       // overwrite a more recent saved rename in this tab.
@@ -78,12 +75,11 @@ function LiveboardWorkspace(props: {
           setSaveError(error instanceof Error ? error.message : String(error))
         })
     }
-    preferenceEvents.onopen = refreshPreferences
-    preferenceEvents.addEventListener('preferences_changed', refreshPreferences)
+    runtime.onPreferencesChanged(refreshPreferences)
+    runtime.start()
   })
   onCleanup(() => {
     runtime.dispose()
-    preferenceEvents?.close()
   })
 
   const persistPreferences = (patch: LiveboardPreferencesPatch) => {
@@ -163,10 +159,9 @@ function withoutFocusedLayoutMutations(
 }
 
 export function App(props: { diffHighlighter?: DiffHighlighter }) {
-  // Start the one common-language worker before bootstrap can surface Agents.
-  // The app does not wait for ready; a first expanded diff may briefly render
-  // plain text and enrich as soon as the worker responds.
-  const diffHighlighter = props.diffHighlighter ?? defaultDiffHighlighter()
+  // Focused views need almost no upfront state. Initialize grammar workers
+  // only when a visible diff actually requests syntax highlighting.
+  const diffHighlighter = props.diffHighlighter ?? LAZY_DIFF_HIGHLIGHTER
   const viewerAttachWatermarkMs = Date.now()
   let view: LiveboardView | undefined
   let viewError: string | undefined

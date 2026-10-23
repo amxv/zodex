@@ -69,6 +69,12 @@ ChatGPT Agents can also name themselves using the **Local-only** `set_agent_alia
 
 Agent- and user-initiated alias edits use the same persisted preferences, with **last write wins**. A one-way server notification updates every connected Liveboard immediately, including the **All Agents** drawer. A manually edited alias is not sent back to the ChatGPT Agent, and changing an alias does not affect permissions, execution routing, or command history.
 
+### Many focused Liveboards in one browser
+
+The **Focus Agent** button opens the standalone view at `/?agent=k7m2`, designed to sit beside the corresponding ChatGPT conversation. Multiple tabs in the same browser storage partition share **one long-lived observer SSE connection** through a lightweight `SharedWorker`. The worker filters Agent/output activity per tab and broadcasts preference invalidations without creating a second socket. Full diff bodies and earlier command output are loaded from the canonical observer API only when needed; each tab keeps a bounded, independently recoverable timeline. Closing a focused tab removes its subscription, and closing the final tab releases the shared stream.
+
+Browsers that disable `SharedWorker` fall back to an individual EventSource per tab. For large numbers of simultaneous focused tabs, use a browser with SharedWorker support, such as modern Chromium-based browsers, Firefox, or Safari.
+
 A newly observed Agent does not evict an Agent you intentionally kept visible when the board is full. Open **All Agents** to decide what should be on the board.
 
 ## Command output
@@ -76,6 +82,8 @@ A newly observed Agent does not evict an Agent you intentionally kept visible wh
 Collapsed command cards do not maintain an unbounded hidden terminal buffer. When output is expanded, Liveboard uses a bounded display-safe live tail and coalesces visible text updates to the browser's animation-frame cadence.
 
 If output was missed, the viewer reconnects, or a final command is expanded later, Liveboard can lazily restore a bounded recent tail from the durable `view=display` output endpoint. It does not replay an entire long PTY stream into the normal card.
+
+If an output request cannot complete, the viewer stops showing **Loading output…** after the bounded request timeout, displays the error, and offers a **Retry output** action. The persisted output remains available independently of the viewer's network connection.
 
 The display view is deliberately sanitized for presentation. Raw output remains an explicit evidence surface through the observability API and audit drill-down. When an invocation's capture state is `complete`, that raw evidence is exact; oversized or otherwise interrupted captures are explicitly marked `incomplete` rather than being allowed to backpressure the model-facing tool call.
 

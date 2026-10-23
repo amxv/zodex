@@ -118,6 +118,9 @@ afterEach(() => {
 
 describe('Liveboard board shell', () => {
   it('applies external alias changes immediately in columns and All Agents, with last write winning', async () => {
+    // Exercise the no-SharedWorker fallback in this component test. Shared
+    // multiplexing itself has dedicated browser and hub tests.
+    vi.stubGlobal('SharedWorker', undefined)
     const liveSources: Array<{
       url: string
       emit: () => void
@@ -131,7 +134,14 @@ describe('Liveboard board shell', () => {
       constructor(readonly url: string) {
         liveSources.push({
           url,
-          emit: () => this.listeners.get('preferences_changed')?.(new Event('preferences_changed')),
+          emit: () => this.listeners.get('preferences_changed')?.(
+            new MessageEvent('preferences_changed', { data: JSON.stringify({
+              schema_version: 4, runtime_id: 'alias-browser-runtime',
+              sequence: 1, emitted_at_ms: 1000, event_type: 'preferences_changed',
+              agent_id: null, invocation_id: null, presentation_id: null,
+              presentation_revision: null, payload: {},
+            }) }),
+          ),
           closed: () => this.isClosed,
         })
       }
@@ -176,8 +186,9 @@ describe('Liveboard board shell', () => {
     await vi.waitFor(() => expect(element<HTMLElement>('[data-agent-id="a111"] .agent-id').textContent).toBe('a111'))
     expect(document.querySelector('.agent-alias')).toBeNull()
 
-    const aliasEvents = liveSources.find((source) => source.url === 'preferences/events')
+    const aliasEvents = liveSources.find((source) => source.url.startsWith('api/events?'))
     expect(aliasEvents).toBeDefined()
+    expect(liveSources).toHaveLength(1)
     preferences = mergePreferences(preferences, {agents: {a111: {alias: 'Rindle implementation'}}})
     aliasEvents!.emit()
     await vi.waitFor(() => expect(element<HTMLElement>('[data-agent-id="a111"] .agent-alias').textContent).toBe('Rindle implementation'))

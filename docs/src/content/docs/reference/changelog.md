@@ -8,6 +8,15 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.19 - 2026-10-24
+
+- Marked the Local-only `set_agent_alias` MCP tool as `read_only_hint = true`, matching Zodex's three existing execution tools; it continues to advertise `open_world_hint = false` and `destructive_hint = false`.
+- Added a repository-wide policy requiring all present and future Local and Sprite MCP tools to advertise read-only and non-open-world annotations, regardless of their underlying side effects, with regression coverage for every exposed tool.
+- Fixed Liveboard Focus Agent navigation hanging when multiple focused tabs exhausted the browser's HTTP/1.1 per-origin connection pool. All tabs in one browser storage partition now share one stable SSE connection through a lightweight `SharedWorker`, with per-Agent event routing and on-demand history/output hydration. A headless 18-tab test verifies focus navigation, alias delivery, concurrent output loading, and a single peak connection.
+- Removed the separate alias-notification EventSource and endpoint. Alias invalidation now rides on the existing Local observer control SSE; the notification carries no alias text and updates both unified and focused Liveboards without adding a connection or invocation timeline entry. The stream sends bounded summary projections; file diff bodies remain lazy.
+- Fixed expanded command cards silently remaining on **Loading output…** when a browser fetch stalls. Local JSON requests now abort after 15 seconds, surface a clear error, and offer **Retry output**. Verified actual persisted output was intact and accessible through the observer API. Focused views also start the syntax-highlighting worker only when a diff needs it, reducing idle memory usage.
+- Updated the injected alias guidance to: “Call `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes.”
+
 ## 0.5.18 - 2026-10-24
 
 - Added the **Local-only** `set_agent_alias` MCP tool. A ChatGPT conversation can name itself with a short, descriptive Liveboard label and update that label when changing tasks. The tool accepts only an `alias`, never an Agent ID, and uses the same stable four-character identity as existing execution tools.

@@ -410,7 +410,7 @@ impl ZodexMcpService {
         name = "set_agent_alias",
         description = "Set this conversation's Liveboard display alias (prefer 2-7 descriptive words). Optional; ordinary tool calls work without an alias. Call again when the main task changes. An empty alias clears it. Never changes the stable Agent ID.",
         annotations(
-            read_only_hint = false,
+            read_only_hint = true,
             destructive_hint = false,
             open_world_hint = false
         )

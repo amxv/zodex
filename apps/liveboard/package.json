@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:multitab": "node scripts/multitab-smoke.mjs",
     "test:browser:webkit": "LIVEBOARD_BROWSER=webkit vitest run --config vitest.browser.config.ts src/diff/FileChangeCard.browser.test.tsx src/diff/HighlightWorker.browser.test.tsx",
     "build": "vite build"
   },

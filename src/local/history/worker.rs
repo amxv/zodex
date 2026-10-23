@@ -258,6 +258,13 @@ pub struct LocalHistoryRuntime {
 type AgentFirstSeenObserver = Arc<dyn Fn(String) + Send + Sync>;
 
 impl LocalHistoryRuntime {
+    /// Ephemeral control-plane hint delivered over the EXISTING observer SSE.
+    /// This is intentionally absent from invocation evidence and the timeline.
+    pub(crate) fn notify_liveboard_preferences_changed(&self) {
+        self.events
+            .emit_with("preferences_changed", None, None, None, None, || json!({}));
+    }
+
     pub(crate) fn identify_agent(&self, context: InvocationContext) -> Result<InvocationContext> {
         let identity = self.store.identify_agent(context)?;
         if identity.first_seen_in_runtime

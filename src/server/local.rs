@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tower::{ServiceExt, service_fn};
 
 use crate::invocation::{InvocationEvidenceRecorder, McpResultContextProvider};
-use crate::local::LocalAgentAliasService;
+use crate::local::{AGENT_ALIAS_GUIDANCE, LocalAgentAliasService};
 use crate::service::ZodexService;
 use crate::workdir::validate_absolute_existing_workdir;
 
@@ -114,8 +114,8 @@ pub(super) async fn start_local_mcp_server_with_observer(
     )?;
     let token = validate_token(config.token)?;
     let instructions: Arc<str> = Arc::from(format!(
-        "Zodex Local runtime start directory: {}. Use it as the suggested initial explicit workdir. Every exec_command and apply_patch call must still provide an absolute existing workdir; the server never substitutes this path when workdir is missing. At the start of a substantial task, preferably call set_agent_alias with a 2-7-word description; it is optional, and all ordinary tools work unchanged without it. Update the alias when your main task changes.",
-        start_directory.display()
+        "Zodex Local runtime start directory: {}. Use it as the suggested initial explicit workdir. Every exec_command and apply_patch call must still provide an absolute existing workdir; the server never substitutes this path when workdir is missing. {AGENT_ALIAS_GUIDANCE}",
+        start_directory.display(),
     ));
 
     let cancellation = CancellationToken::new();

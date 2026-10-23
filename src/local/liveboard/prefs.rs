@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
 
 use super::super::LocalPaths;
 use super::super::status::write_user_only_json_atomic;
@@ -139,20 +139,20 @@ impl LiveboardAgentPreferencePatch {
 #[derive(Clone)]
 pub(crate) struct LiveboardPreferencesStore {
     paths: LocalPaths,
-    updates: watch::Sender<u64>,
+    on_change: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl LiveboardPreferencesStore {
     pub(crate) fn new(paths: &LocalPaths) -> Self {
-        let (updates, _) = watch::channel(0);
         Self {
             paths: paths.clone(),
-            updates,
+            on_change: None,
         }
     }
 
-    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
-        self.updates.subscribe()
+    pub(crate) fn with_change_notifier(mut self, notifier: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.on_change = Some(notifier);
+        self
     }
 
     pub(crate) fn load(&self) -> Result<LiveboardPreferences> {
@@ -161,15 +161,17 @@ impl LiveboardPreferencesStore {
 
     pub(crate) fn mutate(&self, patch: &LiveboardPreferencesPatch) -> Result<LiveboardPreferences> {
         patch.validate()?;
-        let _lock = LiveboardPreferenceLock::acquire(&self.paths)?;
+        let lock = LiveboardPreferenceLock::acquire(&self.paths)?;
         let mut current = load_preferences(&self.paths)?;
         merge_preferences(&mut current, patch);
         validate_preferences(&current)?;
         write_user_only_json_atomic(&self.paths.liveboard_preferences_file(), &current)?;
-        // Subscribers only get an invalidation signal. The file remains the
-        // authority, including for concurrent, last-write-wins alias changes.
-        self.updates
-            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        drop(lock);
+        // Only signal that state changed. The persisted preferences remain
+        // authoritative and are never included in the live event payload.
+        if let Some(notify) = &self.on_change {
+            notify();
+        }
         Ok(current)
     }
 }

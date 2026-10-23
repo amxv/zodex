@@ -241,7 +241,11 @@ pub async fn start_local_host_runtime(
         local_config.history.max_age.seconds(),
         local_config.history.max_size.bytes(),
     ))?;
-    let preferences = LiveboardPreferencesStore::new(&options.paths);
+    let preference_events = history.clone();
+    let preferences =
+        LiveboardPreferencesStore::new(&options.paths).with_change_notifier(Arc::new(move || {
+            preference_events.notify_liveboard_preferences_changed()
+        }));
     let alias_service = LocalAgentAliasService::new(history.clone(), preferences.clone());
     let process_observer = Arc::new(LocalProcessObservers {
         registry,

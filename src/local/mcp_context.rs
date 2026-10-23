@@ -19,7 +19,7 @@ const MAX_SKILL_FRONTMATTER_BYTES: usize = 64 * 1024;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
 const ZSH_SHELL_GUIDANCE: &str = "Zsh: Never use lowercase `path` as a variable (it is tied to `PATH` and can make installed commands disappear); use `route` or `file_path` instead. Use arrays, not scalar command strings, to execute a command with arguments.";
-const AGENT_ALIAS_GUIDANCE: &str = "Liveboard: Prefer calling `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes. This is optional: all normal tools work without an alias.";
+pub(crate) const AGENT_ALIAS_GUIDANCE: &str = "Call `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes. ";
 
 pub(crate) struct LocalMcpContextProvider {
     config_path: PathBuf,

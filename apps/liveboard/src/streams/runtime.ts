@@ -23,19 +23,9 @@ import {
   createAgentStreamController,
   type AgentStreamController,
 } from './AgentStreamController'
+import { LIVE_EVENT_TYPES } from './eventTypes'
+import { openBrowserEventSource } from './sharedEventSource'
 
-const EVENT_TYPES = [
-  'agent_first_seen',
-  'agent_workdir_added',
-  'invocation_started',
-  'invocation_completed',
-  'presentation_updated',
-  'output',
-  'output_complete',
-  'process_started',
-  'process_ended',
-  'gap',
-] as const
 const HISTORY_PAGE_SIZE = 20
 const RECOVERY_PAGE_SIZE = 50
 const SEEN_SEQUENCE_LIMIT = 1_024
@@ -91,6 +81,7 @@ export interface RuntimeConnection {
   setVisibleAgentIds: (ids: readonly string[]) => void
   setDiffProjection: (projection: DiffProjection) => void
   controllerFor: (agentId: string) => AgentStreamController
+  onPreferencesChanged: (listener: () => void) => void
   start: () => void
   dispose: () => void
 }
@@ -114,7 +105,7 @@ const browserRuntimeApi: RuntimeApi = {
   fetchTimelineDiffBatch,
   fetchOutputMetadata,
   fetchOutputPage,
-  openEventSource: (url) => new EventSource(url),
+  openEventSource: openBrowserEventSource,
 }
 
 function sameIdMembership(left: readonly string[], right: readonly string[]) {
@@ -171,6 +162,7 @@ export function createRuntimeConnection(
   let candidateWatermarkMs = options.viewerAttachWatermarkMs
   let disconnectStartedAtMs: number | undefined
   let synchronization = Promise.resolve()
+  let preferencesChanged: (() => void) | undefined
 
   const rememberSequence = (sequence: number) => {
     if (seenSequences.has(sequence)) return false
@@ -547,6 +539,12 @@ export function createRuntimeConnection(
     try {
       const event = JSON.parse(message.data) as HistoryLiveEvent
       validateLiveEvent(event)
+      if (event.event_type === 'preferences_changed') {
+        // A global UI-only invalidation: no timeline processing, no Agent
+        // filtering, no remote writes. All views share the same SSE stream.
+        preferencesChanged?.()
+        return
+      }
       if (event.runtime_id !== runtimeId()) {
         handleRuntimeMismatch(event)
         return
@@ -635,7 +633,7 @@ export function createRuntimeConnection(
   }
 
   const attachListeners = (source: EventSourceLike) => {
-    for (const type of EVENT_TYPES) {
+    for (const type of LIVE_EVENT_TYPES) {
       source.addEventListener(type, handleLiveEvent as unknown as EventListener)
     }
   }
@@ -653,6 +651,9 @@ export function createRuntimeConnection(
         source.close()
         return
       }
+      // Re-read the persisted display aliases on reconnect. Notifications
+      // emitted while this browser was offline are not replayed by SSE.
+      preferencesChanged?.()
       const wasReconnect = openedOnce
       openedOnce = true
       // The connection indicator describes the live SSE transport. Durable
@@ -740,6 +741,9 @@ export function createRuntimeConnection(
     setVisibleAgentIds,
     setDiffProjection,
     controllerFor: ensureController,
+    onPreferencesChanged: (listener) => {
+      preferencesChanged = listener
+    },
     start: () => {
       if (started || disposed) return
       started = true

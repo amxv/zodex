@@ -93,7 +93,11 @@ async fn alias_mutations_notify_all_liveboards_and_manual_updates_remain_last_wr
     }
     let dir = tempdir().unwrap();
     let observer = ObserverFixture::start(dir.path(), "runtime-alias-updates").await;
-    let preferences = LiveboardPreferencesStore::new(&observer.paths);
+    let notifier_history = observer.history.clone();
+    let preferences =
+        LiveboardPreferencesStore::new(&observer.paths).with_change_notifier(Arc::new(move || {
+            notifier_history.notify_liveboard_preferences_changed()
+        }));
     let host = start_liveboard_host_with_preferences(
         &observer.paths,
         observer.client(),
@@ -102,7 +106,10 @@ async fn alias_mutations_notify_all_liveboards_and_manual_updates_remain_last_wr
     .await
     .unwrap();
     let client = reqwest::Client::new();
-    let event_url = capability_url(host.private_url(), "preferences/events");
+    let event_url = capability_url(
+        host.private_url(),
+        "api/events?agent_id=k7m2&output_agent_ids=k7m2",
+    );
     let first = client.get(&event_url).send().await.unwrap();
     let second = client.get(&event_url).send().await.unwrap();
     assert_eq!(first.status(), StatusCode::OK);
@@ -169,6 +176,8 @@ async fn alias_mutations_notify_all_liveboards_and_manual_updates_remain_last_wr
         Some("Agent works on a new task")
     );
 
+    drop(first_events);
+    drop(second_events);
     host.shutdown().await.unwrap();
     observer.shutdown().await;
 }

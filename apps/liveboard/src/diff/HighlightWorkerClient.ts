@@ -113,6 +113,14 @@ export class HighlightWorkerClient implements DiffHighlighter {
 
 let defaultHighlighter: HighlightWorkerClient | undefined
 
+// Most focused tabs may show only commands and logs. Don't pay for a separate
+// syntax-grammar worker in each tab until an actual file diff is expanded.
+export const LAZY_DIFF_HIGHLIGHTER: DiffHighlighter = {
+  isReady: () => defaultHighlighter?.isReady() ?? false,
+  eagerLanguages: () => defaultHighlighter?.eagerLanguages() ?? [],
+  highlight: (input) => defaultDiffHighlighter().highlight(input),
+}
+
 export function defaultDiffHighlighter(): DiffHighlighter {
   if (!defaultHighlighter) {
     defaultHighlighter = new HighlightWorkerClient(
