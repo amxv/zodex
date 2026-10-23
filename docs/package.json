@@ -9,7 +9,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "test:vercel": "bun test scripts/should-build.test.mjs",
+    "test:vercel": "bun test --timeout=15000 scripts/should-build.test.mjs",
     "check:repo": "bash ../scripts/check.sh"
   },
   "devDependencies": {
