@@ -1,6 +1,7 @@
 @media (max-width: 900px) {
   .z-section__head,.z-section__head--wide { grid-template-columns: 1fr; gap: 2rem; }
   .menubar-flow,.setup-once { grid-template-columns: 1fr; }
+  .z-context__control { grid-template-columns: 1fr; }
   .feature-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .feature-card:not(:nth-child(3n + 1)) { border-left: 0; }
   .feature-card:nth-child(even) { border-left: 1px solid var(--z-line); }
@@ -23,6 +24,8 @@
   .menubar-shot { width: min(100%,28rem); }
   .z-section h2 { font-size: clamp(3rem,13vw,5.2rem); }
   .tool-grid,.mode-grid { grid-template-columns: 1fr; }
+  .z-context__grid { grid-template-columns: 1fr; }
+  .z-context__layer + .z-context__layer { border-top: 1px solid var(--z-line); border-left: 0; }
   .tool-card + .tool-card,.mode-card + .mode-card { border-top: 1px solid var(--z-line); border-left: 0; }
   .tool-card { min-height: 23rem; }
   .guide-row { grid-template-columns: 3rem 1fr auto; gap: 1rem; padding-block: 1.5rem; }
@@ -42,6 +45,9 @@
   .feature-grid { grid-template-columns: 1fr; }
   .feature-card,.feature-card:nth-child(even) { min-height: 0; border-left: 0; }
   .feature-card h3 { padding-top: 4rem; }
+  .z-context__layer { padding-inline: 0; }
+  .z-context__layer h3 { margin-top: 3rem; }
+  .z-context__layer > p { margin-bottom: 2.5rem; }
   .trust-note { grid-template-columns: 1fr; }
   .trust-note .text-link { grid-column: auto; }
   .mode-card { grid-template-columns: 1fr; min-height: 0; }
