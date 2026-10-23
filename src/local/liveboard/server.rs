@@ -1,6 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -23,6 +22,7 @@ use super::super::observer_client::LocalObserverClient;
 use super::super::{LocalLoginPreferences, LocalPaths};
 use super::assets;
 use super::bridge::LiveboardObserverBridge;
+use super::editor::launch_editor;
 use super::prefs::{LiveboardPreferencesPatch, LiveboardPreferencesStore};
 
 const PREFERENCE_BODY_LIMIT: usize = 64 * 1024;
@@ -296,24 +296,11 @@ async fn open_file(
         Ok(Err(error)) => return internal_error(error),
         Err(error) => return internal_error(error),
     };
-    match launch_editor(editor_command, path) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => error_response(StatusCode::BAD_GATEWAY, error.to_string()),
+    match tokio::task::spawn_blocking(move || launch_editor(&editor_command, &path)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(error)) => error_response(StatusCode::BAD_GATEWAY, error.to_string()),
+        Err(error) => internal_error(error),
     }
-}
-
-fn launch_editor(editor_command: String, path: PathBuf) -> Result<()> {
-    let mut child = Command::new(&editor_command)
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to launch editor command `{editor_command}`"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
 }
 
 macro_rules! fixed_proxy {

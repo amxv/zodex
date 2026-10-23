@@ -1,6 +1,7 @@
 mod assets;
 mod bridge;
 mod discovery;
+mod editor;
 mod launch;
 #[cfg(target_os = "macos")]
 mod notifier;
