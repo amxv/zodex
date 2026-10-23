@@ -39,6 +39,38 @@ fn local_policy() -> SessionRuntimePolicy {
     SessionRuntimePolicy::local("/bin/sh", local_environment()).unwrap()
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn local_zsh_disables_equals_after_zshenv_without_changing_word_splitting() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".zshenv"), "setopt EQUALS\n").unwrap();
+    let mut environment = local_environment();
+    environment.push((OsString::from("ZDOTDIR"), dir.path().as_os_str().to_owned()));
+    let manager = SessionManager::with_policy(
+        8,
+        20_000,
+        SessionRuntimePolicy::local("/bin/zsh", environment).unwrap(),
+    );
+    let output = manager
+        .exec_command(
+            ExecCommandInput {
+                cmd: "print -r -- \"equals=${options[equals]} split=${options[shwordsplit]}\"; echo ====LEDGER====; command -v grep".to_owned(),
+                yield_time_ms: Some(2_000),
+                workdir: workdir(),
+                timeout_ms: None,
+            },
+            &Config::default(),
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.status, CommandStatus::Exited);
+    assert_eq!(output.exit_code, Some(0));
+    assert!(output.output.contains("equals=off split=off"));
+    assert!(output.output.contains("====LEDGER===="));
+    assert!(output.output.contains("/usr/bin/grep"));
+}
+
 #[tokio::test]
 async fn local_profile_uses_captured_user_environment_and_overlays_pager_guards() {
     let mgr = SessionManager::with_policy(8, 20_000, local_policy());

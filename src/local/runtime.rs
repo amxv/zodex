@@ -10,6 +10,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::server::{LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server};
 use crate::service::ZodexService;
+use crate::session::is_zsh_shell;
 use crate::session::{
     OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessIdentity, SessionRuntimePolicy,
 };
@@ -244,6 +245,7 @@ pub async fn start_local_host_runtime(
     let result_context_provider = Arc::new(LocalMcpContextProvider::new(
         options.paths.config_file(),
         &options.environment,
+        is_zsh_shell(&options.shell),
         history.clone(),
     ));
     let policy = SessionRuntimePolicy::local(options.shell, options.environment)?

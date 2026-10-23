@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -209,7 +209,15 @@ impl CommandExecutionProfile {
                     .arg(cmd)
                     .env_clear();
                 #[cfg(not(target_os = "windows"))]
-                command.arg("-c").arg(cmd).env_clear();
+                {
+                    // Set this after .zshenv has run: a user's startup file can
+                    // override `zsh -o noequals`. One builtin, no extra process.
+                    let zsh_command = local.uses_zsh.then(|| format!("unsetopt EQUALS\n{cmd}"));
+                    command
+                        .arg("-c")
+                        .arg(zsh_command.as_deref().unwrap_or(cmd))
+                        .env_clear();
+                }
                 for (key, value) in local.environment.iter() {
                     command.env(key, value);
                 }
@@ -231,7 +239,13 @@ impl CommandExecutionProfile {
 #[derive(Clone)]
 struct LocalExecutionProfile {
     shell: PathBuf,
+    #[cfg(not(target_os = "windows"))]
+    uses_zsh: bool,
     environment: Arc<[(OsString, OsString)]>,
+}
+
+pub(crate) fn is_zsh_shell(shell: &Path) -> bool {
+    shell.file_name() == Some(OsStr::new("zsh"))
 }
 
 impl LocalExecutionProfile {
@@ -266,6 +280,8 @@ impl LocalExecutionProfile {
             bail!("captured Local developer environment is missing `HOME`");
         }
         Ok(Self {
+            #[cfg(not(target_os = "windows"))]
+            uses_zsh: is_zsh_shell(&shell),
             shell,
             environment: environment.into(),
         })
@@ -311,7 +327,9 @@ impl OwnedProcessObserver for NoopOwnedProcessObserver {
 mod tests {
     use std::ffi::OsString;
 
-    use super::SessionRuntimePolicy;
+    use crate::config::Config;
+
+    use super::{SessionRuntimePolicy, is_zsh_shell};
 
     fn local_env() -> Vec<(OsString, OsString)> {
         [
@@ -336,5 +354,43 @@ mod tests {
             assert!(SessionRuntimePolicy::local("/bin/zsh", environment).is_err());
         }
         SessionRuntimePolicy::local("/bin/zsh", local_env()).unwrap();
+    }
+
+    #[test]
+    fn shell_detection_is_by_selected_executable_not_the_users_path_environment() {
+        assert!(is_zsh_shell(std::path::Path::new("/bin/zsh")));
+        assert!(is_zsh_shell(std::path::Path::new("/opt/homebrew/bin/zsh")));
+        assert!(!is_zsh_shell(std::path::Path::new("/bin/bash")));
+        assert!(!is_zsh_shell(std::path::Path::new("/bin/sh")));
+        assert!(!is_zsh_shell(std::path::Path::new(
+            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        )));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn only_zsh_commands_gain_the_noequals_builtin_without_a_wrapper_process() {
+        let script = "echo ====LEDGER====";
+        for (shell, expected_script) in [
+            ("/bin/zsh", "unsetopt EQUALS\necho ====LEDGER===="),
+            (
+                "/opt/homebrew/bin/zsh",
+                "unsetopt EQUALS\necho ====LEDGER====",
+            ),
+            ("/bin/bash", script),
+            ("/bin/sh", script),
+        ] {
+            let policy = SessionRuntimePolicy::local(shell, local_env()).unwrap();
+            let command = policy.command(script, &Config::default());
+            let command = command.as_std();
+            assert_eq!(command.get_program(), std::ffi::OsStr::new(shell));
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [
+                    std::ffi::OsStr::new("-c"),
+                    std::ffi::OsStr::new(expected_script)
+                ]
+            );
+        }
     }
 }

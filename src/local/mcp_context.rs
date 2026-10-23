@@ -18,18 +18,21 @@ const MAX_SKILL_DIRS_PER_ROOT: usize = 2000;
 const MAX_SKILL_FRONTMATTER_BYTES: usize = 64 * 1024;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
+const ZSH_SHELL_GUIDANCE: &str = "Zsh: Never use lowercase `path` as a variable (it is tied to `PATH` and can make installed commands disappear); use `route` or `file_path` instead. Use arrays, not scalar command strings, to execute a command with arguments.";
 
 pub(crate) struct LocalMcpContextProvider {
     config_path: PathBuf,
     history: Arc<LocalHistoryRuntime>,
     home: Option<PathBuf>,
     codex_home: Option<PathBuf>,
+    uses_zsh: bool,
 }
 
 impl LocalMcpContextProvider {
     pub(crate) fn new(
         config_path: PathBuf,
         environment: &[(OsString, OsString)],
+        uses_zsh: bool,
         history: Arc<LocalHistoryRuntime>,
     ) -> Self {
         let home = environment_value(environment, "HOME")
@@ -44,11 +47,20 @@ impl LocalMcpContextProvider {
             history,
             home,
             codex_home,
+            uses_zsh,
         }
     }
 
     fn global_context(&self, config: &LocalConfig) -> String {
         let mut sections = Vec::new();
+        if self.uses_zsh {
+            sections.push(ZSH_SHELL_GUIDANCE.to_string());
+        }
+        // The Zsh safety hint is intrinsic to the selected shell, not an
+        // optional user AGENTS.md/skills context setting.
+        if !config.context.enabled {
+            return sections.join("\n\n");
+        }
         if config.context.global_agents
             && let Some(section) = self.global_agents_section()
         {
@@ -145,18 +157,20 @@ impl McpResultContextProvider for LocalMcpContextProvider {
             return Ok(None);
         }
         let config = LocalConfig::load(&self.config_path)?;
-        if !config.context.enabled {
-            return Ok(None);
-        }
-
         let mut sections = Vec::new();
         if context.global_context_pending
-            && (config.context.global_agents || config.context.skills.enabled)
+            && (self.uses_zsh
+                || (config.context.enabled
+                    && (config.context.global_agents || config.context.skills.enabled)))
         {
             let global = self.global_context(&config);
-            if self.history.claim_global_context_injection(provider)? && !global.is_empty() {
+            if !global.is_empty() && self.history.claim_global_context_injection(provider)? {
                 sections.push(global);
             }
+        }
+
+        if !config.context.enabled {
+            return Ok((!sections.is_empty()).then(|| sections.join("\n\n")));
         }
 
         if tool_succeeded
@@ -505,7 +519,10 @@ mod tests {
     };
     use crate::local::{LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
-    use super::{LocalMcpContextProvider, parse_skill_frontmatter, repo_instruction_filename};
+    use super::{
+        LocalMcpContextProvider, ZSH_SHELL_GUIDANCE, parse_skill_frontmatter,
+        repo_instruction_filename,
+    };
 
     #[test]
     fn parses_plain_quoted_and_folded_skill_frontmatter() {
@@ -626,7 +643,8 @@ mod tests {
                 codex_home.clone().into_os_string(),
             ),
         ];
-        let provider = LocalMcpContextProvider::new(config_path, &environment, history.clone());
+        let provider =
+            LocalMcpContextProvider::new(config_path, &environment, true, history.clone());
 
         let failed = provider
             .appended_context(&invocation, repo.to_str(), false)
@@ -635,6 +653,7 @@ mod tests {
         assert!(failed.contains("Global AGENTS.override.md:\nglobal override instructions"));
         assert!(!failed.contains("base global instructions"));
         assert!(failed.contains("Global skills on this machine:"));
+        assert!(failed.contains(ZSH_SHELL_GUIDANCE));
         assert!(failed.contains("demo-skill — Demo skill."));
         assert!(failed.contains("system-skill — System skill."));
         assert!(!failed.contains("contains an AGENTS.md"));
@@ -691,7 +710,7 @@ mod tests {
         };
         let first = make_invocation("conversation-a");
         let second = make_invocation("conversation-b");
-        let provider = LocalMcpContextProvider::new(config_path, &[], history.clone());
+        let provider = LocalMcpContextProvider::new(config_path, &[], false, history.clone());
 
         let first_hint = provider
             .appended_context(&first, repo.to_str(), true)
@@ -766,7 +785,8 @@ mod tests {
             .unwrap()
         };
         let repo_invocation = invocation_for(&repo);
-        let provider = LocalMcpContextProvider::new(config_path.clone(), &[], history.clone());
+        let provider =
+            LocalMcpContextProvider::new(config_path.clone(), &[], false, history.clone());
 
         assert!(
             provider
@@ -850,13 +870,18 @@ mod tests {
             ),
         )
         .unwrap();
-        let first_provider =
-            LocalMcpContextProvider::new(config_path.clone(), &environment, first_runtime.clone());
+        let first_provider = LocalMcpContextProvider::new(
+            config_path.clone(),
+            &environment,
+            true,
+            first_runtime.clone(),
+        );
         let first_context = first_provider
             .appended_context(&first_invocation, repo.to_str(), true)
             .unwrap()
             .unwrap();
         assert!(first_context.contains("Global AGENTS.md:\nglobal instructions"));
+        assert_eq!(first_context.matches(ZSH_SHELL_GUIDANCE).count(), 1);
         assert!(first_context.contains("contains an AGENTS.md."));
         InvocationEvidenceRecorder::complete(
             first_runtime.as_ref(),
@@ -901,7 +926,7 @@ mod tests {
         assert!(!second_invocation.repo_agents_context_pending);
         assert!(!second_invocation.repo_skills_context_pending);
         let second_provider =
-            LocalMcpContextProvider::new(config_path, &environment, second_runtime.clone());
+            LocalMcpContextProvider::new(config_path, &environment, true, second_runtime.clone());
         assert!(
             second_provider
                 .appended_context(&second_invocation, repo.to_str(), true)
@@ -909,5 +934,72 @@ mod tests {
                 .is_none()
         );
         second_runtime.shutdown_blocking().unwrap();
+    }
+
+    #[test]
+    fn zsh_shell_guidance_is_once_per_conversation_even_when_context_is_disabled() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("local.toml");
+        let mut config = LocalConfig::default();
+        config.context.enabled = false;
+        config.save(&config_path).unwrap();
+        let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+            dir.path().join("history.sqlite3"),
+            "zsh-guidance-runtime",
+            365 * 24 * 60 * 60,
+            1024 * 1024 * 1024,
+        ))
+        .unwrap();
+        let invocation_for = |session: &'static str| {
+            InvocationEvidenceRecorder::begin(
+                history.as_ref(),
+                InvocationContext::default()
+                    .with_provider(ProviderCallMetadata::new("openai/session", session)),
+                InvocationStart::new("exec_command", json!({"cmd":"true","workdir":"/tmp"})),
+            )
+            .unwrap()
+        };
+
+        let zsh_provider =
+            LocalMcpContextProvider::new(config_path.clone(), &[], true, history.clone());
+        let first = invocation_for("zsh-session");
+        assert_eq!(
+            zsh_provider
+                .appended_context(&first, Some("/tmp"), true)
+                .unwrap(),
+            Some(ZSH_SHELL_GUIDANCE.to_string())
+        );
+        assert!(
+            zsh_provider
+                .appended_context(&first, Some("/tmp"), true)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!invocation_for("zsh-session").global_context_pending);
+
+        // Neither disabling AGENTS.md/skills nor the top-level context setting
+        // can suppress the shell-specific guidance for a new session.
+        config.context.enabled = true;
+        config.context.global_agents = false;
+        config.context.skills.enabled = false;
+        config.save(&config_path).unwrap();
+        let second = invocation_for("second-zsh-session");
+        assert_eq!(
+            zsh_provider
+                .appended_context(&second, Some("/tmp"), true)
+                .unwrap(),
+            Some(ZSH_SHELL_GUIDANCE.to_string())
+        );
+
+        let non_zsh_provider =
+            LocalMcpContextProvider::new(config_path, &[], false, history.clone());
+        let sh_session = invocation_for("sh-session");
+        assert!(
+            non_zsh_provider
+                .appended_context(&sh_session, Some("/tmp"), true)
+                .unwrap()
+                .is_none()
+        );
+        history.shutdown_blocking().unwrap();
     }
 }

@@ -39,6 +39,7 @@ use shutdown::{
     snapshot_descendants_before_termination, wait_for_session_exits_until,
 };
 
+pub(crate) use policy::is_zsh_shell;
 pub use policy::{
     OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionCreatorContext, SessionOutputChunk,
     SessionOutputCompletion, SessionOutputObserver, SessionRuntimePolicy,

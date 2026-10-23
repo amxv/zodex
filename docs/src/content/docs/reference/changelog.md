@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.17 - 2026-10-23
+
+- Zodex Local automatically disables Zsh's `EQUALS` expansion for agent commands with a single shell builtin, after user startup files run. It preserves the selected login shell, environment, other Zsh options, and native scalar splitting, without spawning another process.
+- When Local detects Zsh, its existing one-time agent context now warns that lowercase `path` modifies `PATH` and recommends arrays for multiword commands. The hint appears once per conversation alongside global AGENTS.md/skills discovery, including when optional context injection is disabled; other shells receive no hint.
+- Added regression tests for startup-file overrides, shell selection, and context delivery/deduplication.
+
 ## 0.5.16 - 2026-10-23
 
 - Fixed Liveboard's **Open in editor** action when Zodex Local is started with a restricted macOS `PATH`. Zed, VS Code, and Cursor CLI launchers are now resolved from standard macOS locations, with a native app-launch fallback when the CLI is unavailable.
