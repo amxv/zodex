@@ -50,6 +50,9 @@ pub trait RuntimeKeyStore: Send + Sync {
 #[cfg(target_os = "macos")]
 pub struct MacKeychainRuntimeKeyStore;
 
+#[cfg(target_os = "macos")]
+struct MacKeychainPasswordItem(&'static str);
+
 #[cfg(target_os = "windows")]
 pub struct WindowsCredentialRuntimeKeyStore;
 
@@ -69,27 +72,87 @@ impl LinuxFileRuntimeKeyStore {
 
 #[cfg(target_os = "macos")]
 impl MacKeychainRuntimeKeyStore {
-    const SERVICE: &'static str = "com.amxv.zodex.local";
+    // The original item was created by ad-hoc-signed binaries on many Macs.
+    // Its ACL continues to reference that old code requirement even after
+    // upgrades start using a stable local signing identity. A fresh item gets
+    // the installed signed operator's requirement at creation time instead.
+    const SERVICE: &'static str = "com.amxv.zodex.local.v2";
+    const LEGACY_SERVICE: &'static str = "com.amxv.zodex.local";
     const ACCOUNT: &'static str = "openai-tunnel-runtime-key";
     // Security.framework's documented errSecItemNotFound OSStatus.
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25_300;
 }
 
+// Keep the legacy item intact until migration succeeds. Do not export the key,
+// change the Keychain ACL to allow all applications, or silently swallow a
+// failed write and keep re-prompting on every startup.
+#[cfg(any(test, target_os = "macos"))]
+fn get_or_migrate_runtime_key(
+    current: &dyn RuntimeKeyStore,
+    legacy: &dyn RuntimeKeyStore,
+) -> Result<Option<RuntimeKey>> {
+    if let Some(key) = current.get()? {
+        return Ok(Some(key));
+    }
+    let Some(key) = legacy.get()? else {
+        return Ok(None);
+    };
+    current
+        .set(&key)
+        .context("failed to migrate OpenAI tunnel runtime key into the updated Keychain item")?;
+    Ok(Some(key))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn delete_current_and_legacy_runtime_keys(
+    current: &dyn RuntimeKeyStore,
+    legacy: &dyn RuntimeKeyStore,
+) -> Result<()> {
+    // Do not stop at the first error; leaving either copy behind after a
+    // credential reset would retain a usable tunnel credential.
+    let current_result = current.delete();
+    let legacy_result = legacy.delete();
+    current_result.and(legacy_result)
+}
+
 #[cfg(target_os = "macos")]
 impl RuntimeKeyStore for MacKeychainRuntimeKeyStore {
+    fn get(&self) -> Result<Option<RuntimeKey>> {
+        get_or_migrate_runtime_key(
+            &MacKeychainPasswordItem(Self::SERVICE),
+            &MacKeychainPasswordItem(Self::LEGACY_SERVICE),
+        )
+    }
+
+    fn set(&self, key: &RuntimeKey) -> Result<()> {
+        MacKeychainPasswordItem(Self::SERVICE).set(key)
+    }
+
+    fn delete(&self) -> Result<()> {
+        delete_current_and_legacy_runtime_keys(
+            &MacKeychainPasswordItem(Self::SERVICE),
+            &MacKeychainPasswordItem(Self::LEGACY_SERVICE),
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl RuntimeKeyStore for MacKeychainPasswordItem {
     fn get(&self) -> Result<Option<RuntimeKey>> {
         use security_framework::passwords::{PasswordOptions, generic_password};
 
         match generic_password(PasswordOptions::new_generic_password(
-            Self::SERVICE,
-            Self::ACCOUNT,
+            self.0,
+            MacKeychainRuntimeKeyStore::ACCOUNT,
         )) {
             Ok(bytes) => {
                 let value = String::from_utf8(bytes)
                     .context("stored OpenAI tunnel runtime key is not valid UTF-8")?;
                 Ok(Some(RuntimeKey::new(value)?))
             }
-            Err(error) if error.code() == Self::ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(error) if error.code() == MacKeychainRuntimeKeyStore::ERR_SEC_ITEM_NOT_FOUND => {
+                Ok(None)
+            }
             Err(error) => {
                 Err(error).context("failed to read OpenAI tunnel runtime key from Keychain")
             }
@@ -98,17 +161,22 @@ impl RuntimeKeyStore for MacKeychainRuntimeKeyStore {
 
     fn set(&self, key: &RuntimeKey) -> Result<()> {
         security_framework::passwords::set_generic_password(
-            Self::SERVICE,
-            Self::ACCOUNT,
+            self.0,
+            MacKeychainRuntimeKeyStore::ACCOUNT,
             key.expose().as_bytes(),
         )
         .context("failed to store OpenAI tunnel runtime key in Keychain")
     }
 
     fn delete(&self) -> Result<()> {
-        match security_framework::passwords::delete_generic_password(Self::SERVICE, Self::ACCOUNT) {
+        match security_framework::passwords::delete_generic_password(
+            self.0,
+            MacKeychainRuntimeKeyStore::ACCOUNT,
+        ) {
             Ok(()) => Ok(()),
-            Err(error) if error.code() == Self::ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            Err(error) if error.code() == MacKeychainRuntimeKeyStore::ERR_SEC_ITEM_NOT_FOUND => {
+                Ok(())
+            }
             Err(error) => {
                 Err(error).context("failed to remove OpenAI tunnel runtime key from Keychain")
             }
@@ -235,6 +303,153 @@ mod tests {
         for value in ["", "a\nb", "a\rb", "a\0b"] {
             assert!(RuntimeKey::new(value).is_err(), "{value:?} should fail");
         }
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use anyhow::{Result, bail};
+
+    use super::{
+        RuntimeKey, RuntimeKeyStore, delete_current_and_legacy_runtime_keys,
+        get_or_migrate_runtime_key,
+    };
+
+    #[derive(Default)]
+    struct FakeStore {
+        value: Mutex<Option<RuntimeKey>>,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
+        reject_read: bool,
+        reject_write: bool,
+        reject_delete: bool,
+    }
+
+    impl FakeStore {
+        fn with_key(raw: &str) -> Self {
+            Self {
+                value: Mutex::new(Some(RuntimeKey::new(raw).unwrap())),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl RuntimeKeyStore for FakeStore {
+        fn get(&self) -> Result<Option<RuntimeKey>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if self.reject_read {
+                bail!("read denied");
+            }
+            Ok(self.value.lock().unwrap().clone())
+        }
+
+        fn set(&self, key: &RuntimeKey) -> Result<()> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            if self.reject_write {
+                bail!("write denied");
+            }
+            *self.value.lock().unwrap() = Some(key.clone());
+            Ok(())
+        }
+
+        fn delete(&self) -> Result<()> {
+            if self.reject_delete {
+                bail!("delete denied");
+            }
+            *self.value.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn existing_signed_item_never_reads_or_overwrites_legacy_item() {
+        let signed = FakeStore::with_key("current");
+        let legacy = FakeStore::with_key("old");
+        assert_eq!(
+            get_or_migrate_runtime_key(&signed, &legacy).unwrap(),
+            Some(RuntimeKey::new("current").unwrap())
+        );
+        assert_eq!(signed.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(legacy.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn legacy_item_is_copied_once_without_deleting_the_rollback_copy() {
+        let signed = FakeStore::default();
+        let legacy = FakeStore::with_key("old");
+        let expected = Some(RuntimeKey::new("old").unwrap());
+
+        assert_eq!(
+            get_or_migrate_runtime_key(&signed, &legacy).unwrap(),
+            expected
+        );
+        assert_eq!(signed.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(legacy.get().unwrap(), expected);
+
+        assert_eq!(
+            get_or_migrate_runtime_key(&signed, &legacy).unwrap(),
+            expected
+        );
+        assert_eq!(signed.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(legacy.reads.load(Ordering::SeqCst), 2); // explicit check only
+    }
+
+    #[test]
+    fn missing_both_items_does_not_create_a_credential() {
+        let signed = FakeStore::default();
+        let legacy = FakeStore::default();
+        assert_eq!(get_or_migrate_runtime_key(&signed, &legacy).unwrap(), None);
+        assert_eq!(signed.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn migration_failure_preserves_the_legacy_key_and_surfaces_an_error() {
+        let signed = FakeStore {
+            reject_write: true,
+            ..FakeStore::default()
+        };
+        let legacy = FakeStore::with_key("old");
+        let error = get_or_migrate_runtime_key(&signed, &legacy).unwrap_err();
+        assert!(error.to_string().contains("failed to migrate"));
+        assert!(!error.to_string().contains("old"));
+        assert_eq!(legacy.get().unwrap(), Some(RuntimeKey::new("old").unwrap()));
+    }
+
+    #[test]
+    fn signed_item_read_errors_do_not_fall_back_to_stale_legacy_key() {
+        let signed = FakeStore {
+            reject_read: true,
+            ..FakeStore::default()
+        };
+        let legacy = FakeStore::with_key("stale");
+        assert!(get_or_migrate_runtime_key(&signed, &legacy).is_err());
+        assert_eq!(legacy.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn reset_removes_both_items() {
+        let signed = FakeStore::with_key("new");
+        let legacy = FakeStore::with_key("old");
+        delete_current_and_legacy_runtime_keys(&signed, &legacy).unwrap();
+        assert_eq!(signed.get().unwrap(), None);
+        assert_eq!(legacy.get().unwrap(), None);
+    }
+
+    #[test]
+    fn reset_attempts_legacy_deletion_even_if_primary_delete_fails() {
+        let signed = FakeStore {
+            reject_delete: true,
+            ..FakeStore::with_key("new")
+        };
+        let legacy = FakeStore::with_key("old");
+        assert!(delete_current_and_legacy_runtime_keys(&signed, &legacy).is_err());
+        assert_eq!(signed.get().unwrap(), Some(RuntimeKey::new("new").unwrap()));
+        assert_eq!(legacy.get().unwrap(), None);
     }
 }
 

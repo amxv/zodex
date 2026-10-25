@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.23 - 2026-10-25
+
+- Fixed recurring macOS login-Keychain password prompts for Local tunnel credentials created before Zodex gained stable operator code signing. On first access, the signed operator migrates the credential to a fresh Keychain entry with the current signed application's access policy; subsequent upgrades use that entry instead of the legacy one.
+- Migration never prints or exports the runtime key, never grants all-app access, and retains the old Keychain entry for rollback. A one-time Apple Keychain approval may still be necessary to read the legacy entry. Fresh setups write directly to the new entry, and explicit Local credential deletion removes both.
+
 ## 0.5.22 - 2026-10-25
 
 - Liveboard's **All Agents** drawer now automatically hides agents whose last activity was 12 or more hours ago. Running agents and agents currently on the board or focused remain visible; the filter never deletes history or changes the board layout.
