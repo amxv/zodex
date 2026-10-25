@@ -6,6 +6,7 @@ import type {
   ThemePreference,
 } from '../api/client'
 import { CloseIcon, CogIcon } from './icons'
+import { AgentAgeSelect } from './AgentAgeSelect'
 import { createDrawerPresence } from './drawerPresence'
 
 export function SettingsDrawer(props: {
@@ -115,6 +116,20 @@ export function SettingsDrawer(props: {
                 </label>
               </section>
             </Show>
+
+            <section class="settings-section">
+              <h3>Agents</h3>
+              <div class="settings-row">
+                <span class="settings-copy">
+                  <strong>Hide inactive agents after</strong>
+                  <small>Only filters All Agents. Running and selected agents stay visible.</small>
+                </span>
+                <AgentAgeSelect
+                  hours={props.preferences.hide_inactive_agents_after_hours}
+                  onChangeHours={(hours) => props.onPatch({ hide_inactive_agents_after_hours: hours })}
+                />
+              </div>
+            </section>
 
             <section class="settings-section">
               <h3>Timeline defaults</h3>

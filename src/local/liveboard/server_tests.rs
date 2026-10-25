@@ -287,6 +287,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let prefs: Value = prefs.json().await.unwrap();
     assert_eq!(prefs["theme"], "system");
     assert_eq!(prefs["max_visible_agents"], 4);
+    assert_eq!(prefs["hide_inactive_agents_after_hours"], 12);
     assert_eq!(prefs["command_outputs_expanded"], false);
     assert_eq!(prefs["diffs_expanded"], true);
     assert_eq!(prefs["show_raw_button"], false);
@@ -300,7 +301,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
 
     let patched = client
         .patch(capability_url(host.private_url(), "preferences"))
-        .json(&json!({"theme":"dark","max_visible_agents":5,"show_raw_button":true,"editor_command":editor_command}))
+        .json(&json!({"theme":"dark","max_visible_agents":5,"hide_inactive_agents_after_hours":24,"show_raw_button":true,"editor_command":editor_command}))
         .send()
         .await
         .unwrap();
@@ -308,6 +309,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let patched: Value = patched.json().await.unwrap();
     assert_eq!(patched["theme"], "dark");
     assert_eq!(patched["max_visible_agents"], 5);
+    assert_eq!(patched["hide_inactive_agents_after_hours"], 24);
     assert_eq!(patched["show_raw_button"], true);
     assert_eq!(patched["editor_command"], editor_command);
     assert!(!patched.to_string().contains(BEARER));

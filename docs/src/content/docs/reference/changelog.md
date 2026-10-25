@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.22 - 2026-10-25
+
+- Liveboard's **All Agents** drawer now automatically hides agents whose last activity was 12 or more hours ago. Running agents and agents currently on the board or focused remain visible; the filter never deletes history or changes the board layout.
+- Added a directly accessible inactivity cutoff selector in **All Agents** and **Settings → Agents**, with presets from 1 hour to 30 days, custom hours up to one year, and **Never** to disable filtering. The preference is saved by Zodex Local and synchronized across Liveboard tabs.
+- The drawer shows a count of older hidden agents and a **Show all** shortcut. Also fixed failed focused-drawer roster requests so they display an inline Retry control rather than leaving the drawer stuck loading.
+
 ## 0.5.21 - 2026-10-24
 
 - Fixed `apply_patch` rejecting an adjacent `*** Delete File` / `*** Add File` pair for the same path. Zodex now treats the pair as one full-file replacement and stages the new contents before replacing the original, preserving normal file permissions and leaving the original intact if staging fails.

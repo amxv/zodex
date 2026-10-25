@@ -12,6 +12,7 @@ use super::super::status::write_user_only_json_atomic;
 pub(crate) const LIVEBOARD_PREFERENCES_SCHEMA_VERSION: u32 = 1;
 const MIN_VISIBLE_AGENTS: u8 = 1;
 const MAX_VISIBLE_AGENTS: u8 = 8;
+const MAX_INACTIVE_AGENT_HOURS: u16 = 8_760;
 const MAX_ALIAS_CHARS: usize = 80;
 const MAX_EDITOR_COMMAND_CHARS: usize = 256;
 const MIN_WIDTH_WEIGHT: f64 = 0.1;
@@ -31,6 +32,8 @@ pub(crate) struct LiveboardPreferences {
     pub(crate) schema_version: u32,
     pub(crate) theme: LiveboardTheme,
     pub(crate) max_visible_agents: u8,
+    #[serde(default = "default_hide_inactive_agents_after_hours")]
+    pub(crate) hide_inactive_agents_after_hours: u16,
     pub(crate) command_outputs_expanded: bool,
     pub(crate) diffs_expanded: bool,
     #[serde(default)]
@@ -58,6 +61,7 @@ impl Default for LiveboardPreferences {
             schema_version: LIVEBOARD_PREFERENCES_SCHEMA_VERSION,
             theme: LiveboardTheme::System,
             max_visible_agents: 4,
+            hide_inactive_agents_after_hours: default_hide_inactive_agents_after_hours(),
             command_outputs_expanded: false,
             diffs_expanded: true,
             show_raw_button: false,
@@ -72,6 +76,7 @@ pub(crate) struct LiveboardPreferencesPatch {
     pub(crate) schema_version: Option<u32>,
     pub(crate) theme: Option<LiveboardTheme>,
     pub(crate) max_visible_agents: Option<u8>,
+    pub(crate) hide_inactive_agents_after_hours: Option<u16>,
     pub(crate) command_outputs_expanded: Option<bool>,
     pub(crate) diffs_expanded: Option<bool>,
     pub(crate) show_raw_button: Option<bool>,
@@ -104,6 +109,14 @@ impl LiveboardPreferencesPatch {
         {
             bail!(
                 "max_visible_agents must be between {MIN_VISIBLE_AGENTS} and {MAX_VISIBLE_AGENTS}"
+            );
+        }
+        if self
+            .hide_inactive_agents_after_hours
+            .is_some_and(|hours| hours > MAX_INACTIVE_AGENT_HOURS)
+        {
+            bail!(
+                "hide_inactive_agents_after_hours must be 0 (never) or at most {MAX_INACTIVE_AGENT_HOURS}"
             );
         }
         if let Some(editor_command) = self.editor_command.as_deref() {
@@ -208,6 +221,9 @@ fn merge_preferences(current: &mut LiveboardPreferences, patch: &LiveboardPrefer
     if let Some(max_visible_agents) = patch.max_visible_agents {
         current.max_visible_agents = max_visible_agents;
     }
+    if let Some(hours) = patch.hide_inactive_agents_after_hours {
+        current.hide_inactive_agents_after_hours = hours;
+    }
     if let Some(expanded) = patch.command_outputs_expanded {
         current.command_outputs_expanded = expanded;
     }
@@ -241,6 +257,9 @@ fn merge_preferences(current: &mut LiveboardPreferences, patch: &LiveboardPrefer
 fn validate_preferences(preferences: &LiveboardPreferences) -> Result<()> {
     if !(MIN_VISIBLE_AGENTS..=MAX_VISIBLE_AGENTS).contains(&preferences.max_visible_agents) {
         bail!("stored Liveboard max_visible_agents is outside supported bounds");
+    }
+    if preferences.hide_inactive_agents_after_hours > MAX_INACTIVE_AGENT_HOURS {
+        bail!("stored Liveboard hide_inactive_agents_after_hours is outside supported bounds");
     }
     validate_editor_command(&preferences.editor_command)?;
     for (agent_id, preference) in &preferences.agents {
@@ -284,6 +303,10 @@ pub(super) fn validate_alias(value: &str) -> Result<()> {
 
 fn default_editor_command() -> String {
     "zed".to_string()
+}
+
+fn default_hide_inactive_agents_after_hours() -> u16 {
+    12
 }
 
 fn validate_editor_command(value: &str) -> Result<()> {
@@ -392,6 +415,7 @@ mod tests {
         );
         assert_eq!(defaults.theme, LiveboardTheme::System);
         assert_eq!(defaults.max_visible_agents, 4);
+        assert_eq!(defaults.hide_inactive_agents_after_hours, 12);
         assert!(!defaults.command_outputs_expanded);
         assert!(defaults.diffs_expanded);
         assert!(!defaults.show_raw_button);
@@ -401,6 +425,7 @@ mod tests {
             .mutate(&LiveboardPreferencesPatch {
                 theme: Some(LiveboardTheme::Dark),
                 max_visible_agents: Some(5),
+                hide_inactive_agents_after_hours: Some(24),
                 show_raw_button: Some(true),
                 editor_command: Some("cursor".to_string()),
                 agents: [(
@@ -419,6 +444,7 @@ mod tests {
             .unwrap();
         assert_eq!(updated.theme, LiveboardTheme::Dark);
         assert_eq!(updated.max_visible_agents, 5);
+        assert_eq!(updated.hide_inactive_agents_after_hours, 24);
         assert!(updated.show_raw_button);
         assert_eq!(updated.editor_command, "cursor");
         assert_eq!(
@@ -461,6 +487,33 @@ mod tests {
                 })
                 .is_err()
         );
+        assert!(
+            store
+                .mutate(&LiveboardPreferencesPatch {
+                    hide_inactive_agents_after_hours: Some(8_761),
+                    ..LiveboardPreferencesPatch::default()
+                })
+                .is_err()
+        );
+        let never = store
+            .mutate(&LiveboardPreferencesPatch {
+                hide_inactive_agents_after_hours: Some(0),
+                ..LiveboardPreferencesPatch::default()
+            })
+            .unwrap();
+        assert_eq!(never.hide_inactive_agents_after_hours, 0);
+    }
+
+    #[test]
+    fn legacy_preferences_without_inactive_cutoff_inherit_twelve_hours() {
+        let (_dir, paths, store) = test_store();
+        std::fs::create_dir_all(paths.liveboard_dir()).unwrap();
+        std::fs::write(
+            paths.liveboard_preferences_file(),
+            r#"{"schema_version":1,"theme":"system","max_visible_agents":4,"command_outputs_expanded":false,"diffs_expanded":true,"agents":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(store.load().unwrap().hide_inactive_agents_after_hours, 12);
     }
 
     #[test]

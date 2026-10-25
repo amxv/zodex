@@ -2,17 +2,22 @@ import {
   For,
   Show,
   createEffect,
+  createMemo,
   createSignal,
   onCleanup,
   onMount,
 } from 'solid-js'
 
-import type { ApiAgent, LiveboardPreferences } from '../api/client'
+import type {
+  ApiAgent, LiveboardPreferences, LiveboardPreferencesPatch,
+} from '../api/client'
 import { AgentsIcon, ChevronDownIcon, CloseIcon } from '../ui/icons'
+import { AgentAgeSelect } from '../ui/AgentAgeSelect'
 import { createDrawerPresence } from '../ui/drawerPresence'
 import {
   agentActivity,
   relativeActivityLabel,
+  visibleDrawerAgents,
 } from './model'
 
 interface AgentDrawerProps {
@@ -27,6 +32,7 @@ interface AgentDrawerProps {
   onRetry?: () => void
   onClose: () => void
   onAdd: (agentId: string) => void
+  onPatch: (patch: LiveboardPreferencesPatch) => void
 }
 
 function AgentDrawerRow(props: {
@@ -171,6 +177,15 @@ export function AgentDrawer(props: AgentDrawerProps) {
   })
 
   const isFull = () => props.visibleIds.length >= props.preferences.max_visible_agents
+  const displayedAgents = createMemo(() => visibleDrawerAgents(
+    props.agents,
+    props.visibleIds,
+    props.focusedAgentId,
+    props.nowMs,
+    props.preferences.hide_inactive_agents_after_hours,
+  ))
+  const hiddenCount = () => props.agents.length - displayedAgents().length
+  const showAll = () => props.onPatch({ hide_inactive_agents_after_hours: 0 })
 
   return (
     <Show when={presence.present()}>
@@ -202,6 +217,13 @@ export function AgentDrawer(props: AgentDrawerProps) {
             <CloseIcon />
           </button>
         </header>
+        <div class="drawer-roster-filter">
+          <span>Hide inactive after</span>
+          <AgentAgeSelect
+            hours={props.preferences.hide_inactive_agents_after_hours}
+            onChangeHours={(hours) => props.onPatch({ hide_inactive_agents_after_hours: hours })}
+          />
+        </div>
         <div class="drawer-list">
           <Show when={props.loading}>
             <p class="drawer-empty" role="status">Loading Agents…</p>
@@ -217,8 +239,11 @@ export function AgentDrawer(props: AgentDrawerProps) {
           <Show when={!props.loading && !props.error && props.agents.length === 0}>
             <p class="drawer-empty">No Agents have appeared in this runtime yet.</p>
           </Show>
+          <Show when={!props.loading && !props.error && props.agents.length > 0 && displayedAgents().length === 0}>
+            <p class="drawer-empty">No agents have been active within this time window.</p>
+          </Show>
           <Show when={!props.loading && !props.error}>
-            <For each={props.agents}>
+            <For each={displayedAgents()}>
               {(agent) => {
                 const onBoard = () => props.focusedAgentId
                   ? agent.id === props.focusedAgentId
@@ -237,6 +262,12 @@ export function AgentDrawer(props: AgentDrawerProps) {
                 )
               }}
             </For>
+          </Show>
+          <Show when={!props.loading && !props.error && hiddenCount() > 0}>
+            <div class="drawer-hidden-summary">
+              {hiddenCount()} older {hiddenCount() === 1 ? 'agent' : 'agents'} hidden
+              <button type="button" class="text-button" onClick={showAll}>Show all</button>
+            </div>
           </Show>
         </div>
         </aside>

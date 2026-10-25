@@ -271,6 +271,7 @@ export interface LiveboardPreferences {
   schema_version: number
   theme: ThemePreference
   max_visible_agents: number
+  hide_inactive_agents_after_hours: number
   command_outputs_expanded: boolean
   diffs_expanded: boolean
   show_raw_button: boolean
@@ -289,6 +290,7 @@ export interface LiveboardPreferencesPatch {
   schema_version?: number
   theme?: ThemePreference
   max_visible_agents?: number
+  hide_inactive_agents_after_hours?: number
   command_outputs_expanded?: boolean
   diffs_expanded?: boolean
   show_raw_button?: boolean

@@ -69,6 +69,9 @@ function mergePreferences(
     ...(patch.max_visible_agents === undefined
       ? {}
       : { max_visible_agents: patch.max_visible_agents }),
+    ...(patch.hide_inactive_agents_after_hours === undefined
+      ? {}
+      : { hide_inactive_agents_after_hours: patch.hide_inactive_agents_after_hours }),
     ...(patch.command_outputs_expanded === undefined
       ? {}
       : { command_outputs_expanded: patch.command_outputs_expanded }),
@@ -155,6 +158,7 @@ describe('Liveboard board shell', () => {
       schema_version: 1,
       theme: 'system',
       max_visible_agents: 4,
+      hide_inactive_agents_after_hours: 12,
       command_outputs_expanded: false,
       diffs_expanded: true,
       show_raw_button: false,
@@ -219,6 +223,7 @@ describe('Liveboard board shell', () => {
       schema_version: 1,
       theme: 'system',
       max_visible_agents: 4,
+      hide_inactive_agents_after_hours: 12,
       command_outputs_expanded: false,
       diffs_expanded: true,
       show_raw_button: false,

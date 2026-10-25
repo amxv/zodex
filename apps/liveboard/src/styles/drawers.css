@@ -73,6 +73,67 @@
   padding: 8px;
 }
 
+.drawer-roster-filter {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding: 9px 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.agent-age-select {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.drawer-roster-filter select,
+.agent-age-select select {
+  height: 30px;
+  max-width: 146px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 24px 0 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.agent-age-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-age-custom input {
+  width: 70px;
+  height: 29px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.drawer-hidden-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 4px 0;
+  border-top: 1px solid var(--border);
+  padding: 12px 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .drawer-empty {
   margin: 28px 12px;
   color: var(--muted);

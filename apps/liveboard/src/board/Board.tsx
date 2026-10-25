@@ -79,9 +79,20 @@ export function Board(props: BoardProps) {
   const [settingsOpen, setSettingsOpen] = createSignal(false)
   // Focused views bootstrap only one Agent. Fetch the full roster on demand
   // for the drawer without widening the focused timeline or its SSE scope.
-  const [focusedDrawerAgents, { refetch: retryFocusedDrawerAgents }] = createResource(
+  const [focusedDrawerRoster, { refetch: retryFocusedDrawerAgents }] = createResource(
     () => (props.focusedAgentId && drawerOpen() ? props.focusedAgentId : undefined),
-    () => props.onLoadAllAgents?.() ?? Promise.resolve(props.agents),
+    async () => {
+      try {
+        return { agents: await (props.onLoadAllAgents?.() ?? Promise.resolve(props.agents)) }
+      } catch (error) {
+        // A roster fetch failure should stay inside the drawer with Retry;
+        // do not throw into the focused timeline's reactive resource boundary.
+        return {
+          agents: [] as readonly ApiAgent[],
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
   )
   const [locallyHiddenIds, setLocallyHiddenIds] = createSignal(
     new Set(
@@ -515,16 +526,15 @@ export function Board(props: BoardProps) {
       </div>
       <AgentDrawer
         open={drawerOpen()}
-        agents={props.focusedAgentId ? (focusedDrawerAgents() ?? []) : agents()}
+        agents={props.focusedAgentId ? (focusedDrawerRoster()?.agents ?? []) : agents()}
         visibleIds={visibleIds()}
         preferences={props.preferences}
         nowMs={props.nowMs}
         focusedAgentId={props.focusedAgentId}
-        loading={Boolean(props.focusedAgentId && focusedDrawerAgents.loading)}
-        error={focusedDrawerAgents.error instanceof Error
-          ? focusedDrawerAgents.error.message
-          : focusedDrawerAgents.error ? String(focusedDrawerAgents.error) : undefined}
+        loading={Boolean(props.focusedAgentId && focusedDrawerRoster.loading)}
+        error={focusedDrawerRoster()?.error}
         onRetry={() => void retryFocusedDrawerAgents()}
+        onPatch={props.onPatch}
         onClose={() => setDrawerOpen(false)}
         onAdd={props.focusedAgentId
           ? (agentId) => props.onFocusAgent?.(agentId)

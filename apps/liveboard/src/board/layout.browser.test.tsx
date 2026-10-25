@@ -28,6 +28,7 @@ const preferences: LiveboardPreferences = {
   schema_version: 1,
   theme: 'system',
   max_visible_agents: 4,
+  hide_inactive_agents_after_hours: 12,
   command_outputs_expanded: false,
   diffs_expanded: true,
   show_raw_button: false,
@@ -97,6 +98,97 @@ afterEach(() => {
 })
 
 describe('responsive Agent board layout', () => {
+  it('persists the inactivity filter and keeps running and on-board agents discoverable', async () => {
+    const nowMs = 200 * 60 * 60 * 1_000
+    const oldAgent = (id: string, hoursAgo: number, active = false): ApiAgent => ({
+      ...agent(id, 0),
+      last_seen_at_ms: nowMs - hoursAgo * 60 * 60 * 1_000,
+      active_process_count: active ? 1 : 0,
+    })
+    const roster = [
+      oldAgent('a111', 0),
+      oldAgent('b222', 11),
+      oldAgent('c333', 13),
+      oldAgent('d444', 20, true),
+      oldAgent('e555', 100),
+    ]
+    const [now, setNow] = createSignal(nowMs)
+    const [prefs, setPrefs] = createSignal<LiveboardPreferences>({
+      ...preferences,
+      agents: {
+        a111: { visible: true },
+        b222: { visible: false },
+        c333: { visible: false },
+        d444: { visible: false },
+        e555: { visible: false },
+      },
+    })
+    const patches: unknown[] = []
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(() => (
+      <Board
+        agents={roster}
+        preferences={prefs()}
+        nowMs={now()}
+        saving={false}
+        onPatch={(patch) => {
+          patches.push(patch)
+          setPrefs((current) => ({ ...current, ...patch }))
+        }}
+      />
+    ), container)
+
+    const open = container.querySelector<HTMLButtonElement>('[aria-label="All Agents"]')!
+    const rows = () => Array.from(container.querySelectorAll<HTMLElement>('.drawer-agent code'))
+      .map((row) => row.textContent)
+    const select = () => container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Hide inactive Agents after"]',
+    )!
+    const change = (value: string) => {
+      select().value = value
+      select().dispatchEvent(new Event('change', { bubbles: true }))
+    }
+
+    open.click()
+    expect(select().value).toBe('12')
+    expect(rows()).toEqual(['a111', 'b222', 'd444'])
+    expect(container.textContent).toContain('2 older agents hidden')
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
+
+    setNow(nowMs + 2 * 60 * 60 * 1_000)
+    expect(rows()).toEqual(['a111', 'd444'])
+    change('24')
+    expect(rows()).toEqual(['a111', 'b222', 'c333', 'd444'])
+    expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 24 })
+
+    change('custom')
+    const custom = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Custom inactive Agent cutoff in hours"]',
+    )!
+    custom.value = '14'
+    custom.dispatchEvent(new Event('input', { bubbles: true }))
+    container.querySelector<HTMLButtonElement>('.agent-age-custom button')!.click()
+    expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 14 })
+    expect(rows()).toEqual(['a111', 'b222', 'd444'])
+
+    container.querySelector<HTMLButtonElement>('.drawer-hidden-summary button')!.click()
+    expect(select().value).toBe('0')
+    expect(rows()).toHaveLength(5)
+    expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 0 })
+
+    container.querySelector<HTMLButtonElement>('[aria-label="Close All Agents"]')!.click()
+    container.querySelector<HTMLButtonElement>('[aria-label="Open Settings"]')!.click()
+    expect(select().value).toBe('0')
+    change('6')
+    expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 6 })
+    container.querySelector<HTMLButtonElement>('[aria-label="Close Settings"]')!.click()
+    open.click()
+    expect(rows()).toEqual(['a111', 'd444'])
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
+  })
+
   it('opens a complete Agent drawer in focused mode without changing the focused timeline or board settings', async () => {
     const patches: unknown[] = []
     let rosterLoads = 0

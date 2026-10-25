@@ -36,3 +36,22 @@ export function relativeActivityLabel(lastSeenAtMs: number, nowMs: number): stri
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
 }
+
+/** Hide idle, stale agents only in the roster, never from the board or history. */
+export function visibleDrawerAgents(
+  agents: readonly ApiAgent[],
+  visibleIds: readonly string[],
+  focusedAgentId: string | undefined,
+  nowMs: number,
+  hideAfterHours: number,
+): ApiAgent[] {
+  if (hideAfterHours === 0) return [...agents]
+  const selected = new Set(visibleIds)
+  const cutoffMs = hideAfterHours * 60 * 60 * 1_000
+  return agents.filter((agent) =>
+    agent.active_process_count > 0 ||
+    agent.id === focusedAgentId ||
+    selected.has(agent.id) ||
+    nowMs - agent.last_seen_at_ms < cutoffMs,
+  )
+}

@@ -6,6 +6,7 @@ import {
   compactWorkdir,
   mostRecentWorkdir,
   relativeActivityLabel,
+  visibleDrawerAgents,
 } from './model'
 
 const fixture: ApiAgent = {
@@ -54,5 +55,32 @@ describe('Agent display model', () => {
     expect(relativeActivityLabel(80_000, 100_000)).toBe('20s ago')
     expect(relativeActivityLabel(0, 120_000)).toBe('2m ago')
     expect(relativeActivityLabel(0, 7_200_000)).toBe('2h ago')
+  })
+
+  it('hides agents at the 12-hour inactivity boundary without hiding active or selected agents', () => {
+    const now = 50 * 60 * 60 * 1_000
+    const hoursAgo = (hours: number, id: string, active_process_count = 0): ApiAgent => ({
+      ...fixture,
+      id,
+      last_seen_at_ms: now - hours * 60 * 60 * 1_000,
+      active_process_count,
+    })
+    const agents = [
+      hoursAgo(11, 'a111'),
+      hoursAgo(12, 'b222'),
+      hoursAgo(13, 'c333', 1),
+      hoursAgo(72, 'd444'),
+      hoursAgo(100, 'e555'),
+    ]
+    const visible = (hours: number, selected: string[] = [], focusedId?: string) =>
+      visibleDrawerAgents(agents, selected, focusedId, now, hours).map((agent) => agent.id)
+
+    expect(visible(12)).toEqual(['a111', 'c333'])
+    expect(visible(12, ['b222'])).toEqual(['a111', 'b222', 'c333'])
+    expect(visible(12, [], 'e555')).toEqual(['a111', 'c333', 'e555'])
+    expect(visible(24)).toEqual(['a111', 'b222', 'c333'])
+    expect(visible(0)).toEqual(['a111', 'b222', 'c333', 'd444', 'e555'])
+    // A future clock skew must not accidentally hide an agent.
+    expect(visibleDrawerAgents([hoursAgo(-1, 'f666')], [], undefined, now, 12)).toHaveLength(1)
   })
 })

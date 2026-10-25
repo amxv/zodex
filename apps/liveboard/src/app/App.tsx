@@ -141,6 +141,7 @@ function withoutFocusedLayoutMutations(
   for (const key of [
     'schema_version',
     'theme',
+    'hide_inactive_agents_after_hours',
     'command_outputs_expanded',
     'diffs_expanded',
     'show_raw_button',

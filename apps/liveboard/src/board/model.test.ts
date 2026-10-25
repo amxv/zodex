@@ -30,6 +30,7 @@ function preferences(
     schema_version: 1,
     theme: 'system',
     max_visible_agents: 4,
+    hide_inactive_agents_after_hours: 12,
     command_outputs_expanded: false,
     diffs_expanded: true,
     show_raw_button: false,
