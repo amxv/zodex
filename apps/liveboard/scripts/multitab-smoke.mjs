@@ -12,6 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const indexHtml = (await readFile(join(root, 'dist/index.html'), 'utf8'))
   .replace('<head>', '<head>\n<base href="/capability/">')
 const agentIds = Array.from({ length: 18 }, (_, index) => index.toString(36).padStart(4, '0'))
+const fixtureNowMs = Date.now()
 const aliases = Object.fromEntries(agentIds.map((agent) => [agent, {alias: 'Before rename'}]))
 const peers = new Set()
 let maxStreams = 0
@@ -50,6 +51,7 @@ const fixture = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json')
     response.end(JSON.stringify({
       schema_version: 1, theme: 'system', max_visible_agents: 4,
+      hide_inactive_agents_after_hours: 12,
       command_outputs_expanded: false, diffs_expanded: true,
       show_raw_button: false, editor_command: 'zed', agents: aliases,
     }))
@@ -62,7 +64,7 @@ const fixture = createServer(async (request, response) => {
   }
   const agent = (id) => ({
     id, seen_in_current_runtime: true, active_process_count: 0,
-    first_seen_at_ms: 1, last_seen_at_ms: 2, workdirs: [],
+    first_seen_at_ms: 1, last_seen_at_ms: fixtureNowMs, workdirs: [],
   })
   response.setHeader('Content-Type', 'application/json')
   if (path === '/capability/api/status') {
