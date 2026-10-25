@@ -146,23 +146,42 @@ describe('responsive Agent board layout', () => {
     const select = () => container.querySelector<HTMLSelectElement>(
       'select[aria-label="Hide inactive Agents after"]',
     )!
+    const selectInAgents = () => container.querySelector(
+      '.agent-drawer:not(.settings-drawer) select[aria-label="Hide inactive Agents after"]',
+    )
+    const openSettings = () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open Settings"]',
+    )!.click()
+    const closeSettings = () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="Close Settings"]',
+    )!.click()
+    const closeAgents = () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="Close All Agents"]',
+    )!.click()
     const change = (value: string) => {
       select().value = value
       select().dispatchEvent(new Event('change', { bubbles: true }))
     }
 
     open.click()
-    expect(select().value).toBe('12')
+    expect(selectInAgents()).toBeNull()
     expect(rows()).toEqual(['a111', 'b222', 'd444'])
     expect(container.textContent).toContain('2 older agents hidden')
     expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
 
     setNow(nowMs + 2 * 60 * 60 * 1_000)
     expect(rows()).toEqual(['a111', 'd444'])
+    closeAgents()
+    openSettings()
+    expect(select().value).toBe('12')
     change('24')
-    expect(rows()).toEqual(['a111', 'b222', 'c333', 'd444'])
     expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 24 })
+    closeSettings()
+    open.click()
+    expect(rows()).toEqual(['a111', 'b222', 'c333', 'd444'])
 
+    closeAgents()
+    openSettings()
     change('custom')
     const custom = container.querySelector<HTMLInputElement>(
       'input[aria-label="Custom inactive Agent cutoff in hours"]',
@@ -171,20 +190,22 @@ describe('responsive Agent board layout', () => {
     custom.dispatchEvent(new Event('input', { bubbles: true }))
     container.querySelector<HTMLButtonElement>('.agent-age-custom button')!.click()
     expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 14 })
+    closeSettings()
+    open.click()
     expect(rows()).toEqual(['a111', 'b222', 'd444'])
 
     container.querySelector<HTMLButtonElement>('.drawer-hidden-summary button')!.click()
-    expect(select().value).toBe('0')
     expect(rows()).toHaveLength(5)
     expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 0 })
 
-    container.querySelector<HTMLButtonElement>('[aria-label="Close All Agents"]')!.click()
-    container.querySelector<HTMLButtonElement>('[aria-label="Open Settings"]')!.click()
+    closeAgents()
+    openSettings()
     expect(select().value).toBe('0')
     change('6')
     expect(patches).toContainEqual({ hide_inactive_agents_after_hours: 6 })
-    container.querySelector<HTMLButtonElement>('[aria-label="Close Settings"]')!.click()
+    closeSettings()
     open.click()
+    expect(selectInAgents()).toBeNull()
     expect(rows()).toEqual(['a111', 'd444'])
     expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
   })

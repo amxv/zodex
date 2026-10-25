@@ -8,6 +8,10 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.24 - 2026-10-25
+
+- Removed the duplicate inactivity cutoff selector from Liveboard's **All Agents** drawer. Adjust the cutoff in **Settings → Agents** instead. Automatic filtering, the hidden-agent count, and **Show all** remain unchanged.
+
 ## 0.5.23 - 2026-10-25
 
 - Fixed recurring macOS login-Keychain password prompts for Local tunnel credentials created before Zodex gained stable operator code signing. On first access, the signed operator migrates the credential to a fresh Keychain entry with the current signed application's access policy; subsequent upgrades use that entry instead of the legacy one.

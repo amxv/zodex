@@ -12,7 +12,6 @@ import type {
   ApiAgent, LiveboardPreferences, LiveboardPreferencesPatch,
 } from '../api/client'
 import { AgentsIcon, ChevronDownIcon, CloseIcon } from '../ui/icons'
-import { AgentAgeSelect } from '../ui/AgentAgeSelect'
 import { createDrawerPresence } from '../ui/drawerPresence'
 import {
   agentActivity,
@@ -217,13 +216,6 @@ export function AgentDrawer(props: AgentDrawerProps) {
             <CloseIcon />
           </button>
         </header>
-        <div class="drawer-roster-filter">
-          <span>Hide inactive after</span>
-          <AgentAgeSelect
-            hours={props.preferences.hide_inactive_agents_after_hours}
-            onChangeHours={(hours) => props.onPatch({ hide_inactive_agents_after_hours: hours })}
-          />
-        </div>
         <div class="drawer-list">
           <Show when={props.loading}>
             <p class="drawer-empty" role="status">Loading Agents…</p>

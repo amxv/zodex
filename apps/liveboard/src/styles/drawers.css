@@ -73,18 +73,6 @@
   padding: 8px;
 }
 
-.drawer-roster-filter {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid var(--border);
-  padding: 9px 12px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
 .agent-age-select {
   display: flex;
   min-width: 0;
@@ -93,7 +81,6 @@
   gap: 6px;
 }
 
-.drawer-roster-filter select,
 .agent-age-select select {
   height: 30px;
   max-width: 146px;
