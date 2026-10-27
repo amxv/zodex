@@ -8,6 +8,10 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.26 - 2026-10-27
+
+- Added one-line image-verification guidance directly after the Local `set_agent_alias` hint. Agents are told that Zodex MCP tools cannot display images, to disclose unverified visuals rather than attempting base64, and to use text-based alternatives such as `agent-browser` where appropriate. The instruction is injected once per conversation, including when optional context is disabled.
+
 ## 0.5.24 - 2026-10-25
 
 - Removed the duplicate inactivity cutoff selector from Liveboard's **All Agents** drawer. Adjust the cutoff in **Settings → Agents** instead. Automatic filtering, the hidden-agent count, and **Show all** remain unchanged.

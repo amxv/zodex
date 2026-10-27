@@ -19,7 +19,8 @@ const MAX_SKILL_FRONTMATTER_BYTES: usize = 64 * 1024;
 const MAX_SKILL_NAME_CHARS: usize = 64;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
 const ZSH_SHELL_GUIDANCE: &str = "Zsh: Never use lowercase `path` as a variable (it is tied to `PATH` and can make installed commands disappear); use `route` or `file_path` instead. Use arrays, not scalar command strings, to execute a command with arguments.";
-pub(crate) const AGENT_ALIAS_GUIDANCE: &str = "Call `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes. ";
+pub(crate) const AGENT_ALIAS_GUIDANCE: &str = "Call `set_agent_alias` with a descriptive 2–7-word task name when starting substantial work; update it when the main task changes.";
+const IMAGE_VERIFICATION_GUIDANCE: &str = "You cannot view images through this MCP server. If your task requires visual verification, skip it and notify the user that you cannot view images. Avoid trying to read images as base64 and try other approaches to verify your work, such as using agent-browser cli to get a text representation of a webpage.";
 
 pub(crate) struct LocalMcpContextProvider {
     config_path: PathBuf,
@@ -53,7 +54,9 @@ impl LocalMcpContextProvider {
     }
 
     fn global_context(&self, config: &LocalConfig) -> String {
-        let mut sections = vec![AGENT_ALIAS_GUIDANCE.to_owned()];
+        let mut sections = vec![format!(
+            "{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}"
+        )];
         if self.uses_zsh {
             sections.push(ZSH_SHELL_GUIDANCE.to_string());
         }
@@ -516,8 +519,8 @@ mod tests {
     use crate::local::{LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
     use super::{
-        AGENT_ALIAS_GUIDANCE, LocalMcpContextProvider, ZSH_SHELL_GUIDANCE, parse_skill_frontmatter,
-        repo_instruction_filename,
+        AGENT_ALIAS_GUIDANCE, IMAGE_VERIFICATION_GUIDANCE, LocalMcpContextProvider,
+        ZSH_SHELL_GUIDANCE, parse_skill_frontmatter, repo_instruction_filename,
     };
 
     #[test]
@@ -646,6 +649,9 @@ mod tests {
             .appended_context(&invocation, repo.to_str(), false)
             .unwrap()
             .unwrap();
+        assert!(failed.starts_with(&format!(
+            "{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"
+        )));
         assert!(failed.contains("Global AGENTS.override.md:\nglobal override instructions"));
         assert!(!failed.contains("base global instructions"));
         assert!(failed.contains("Global skills on this machine:"));
@@ -792,7 +798,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            initial_hint, AGENT_ALIAS_GUIDANCE,
+            initial_hint,
+            format!("{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}"),
             "only intrinsic Local guidance is expected"
         );
 
@@ -967,7 +974,9 @@ mod tests {
             zsh_provider
                 .appended_context(&first, Some("/tmp"), true)
                 .unwrap(),
-            Some(format!("{AGENT_ALIAS_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"))
+            Some(format!(
+                "{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"
+            ))
         );
         assert!(
             zsh_provider
@@ -988,7 +997,9 @@ mod tests {
             zsh_provider
                 .appended_context(&second, Some("/tmp"), true)
                 .unwrap(),
-            Some(format!("{AGENT_ALIAS_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"))
+            Some(format!(
+                "{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}\n\n{ZSH_SHELL_GUIDANCE}"
+            ))
         );
 
         let non_zsh_provider =
@@ -998,7 +1009,9 @@ mod tests {
             non_zsh_provider
                 .appended_context(&sh_session, Some("/tmp"), true)
                 .unwrap(),
-            Some(AGENT_ALIAS_GUIDANCE.to_string())
+            Some(format!(
+                "{AGENT_ALIAS_GUIDANCE}\n{IMAGE_VERIFICATION_GUIDANCE}"
+            ))
         );
         history.shutdown_blocking().unwrap();
     }
