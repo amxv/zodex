@@ -2,7 +2,8 @@ use std::io::IsTerminal as _;
 
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalLoginPreferences, LocalPaths, LocalStatusDocument,
-    LocalStatusState, RuntimeKey, WatchOptions, build_presentation, clear_local_history,
+    LocalStatusState, RuntimeKey, WatchOptions, build_presentation, clear_local_agent_history,
+    clear_local_history,
     copy_local_liveboard_url, ensure_offline_mutation, local_liveboard_url, parse_human_duration,
     render_presentation, run_local_liveboard, run_local_watch, validate_tunnel_id,
 };
@@ -114,7 +115,7 @@ enum LocalCommand {
     #[command(name = "__automatic-update", hide = true)]
     AutomaticUpdate,
     /// Inspect durable Local invocation history without opening the TUI.
-    #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
+    #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --agent k7m2 --yes\n  zodex local history clear --yes  # all agents; requires Local stopped")]
     History {
         /// Show only the most recent N normalized records.
         #[arg(long)]
@@ -123,7 +124,7 @@ enum LocalCommand {
         #[arg(long)]
         since: Option<String>,
         /// Filter by four-character Agent ID.
-        #[arg(long)]
+        #[arg(long, global = true)]
         agent: Option<String>,
         /// Filter by normalized absolute workdir.
         #[arg(long)]
@@ -215,7 +216,7 @@ enum LocalConfigCommand {
 
 #[derive(Debug, Subcommand)]
 enum LocalHistoryCommand {
-    /// Clear durable Local history. Local must be stopped.
+    /// Clear one Agent's history with --agent, or all history while Local is stopped.
     Clear {
         /// Skip the interactive confirmation.
         #[arg(long)]
@@ -340,19 +341,33 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             }
             let format = HistoryFormat::parse(&format)?;
             if let Some(LocalHistoryCommand::Clear { yes }) = command {
-                ensure_offline_mutation(&paths, "clear Local history")?;
+                if last.is_some() || since.is_some() || workdir.is_some() || id.is_some() || raw {
+                    bail!("history clear only accepts --agent and --yes; filters do not limit deletion");
+                }
+                if agent.is_none() {
+                    ensure_offline_mutation(&paths, "clear all Local history")?;
+                }
                 if !yes {
                     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
                         bail!("non-interactive `zodex local history clear` requires --yes");
                     }
-                    let answer = prompt_line("Clear all retained Zodex Local history? [y/N]: ")?;
+                    let prompt = match agent.as_deref() {
+                        Some(agent) => format!("Clear all retained Zodex Local history for Agent {agent}? [y/N]: "),
+                        None => "Clear ALL retained Zodex Local history? [y/N]: ".to_string(),
+                    };
+                    let answer = prompt_line(&prompt)?;
                     if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                         println!("Local history clear cancelled");
                         return Ok(());
                     }
                 }
-                clear_local_history(&paths.history_database())?;
-                println!("cleared Local history at {}", paths.history_database().display());
+                if let Some(agent) = agent.as_deref() {
+                    let deleted = clear_local_agent_history(&paths.history_database(), agent)?;
+                    println!("cleared {deleted} Local history invocations for Agent {agent}");
+                } else {
+                    clear_local_history(&paths.history_database())?;
+                    println!("cleared all Local history at {}", paths.history_database().display());
+                }
                 return Ok(());
             }
 
@@ -631,7 +646,8 @@ fn handle_local_preferences(paths: &LocalPaths, command: LocalPreferencesCommand
 #[cfg(test)]
 mod desktop_preferences_tests {
     use super::{
-        Cli, Commands, LocalCommand, LocalPreferencesCommand, handle_local_preferences,
+        Cli, Commands, LocalCommand, LocalHistoryCommand, LocalPreferencesCommand,
+        handle_local_preferences,
     };
     use clap::Parser as _;
     use zodex::local::{LocalLoginPreferences, LocalPaths};
@@ -644,6 +660,26 @@ mod desktop_preferences_tests {
             parsed.command,
             Commands::Local { command: LocalCommand::AutomaticUpdate }
         ));
+    }
+
+    #[test]
+    fn history_clear_parses_scoped_agent_before_or_after_subcommand() {
+        for args in [
+            ["zodex", "local", "history", "clear", "--agent", "g6rk", "--yes"],
+            ["zodex", "local", "history", "--agent", "g6rk", "clear", "--yes"],
+        ] {
+            let parsed = Cli::try_parse_from(args).expect("scoped history clear must parse");
+            match parsed.command {
+                Commands::Local {
+                    command: LocalCommand::History {
+                        agent: Some(agent),
+                        command: Some(LocalHistoryCommand::Clear { yes: true }),
+                        ..
+                    },
+                } => assert_eq!(agent, "g6rk"),
+                _ => panic!("unexpected scoped history clear parse"),
+            }
+        }
     }
 
     #[test]

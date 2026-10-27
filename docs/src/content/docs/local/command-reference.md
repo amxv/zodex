@@ -217,11 +217,18 @@ zodex local history --format json
 ### Clear history
 
 ```bash
+# Delete just one Agent's durable records (safe with Local running if inactive).
+zodex local history clear --agent k7m2
+zodex local history clear --agent k7m2 --yes
+
+# Delete every Agent's history (Local must be stopped).
 zodex local history clear
 zodex local history clear --yes
 ```
 
-Local must be stopped before clearing history.
+Use `--agent` to remove only that Agent's invocations, output chunks, file evidence, presentations, identity, and provider-specific context. Other Agents' records are preserved. The Agent must have no unfinished invocations or running processes recorded in history. A successful deletion compacts SQLite and truncates its write-ahead log. `--yes` skips the interactive confirmation.
+
+**Without `--agent`, `clear` deletes the entire history database** and requires Local to be stopped. Do not use `--last`, `--since`, `--workdir`, `--id`, or `--raw` with `clear`; these query filters never limit deletion.
 
 ## `zodex local config`
 

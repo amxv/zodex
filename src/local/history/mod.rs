@@ -1,3 +1,4 @@
+mod clear;
 mod event_identity;
 mod events;
 mod file_store;
@@ -14,6 +15,8 @@ mod timeline_cursor;
 mod timeline_polls;
 mod worker;
 
+#[cfg(test)]
+mod clear_tests;
 #[cfg(test)]
 mod first_seen_tests;
 #[cfg(test)]
@@ -33,6 +36,7 @@ mod tests;
 #[cfg(test)]
 mod timeline_tests;
 
+pub use clear::clear_local_agent_history;
 pub use query::{
     HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence, HistoryFormat,
     HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader, LocalRecentActivity,
