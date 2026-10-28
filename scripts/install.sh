@@ -341,6 +341,36 @@ install_operator_binary_atomically() {
   fi
 }
 
+install_mac_keychain_broker_once() {
+  local source="$1"
+  local folder="$2"
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  # Existing installations never replace this file. Its immutable code hash
+  # is why Keychain's one-time approval survives future operator upgrades.
+  [[ -f "${source}" ]] || return 0
+  local installed="${folder}/zodex-keychain-v1"
+  if [[ -e "${installed}" || -L "${installed}" ]]; then
+    [[ -f "${installed}" && ! -L "${installed}" ]] || die "installed Keychain broker must be a regular file"
+    codesign --verify --strict "${installed}" || die "installed Keychain broker signature is invalid"
+    return 0
+  fi
+
+  local staging
+  staging="$(mktemp "${folder}/.zodex-keychain.XXXXXX")"
+  if ! install -m 0700 "${source}" "${staging}" || ! codesign --verify --strict "${staging}"; then
+    /bin/rm -f "${staging}"
+    die "failed to stage signed stable Keychain broker"
+  fi
+  # Atomic link is no-clobber, including simultaneous installers. Never use
+  # `mv -f` for this file: changing its hash would reintroduce login prompts.
+  if ! /bin/ln "${staging}" "${installed}" && [[ ! -f "${installed}" ]]; then
+    /bin/rm -f "${staging}"
+    die "failed to install stable Keychain broker"
+  fi
+  /bin/rm -f "${staging}"
+  codesign --verify --strict "${installed}" || die "installed Keychain broker signature is invalid"
+}
+
 running_zodex_menubar_pids() {
   local app_executable="$1"
   local lock_file
@@ -429,6 +459,11 @@ install_operator_binaries_from_dir() {
     /bin/rm -rf "${app_temporary}" "${app_backup}"
     /bin/cp -R "${src_dir}/Zodex.app" "${app_temporary}" \
       || die "failed to stage Zodex menu bar app"
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    install_mac_keychain_broker_once \
+      "${src_dir}/Zodex.app/Contents/Resources/zodex-keychain-v1" "${install_dir}"
   fi
 
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"

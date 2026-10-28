@@ -491,6 +491,7 @@ eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "$INSTALL_SCRIPT"
 uname() { printf 'Darwin\n'; }
 ensure_local_stopped_before_operator_replace() { :; }
 sign_local_operator_if_configured() { :; }
+install_mac_keychain_broker_once() { :; }
 stop_zodex_menubar_before_replace() { printf 'STOP_MENU:%s\n' "$1"; return 0; }
 relaunch_zodex_menubar_after_upgrade() { printf 'RELAUNCH_MENU:%s:--after-upgrade\n' "$1"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }

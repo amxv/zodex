@@ -88,9 +88,17 @@ jobs:
           ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin zodex
 
+      - name: Give macOS operator a stable signing identifier
+        if: contains(matrix.target, 'apple-darwin')
+        run: |
+          codesign --force --sign - --identifier com.amxv.zodex.local "target/${{ matrix.target }}/release/zodex"
+          codesign --verify --strict "target/${{ matrix.target }}/release/zodex"
+          codesign -dv "target/${{ matrix.target }}/release/zodex" 2>&1 | grep -F 'Identifier=com.amxv.zodex.local'
+
       - name: Build macOS menu bar app
         if: contains(matrix.target, 'apple-darwin')
         run: |
+          cargo build --locked --release --manifest-path apps/keychain-helper/Cargo.toml --target "${{ matrix.target }}"
           apps/menubar/build.sh "target/${{ matrix.target }}/release/Zodex.app"
 
       - name: Build Linux tray helper
@@ -198,6 +206,9 @@ jobs:
 
           test -x "$install_dir/zodex"
           test -x "$install_dir/Zodex.app/Contents/MacOS/zodex-menubar"
+          test -x "$install_dir/zodex-keychain-v1"
+          codesign --verify --strict "$install_dir/zodex-keychain-v1"
+          test "$("$install_dir/zodex-keychain-v1" protocol)" = "1"
           codesign --verify --deep --strict "$install_dir/Zodex.app"
           test ! -e "$install_dir/zodexd"
           test ! -e "$install_dir/zodex-prd"

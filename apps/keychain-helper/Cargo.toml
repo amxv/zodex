@@ -1,0 +1,20 @@
+[package]
+name = "zodex-keychain-v1"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "zodex-keychain-v1"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+nix = { version = "0.31", features = ["process"] }
+security-framework = "3.7"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

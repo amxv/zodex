@@ -5,6 +5,14 @@ use std::fs;
 use std::io::Write as _;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::{
+    env, fs,
+    io::Write as _,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use anyhow::Context as _;
@@ -50,9 +58,6 @@ pub trait RuntimeKeyStore: Send + Sync {
 #[cfg(target_os = "macos")]
 pub struct MacKeychainRuntimeKeyStore;
 
-#[cfg(target_os = "macos")]
-struct MacKeychainPasswordItem(&'static str);
-
 #[cfg(target_os = "windows")]
 pub struct WindowsCredentialRuntimeKeyStore;
 
@@ -71,22 +76,165 @@ impl LinuxFileRuntimeKeyStore {
 }
 
 #[cfg(target_os = "macos")]
-impl MacKeychainRuntimeKeyStore {
-    // The original item was created by ad-hoc-signed binaries on many Macs.
-    // Its ACL continues to reference that old code requirement even after
-    // upgrades start using a stable local signing identity. A fresh item gets
-    // the installed signed operator's requirement at creation time instead.
-    const SERVICE: &'static str = "com.amxv.zodex.local.v2";
-    const LEGACY_SERVICE: &'static str = "com.amxv.zodex.local";
-    const ACCOUNT: &'static str = "openai-tunnel-runtime-key";
-    // Security.framework's documented errSecItemNotFound OSStatus.
-    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25_300;
+const KEYCHAIN_BROKER: &str = "zodex-keychain-v1";
+
+// Never update this broker in place. The login Keychain associates the secret
+// with its *code hash*, not merely with its signer; the broker's stable bytes
+// keep access working through ordinary Zodex releases. Future protocols must
+// use a different filename and an explicit migration.
+#[cfg(target_os = "macos")]
+fn mac_keychain_broker_path() -> Result<PathBuf> {
+    let operator = env::current_exe()?
+        .canonicalize()
+        .context("failed to resolve Zodex executable")?;
+    mac_keychain_broker_path_for(&operator)
+}
+
+#[cfg(target_os = "macos")]
+fn mac_keychain_broker_path_for(operator: &Path) -> Result<PathBuf> {
+    let folder = operator
+        .parent()
+        .context("Zodex executable has no parent directory")?;
+    let installed = folder.join(KEYCHAIN_BROKER);
+
+    if installed.exists() || fs::symlink_metadata(&installed).is_ok() {
+        validate_mac_keychain_broker(&installed)?;
+        return Ok(installed);
+    }
+
+    // Old (<=0.5.26) updaters have an *embedded old installer* that does not
+    // know to install the new broker. They still install the entire menu app,
+    // which carries the bootstrap binary in Contents/Resources. The first
+    // credential access makes a single no-clobber install outside that bundle.
+    let bundled = folder
+        .join("Zodex.app/Contents/Resources")
+        .join(KEYCHAIN_BROKER);
+    validate_mac_keychain_broker(&bundled).context(
+        "Zodex's stable Keychain broker is missing; reinstall Zodex using the official installer",
+    )?;
+    let mut temp = tempfile::NamedTempFile::new_in(folder)?;
+    let mut source = fs::File::open(&bundled)?;
+    std::io::copy(&mut source, &mut temp)?;
+    temp.as_file()
+        .set_permissions(fs::Permissions::from_mode(0o700))?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    validate_mac_keychain_broker(temp.path())?;
+    match temp.persist_noclobber(&installed) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.error).context("failed to install stable Keychain broker"),
+    }
+    validate_mac_keychain_broker(&installed)?;
+    Ok(installed)
+}
+
+#[cfg(target_os = "macos")]
+fn validate_mac_keychain_broker(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("Keychain broker {} is missing", path.display()))?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != unsafe { nix::libc::geteuid() }
+        || metadata.permissions().mode() & 0o111 == 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        bail!(
+            "Keychain broker must be an executable regular file owned by this user, not a link or writable by other users"
+        );
+    }
+    let status = Command::new("/usr/bin/codesign")
+        .arg("--verify")
+        .arg("--strict")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to verify Keychain broker signature")?;
+    if !status.success() {
+        bail!("Keychain broker signature is invalid; refusing to use a modified credential reader");
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod broker_bootstrap_tests {
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt as _, symlink},
+    };
+
+    use super::{KEYCHAIN_BROKER, mac_keychain_broker_path_for};
+
+    #[test]
+    fn legacy_updater_bootstraps_once_and_refuses_symlink_substitution() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("install");
+        let resources = folder.join("Zodex.app/Contents/Resources");
+        fs::create_dir_all(&resources).unwrap();
+        let operator = folder.join("zodex");
+        fs::write(&operator, b"fixture operator").unwrap();
+        let bundled = resources.join(KEYCHAIN_BROKER);
+        // Apple's own binaries serve only as code-signed fixtures; this test
+        // never runs them and never accesses Keychain.
+        fs::copy("/bin/echo", &bundled).unwrap();
+        fs::set_permissions(&bundled, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let broker = mac_keychain_broker_path_for(&operator).unwrap();
+        assert_eq!(broker, folder.join(KEYCHAIN_BROKER));
+        let before = fs::read(&broker).unwrap();
+        assert_eq!(before, fs::read(&bundled).unwrap());
+
+        // Replacing the menu app on upgrade must not replace this approved
+        // broker, even if the bundled binary changes in a future release.
+        fs::copy("/bin/ls", &bundled).unwrap();
+        assert_eq!(mac_keychain_broker_path_for(&operator).unwrap(), broker);
+        assert_eq!(fs::read(&broker).unwrap(), before);
+
+        let bad = temp.path().join("symlink-install");
+        fs::create_dir(&bad).unwrap();
+        fs::write(bad.join("zodex"), b"fixture operator").unwrap();
+        symlink(&broker, bad.join(KEYCHAIN_BROKER)).unwrap();
+        assert!(mac_keychain_broker_path_for(&bad.join("zodex")).is_err());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn mac_keychain_broker_call(action: &str, input: Option<&[u8]>) -> Result<Vec<u8>> {
+    let path = mac_keychain_broker_path()?;
+    let mut child = Command::new(path)
+        .arg(action)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start stable Zodex Keychain broker")?;
+    if let Some(input) = input
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        stdin
+            .write_all(input)
+            .context("failed to send tunnel credential to Keychain broker")?;
+    }
+    let result = child.wait_with_output()?;
+    if !result.status.success() {
+        let detail = String::from_utf8_lossy(&result.stderr);
+        bail!(
+            "Zodex Keychain broker denied {action}: {}",
+            detail.chars().take(400).collect::<String>().trim()
+        );
+    }
+    Ok(result.stdout)
 }
 
 // Keep the legacy item intact until migration succeeds. Do not export the key,
 // change the Keychain ACL to allow all applications, or silently swallow a
 // failed write and keep re-prompting on every startup.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(test)]
 fn get_or_migrate_runtime_key(
     current: &dyn RuntimeKeyStore,
     legacy: &dyn RuntimeKeyStore,
@@ -103,7 +251,7 @@ fn get_or_migrate_runtime_key(
     Ok(Some(key))
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(test)]
 fn delete_current_and_legacy_runtime_keys(
     current: &dyn RuntimeKeyStore,
     legacy: &dyn RuntimeKeyStore,
@@ -118,69 +266,28 @@ fn delete_current_and_legacy_runtime_keys(
 #[cfg(target_os = "macos")]
 impl RuntimeKeyStore for MacKeychainRuntimeKeyStore {
     fn get(&self) -> Result<Option<RuntimeKey>> {
-        get_or_migrate_runtime_key(
-            &MacKeychainPasswordItem(Self::SERVICE),
-            &MacKeychainPasswordItem(Self::LEGACY_SERVICE),
-        )
+        let response = mac_keychain_broker_call("get", None)?;
+        if response == b"0\n" {
+            return Ok(None);
+        }
+        let value = response
+            .strip_prefix(b"1\n")
+            .context("Keychain broker returned an invalid credential response")?;
+        Ok(Some(RuntimeKey::new(String::from_utf8(value.to_vec())?)?))
     }
 
     fn set(&self, key: &RuntimeKey) -> Result<()> {
-        MacKeychainPasswordItem(Self::SERVICE).set(key)
+        if mac_keychain_broker_call("set", Some(key.expose().as_bytes()))? != b"ok\n" {
+            bail!("Keychain broker returned an invalid storage acknowledgement");
+        }
+        Ok(())
     }
 
     fn delete(&self) -> Result<()> {
-        delete_current_and_legacy_runtime_keys(
-            &MacKeychainPasswordItem(Self::SERVICE),
-            &MacKeychainPasswordItem(Self::LEGACY_SERVICE),
-        )
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl RuntimeKeyStore for MacKeychainPasswordItem {
-    fn get(&self) -> Result<Option<RuntimeKey>> {
-        use security_framework::passwords::{PasswordOptions, generic_password};
-
-        match generic_password(PasswordOptions::new_generic_password(
-            self.0,
-            MacKeychainRuntimeKeyStore::ACCOUNT,
-        )) {
-            Ok(bytes) => {
-                let value = String::from_utf8(bytes)
-                    .context("stored OpenAI tunnel runtime key is not valid UTF-8")?;
-                Ok(Some(RuntimeKey::new(value)?))
-            }
-            Err(error) if error.code() == MacKeychainRuntimeKeyStore::ERR_SEC_ITEM_NOT_FOUND => {
-                Ok(None)
-            }
-            Err(error) => {
-                Err(error).context("failed to read OpenAI tunnel runtime key from Keychain")
-            }
+        if mac_keychain_broker_call("delete", None)? != b"ok\n" {
+            bail!("Keychain broker returned an invalid delete acknowledgement");
         }
-    }
-
-    fn set(&self, key: &RuntimeKey) -> Result<()> {
-        security_framework::passwords::set_generic_password(
-            self.0,
-            MacKeychainRuntimeKeyStore::ACCOUNT,
-            key.expose().as_bytes(),
-        )
-        .context("failed to store OpenAI tunnel runtime key in Keychain")
-    }
-
-    fn delete(&self) -> Result<()> {
-        match security_framework::passwords::delete_generic_password(
-            self.0,
-            MacKeychainRuntimeKeyStore::ACCOUNT,
-        ) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == MacKeychainRuntimeKeyStore::ERR_SEC_ITEM_NOT_FOUND => {
-                Ok(())
-            }
-            Err(error) => {
-                Err(error).context("failed to remove OpenAI tunnel runtime key from Keychain")
-            }
-        }
+        Ok(())
     }
 }
 

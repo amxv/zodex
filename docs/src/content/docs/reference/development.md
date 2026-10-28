@@ -29,13 +29,15 @@ The tests cover binary manifests, CLI behavior, GitHub App scripts, install beha
 
 ## Stable Keychain access for source builds
 
-macOS Keychain tracks the code signature of the program that reads the Local tunnel key. A newly compiled ad-hoc binary has a new identity and therefore prompts again. Maintainers who repeatedly install source builds can create a stable, machine-local signing identity once:
+Since v0.5.27, Zodex uses a **separate `zodex-keychain-v1` credential broker** on macOS. It is installed once beside `zodex` and kept unchanged during ordinary upgrades, preventing Keychain approvals tied to changing executable code hashes. The broker validates that its immediate parent is the signed `zodex` executable in the same installation directory. Official release operators carry the stable identifier `com.amxv.zodex.local` with ad-hoc signing, without requiring an Apple Developer account.
+
+For local source builds, maintainers can also create a stable, machine-local signing identity once:
 
 ```bash
 bash scripts/setup-local-codesigning.sh
 ```
 
-macOS asks for one-time approval to trust that identity for code signing. Afterward, `scripts/install.sh` automatically signs ad-hoc local operator builds with `Zodex Local Development`. Release binaries that already have a stable signature are left unchanged. Set `ZODEX_CODESIGN_IDENTITY` to another available identity, or to `-` to disable local signing explicitly.
+macOS asks for one-time approval to trust that identity for code signing. Afterward, `scripts/install.sh` automatically signs ad-hoc local operator builds with `Zodex Local Development` and the required Zodex identifier. Set `ZODEX_CODESIGN_IDENTITY` to another available identity, or to `-` to disable local signing explicitly. Without a local signing certificate, official releases still work with the stable Keychain broker.
 
 The signing private key remains in the user's login Keychain. The tunnel runtime key remains a separate Keychain item and is never exported by this setup.
 

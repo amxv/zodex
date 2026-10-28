@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.27 - 2026-10-29
+
+- Fixed repeated macOS login-Keychain password prompts after Zodex upgrades. A minimal, separately signed **`zodex-keychain-v1` broker** now reads/writes the tunnel credential on behalf of a validated, running installed Zodex operator. The broker is installed only once and never replaced by normal upgrades; Keychain approval therefore stays associated with a stable binary hash.
+- Preserved existing credentials in Keychain (`com.amxv.zodex.local.v2`, with legacy fallback), without exporting, resetting, or weakening their Keychain ACLs. The first broker access to an existing item may require **one final Always Allow** approval. The helper rejects direct calls by unrelated processes and never exposes the key in command arguments, logs, or on disk.
+- Made the transition work with older operator updaters by bundling the bootstrap helper inside the menu-bar app, and made new installers stage it atomically without overwriting an existing copy. macOS release operators now have the stable code-signing identifier `com.amxv.zodex.local` even without an Apple Developer account. The existing checksum-verified shell/tar installer avoids Gatekeeper quarantine in the usual installation path; manually downloaded apps can still be quarantined.
+- Added macOS regression coverage showing that two differently signed operator binaries can access the same unchanged helper, while unrelated programs are rejected before accessing Keychain.
+
 ## 0.5.26 - 2026-10-27
 
 - Added one-line image-verification guidance directly after the Local `set_agent_alias` hint. Agents are told that Zodex MCP tools cannot display images, to disclose unverified visuals rather than attempting base64, and to use text-based alternatives such as `agent-browser` where appropriate. The instruction is injected once per conversation, including when optional context is disabled.
