@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::super::observer_client::LocalObserverClient;
-use super::super::{LocalLoginPreferences, LocalPaths};
+use super::super::{LocalConfig, LocalLoginPreferences, LocalPaths};
 use super::assets;
 use super::bridge::LiveboardObserverBridge;
 use super::editor::launch_editor;
@@ -40,6 +40,7 @@ struct LiveboardState {
 struct SecurityState {
     expected_host: HeaderValue,
     expected_origin: HeaderValue,
+    trusted_origins: Vec<(HeaderValue, HeaderValue)>,
 }
 
 pub(crate) struct LocalLiveboardHost {
@@ -132,6 +133,25 @@ pub(crate) async fn start_liveboard_host_with_preferences(
     let origin = format!("http://{addr}");
     let expected_origin = HeaderValue::from_str(&origin)
         .context("Liveboard listener address was not a valid Origin header")?;
+    let config = LocalConfig::load(&paths.config_file())?;
+    let trusted_origins = config
+        .liveboard
+        .trusted_origins
+        .iter()
+        .map(|origin| {
+            let parsed = super::super::config::parse_trusted_liveboard_origin(origin)?;
+            // The configured URL is a canonical HTTPS origin. Its authority
+            // is the matching Host header (including any non-default port).
+            let host = parsed.origin().ascii_serialization();
+            let authority = host
+                .strip_prefix("https://")
+                .context("trusted Liveboard origin must use HTTPS")?;
+            Ok((
+                HeaderValue::from_str(authority).context("invalid trusted Liveboard Host")?,
+                HeaderValue::from_str(origin).context("invalid trusted Liveboard Origin")?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let app = build_router(
         &capability,
         Arc::new(LiveboardState {
@@ -142,6 +162,7 @@ pub(crate) async fn start_liveboard_host_with_preferences(
         SecurityState {
             expected_host,
             expected_origin,
+            trusted_origins,
         },
     );
     let cancellation = CancellationToken::new();
@@ -439,14 +460,24 @@ async fn security_boundary(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.headers().get(header::HOST) != Some(&security.expected_host) {
+    let host = request.headers().get(header::HOST);
+    let allowed_origin = if host == Some(&security.expected_host) {
+        Some(&security.expected_origin)
+    } else {
+        security
+            .trusted_origins
+            .iter()
+            .find(|(trusted_host, _)| host == Some(trusted_host))
+            .map(|(_, trusted_origin)| trusted_origin)
+    };
+    let Some(allowed_origin) = allowed_origin else {
         return security_headers(error_response(
             StatusCode::MISDIRECTED_REQUEST,
             "invalid Liveboard Host header",
         ));
-    }
+    };
     if let Some(origin) = request.headers().get(header::ORIGIN)
-        && origin != security.expected_origin
+        && origin != allowed_origin
     {
         return security_headers(error_response(
             StatusCode::FORBIDDEN,

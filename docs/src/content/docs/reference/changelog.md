@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.28 - 2026-10-31
+
+- Added opt-in `[liveboard].trusted_origins` to Zodex Local for displaying Liveboard behind an authenticated HTTPS reverse proxy without a separate Host/Origin-rewriting process. The CLI supports `zodex local config set liveboard.trusted-origins '["https://liveboard.example.com"]'` while Local is stopped.
+- Preserved the default loopback-only Host/Origin security boundary and private observability bearer. Configured origins must be exact HTTPS origins; Host and Origin must match the same allowlisted pair, while mismatches and unexpected hosts remain rejected. Added positive and negative regression coverage, including browser JavaScript assets and reverse-proxy requests.
+
 ## 0.5.27 - 2026-10-29
 
 - Fixed repeated macOS login-Keychain password prompts after Zodex upgrades. A minimal, separately signed **`zodex-keychain-v1` broker** now reads/writes the tunnel credential on behalf of a validated, running installed Zodex operator. The broker is installed only once and never replaced by normal upgrades; Keychain approval therefore stays associated with a stable binary hash.

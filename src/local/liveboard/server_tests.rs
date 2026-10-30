@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use crate::invocation::{InvocationContext, InvocationEvidenceRecorder, InvocationStart};
 use crate::local::observer_client::LocalObserverClient;
 use crate::local::{
-    LOCAL_DISCOVERY_SCHEMA_VERSION, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
+    LOCAL_DISCOVERY_SCHEMA_VERSION, LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
     LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery,
     start_local_observability_server, write_runtime_discovery,
 };
@@ -406,6 +406,152 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     );
 
     host.shutdown().await.unwrap();
+    observer.shutdown().await;
+}
+
+#[tokio::test]
+async fn trusted_https_origin_accepts_matching_browser_requests_without_weakening_localhost() {
+    if assets::ensure_available().is_err() {
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let observer = ObserverFixture::start(dir.path(), "runtime-trusted-origin").await;
+    let mut config = LocalConfig::default();
+    config.liveboard.trusted_origins = vec![
+        "https://liveboard.ashray.xyz".into(),
+        "https://viewer.example.com:8443".into(),
+    ];
+    config.save(&observer.paths.config_file()).unwrap();
+    let host = start_liveboard_host(&observer.paths, observer.client())
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let public_host = "liveboard.ashray.xyz";
+    let public_origin = "https://liveboard.ashray.xyz";
+
+    let index = client
+        .get(host.url())
+        .header("host", public_host)
+        .header("origin", public_origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(index.status(), StatusCode::OK);
+    assert!(index.text().await.unwrap().contains("Zodex Liveboard"));
+    let script = assets::all()
+        .iter()
+        .find(|asset| asset.path.ends_with(".js") && asset.path.starts_with("assets/"))
+        .unwrap();
+    let asset = client
+        .get(capability_url(host.private_url(), script.path))
+        .header("host", public_host)
+        .header("origin", public_origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset.status(), StatusCode::OK);
+
+    let status_url = capability_url(host.private_url(), "api/status");
+    let status = client
+        .get(&status_url)
+        .header("host", public_host)
+        .header("origin", public_origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let updated = client
+        .patch(capability_url(host.private_url(), "preferences"))
+        .header("host", public_host)
+        .header("origin", public_origin)
+        .json(&json!({ "theme": "dark" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+
+    let alternate = client
+        .get(&status_url)
+        .header("host", "viewer.example.com:8443")
+        .header("origin", "https://viewer.example.com:8443")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(alternate.status(), StatusCode::OK);
+
+    // Trust binds one hostname to exactly one browser origin; it does not
+    // permit arbitrary CORS, mismatched hosts, or cross-origin writes.
+    for (request_host, request_origin, expected) in [
+        (public_host, "https://evil.example", StatusCode::FORBIDDEN),
+        (
+            public_host,
+            "https://viewer.example.com:8443",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "127.0.0.1:1",
+            public_origin,
+            StatusCode::MISDIRECTED_REQUEST,
+        ),
+        (
+            "viewer.example.com:8443",
+            public_origin,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "127.0.0.1:1",
+            "http://127.0.0.1:1",
+            StatusCode::MISDIRECTED_REQUEST,
+        ),
+        (
+            "127.0.0.1:1",
+            "https://evil.example",
+            StatusCode::MISDIRECTED_REQUEST,
+        ),
+    ] {
+        let response = client
+            .get(&status_url)
+            .header("host", request_host)
+            .header("origin", request_origin)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "Host={request_host:?} Origin={request_origin:?}"
+        );
+    }
+    let wrong_origin_for_loopback = client
+        .get(&status_url)
+        .header("origin", public_origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_origin_for_loopback.status(), StatusCode::FORBIDDEN);
+    let local = client.get(&status_url).send().await.unwrap();
+    assert_eq!(local.status(), StatusCode::OK);
+    assert!(local.headers().get("access-control-allow-origin").is_none());
+
+    host.shutdown().await.unwrap();
+    observer.shutdown().await;
+}
+
+#[tokio::test]
+async fn invalid_trusted_origin_config_fails_closed_before_starting_liveboard() {
+    if assets::ensure_available().is_err() {
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let observer = ObserverFixture::start(dir.path(), "runtime-invalid-origin").await;
+    std::fs::create_dir_all(observer.paths.config_file().parent().unwrap()).unwrap();
+    std::fs::write(
+        observer.paths.config_file(),
+        "[liveboard]\ntrusted_origins = [\"https://evil.example/path\"]\n",
+    )
+    .unwrap();
+    let result = start_liveboard_host(&observer.paths, observer.client()).await;
+    assert!(result.is_err());
     observer.shutdown().await;
 }
 

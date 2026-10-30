@@ -38,7 +38,7 @@ mod setup_tests;
 
 pub use config::{
     LocalConfig, LocalContextConfig, LocalContextSkillsConfig, LocalHistoryConfig,
-    LocalTunnelConfig, ManagedTunnelClientRelease,
+    LocalLiveboardConfig, LocalTunnelConfig, ManagedTunnelClientRelease,
 };
 pub use environment_handoff::{consume_environment_handoff, write_environment_handoff};
 pub use history::{

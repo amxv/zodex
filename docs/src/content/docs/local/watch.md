@@ -152,6 +152,8 @@ Instead, the Local runtime owns a separate loopback **same-origin capability hos
 
 The browser-visible root defaults to the stable `http://127.0.0.1:64973/` address, or the port you configured. A random per-run capability path is injected into the page internally for asset and API requests, so it does not need to appear in the address bar or copied Liveboard links.
 
+If you need Liveboard through an authenticated HTTPS reverse proxy, you can opt in to an exact `[liveboard].trusted_origins` allowlist. Unconfigured origins remain rejected; the loopback listener and private observer bearer are unchanged. See [Liveboard behind an authenticated reverse proxy](/docs/local/configuration#liveboard-behind-an-authenticated-reverse-proxy). Trusted origins do not replace Cloudflare Access or other external authentication.
+
 ## Build another viewer
 
 Liveboard and the TUI are two presentations of the same Local evidence model. A custom Swift app, menu-bar tool, editor panel, terminal UI, or automation client can use the public API directly.

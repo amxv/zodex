@@ -33,7 +33,7 @@ zodex local config set context.repo-skills false
 zodex local config set context.skills.codex false
 ```
 
-History and tunnel settings still require Local to be stopped:
+Liveboard trusted origins, history, and tunnel settings still require Local to be stopped:
 
 ```bash
 zodex local stop
@@ -44,6 +44,28 @@ zodex local config set history.max-size 1gb
 If you try to change a non-context setting while Local is active, Zodex tells you to stop it first rather than creating a “current runtime versus next runtime” split.
 
 `context.*` changes apply to future eligible results immediately. One-time context that has already been delivered, or a workdir check that has already been consumed, is not replayed just because you change a setting later.
+
+## Liveboard behind an authenticated reverse proxy
+
+By default, Liveboard accepts requests only for its own `http://127.0.0.1:<port>` Host/Origin pair. This helps protect local files, commands, and activity against DNS rebinding and cross-origin browser requests.
+
+If you intentionally expose Liveboard through **HTTPS plus independent authentication** (for example Cloudflare Access), you can allow specific browser origins. Stop Local, then add this to `~/.config/zodex/local.toml`:
+
+```toml
+[liveboard]
+trusted_origins = ["https://liveboard.ashray.xyz"]
+```
+
+Or set the same value using the CLI while Local is stopped:
+
+```bash
+zodex local config set liveboard.trusted-origins '["https://liveboard.ashray.xyz"]'
+zodex local config get liveboard.trusted-origins
+```
+
+Restart Local after changing this setting. Configure your trusted tunnel or reverse proxy to forward the **public Host and Origin headers unchanged** to the existing loopback Liveboard listener (default `127.0.0.1:64973`). There is no need for a separate Host/Origin-rewriting proxy. URLs must be exact canonical HTTPS origins, optionally with an explicit non-default port; HTTP, wildcard hosts, credentials, paths, queries, and fragments are rejected.
+
+Each configured Host is matched with only its corresponding Origin. Unexpected hosts and mismatched origins still fail; the local loopback behavior remains unchanged. **This setting is not authentication.** Keep the upstream HTTPS authentication and access policy enabled, do not forward arbitrary clients around that protection, and never bind the Liveboard listener to a public interface. The observer bearer remains private to the native runtime.
 
 ## Automatic Codex-style context
 

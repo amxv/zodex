@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
@@ -16,6 +17,33 @@ pub struct LocalConfig {
     pub tunnel: LocalTunnelConfig,
     pub history: LocalHistoryConfig,
     pub context: LocalContextConfig,
+    pub liveboard: LocalLiveboardConfig,
+}
+
+/// Explicitly trusted HTTPS browser origins for a Liveboard behind a reverse proxy.
+/// Without any entries, the Liveboard only accepts its own loopback Host/Origin.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct LocalLiveboardConfig {
+    pub trusted_origins: Vec<String>,
+}
+
+pub(crate) fn parse_trusted_liveboard_origin(value: &str) -> Result<Url> {
+    let parsed = Url::parse(value).with_context(|| {
+        format!("invalid liveboard.trusted_origins entry {value:?}: expected an HTTPS origin")
+    })?;
+    // The canonical serialized origin has no path, query, fragment, userinfo,
+    // or wildcards. Requiring an exact match prevents ambiguous host matching.
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none_or(|host| host.contains('*'))
+        || parsed.port() == Some(0)
+        || parsed.origin().ascii_serialization() != value
+    {
+        bail!(
+            "invalid liveboard.trusted_origins entry {value:?}: use an exact HTTPS origin such as https://liveboard.example.com (no path, wildcard, or credentials)"
+        );
+    }
+    Ok(parsed)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,6 +188,9 @@ impl LocalConfig {
             "context.skills.agents" => self.context.skills.agents = parse_bool(value)?,
             "context.skills.codex" => self.context.skills.codex = parse_bool(value)?,
             "context.skills.paths" => self.context.skills.paths = parse_paths(value)?,
+            "liveboard.trusted-origins" => {
+                self.liveboard.trusted_origins = parse_trusted_origins(value)?
+            }
             "tunnel.id" => {
                 let value = value.trim();
                 super::validate_tunnel_id(value)?;
@@ -190,6 +221,7 @@ impl LocalConfig {
             "context.skills.agents" => Ok(self.context.skills.agents.to_string()),
             "context.skills.codex" => Ok(self.context.skills.codex.to_string()),
             "context.skills.paths" => Ok(render_paths(&self.context.skills.paths)),
+            "liveboard.trusted-origins" => Ok(render_strings(&self.liveboard.trusted_origins)),
             "tunnel.id" => Ok(self
                 .tunnel
                 .id
@@ -214,6 +246,9 @@ impl LocalConfig {
                     path.display()
                 );
             }
+        }
+        for origin in &self.liveboard.trusted_origins {
+            parse_trusted_liveboard_origin(origin)?;
         }
         Ok(())
     }
@@ -266,6 +301,30 @@ fn render_paths(paths: &[PathBuf]) -> String {
     .to_string()
 }
 
+fn parse_trusted_origins(value: &str) -> Result<Vec<String>> {
+    let source = format!("origins = {}", value.trim());
+    let parsed: toml::Value = toml::from_str(&source)
+        .context("liveboard.trusted-origins must be a TOML array of HTTPS origin strings")?;
+    let entries = parsed
+        .get("origins")
+        .and_then(toml::Value::as_array)
+        .context("liveboard.trusted-origins must be a TOML array of HTTPS origin strings")?;
+    entries
+        .iter()
+        .map(|entry| {
+            let origin = entry
+                .as_str()
+                .context("liveboard.trusted-origins entries must be strings")?;
+            parse_trusted_liveboard_origin(origin)?;
+            Ok(origin.to_owned())
+        })
+        .collect()
+}
+
+fn render_strings(strings: &[String]) -> String {
+    toml::Value::Array(strings.iter().cloned().map(toml::Value::String).collect()).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -287,6 +346,7 @@ mod tests {
         assert_eq!(config.get("context.skills.agents").unwrap(), "true");
         assert_eq!(config.get("context.skills.codex").unwrap(), "true");
         assert_eq!(config.get("context.skills.paths").unwrap(), "[]");
+        assert_eq!(config.get("liveboard.trusted-origins").unwrap(), "[]");
         assert!(!config.is_provider_configured());
 
         config.set("history.max-age", "2d").unwrap();
@@ -301,6 +361,12 @@ mod tests {
             .unwrap();
         config
             .set("tunnel.id", "tunnel_0123456789abcdef0123456789abcdef")
+            .unwrap();
+        config
+            .set(
+                "liveboard.trusted-origins",
+                r#"["https://liveboard.ashray.xyz", "https://example.com:8443"]"#,
+            )
             .unwrap();
         config.tunnel.client_path = Some(dir.path().join("tunnel-client"));
         config.tunnel.release = Some(super::ManagedTunnelClientRelease {
@@ -320,6 +386,8 @@ mod tests {
         assert!(raw.contains("repo_agents = false"));
         assert!(raw.contains("repo_skills = false"));
         assert!(raw.contains("/opt/team-skills"));
+        assert!(raw.contains("[liveboard]"));
+        assert!(raw.contains("https://liveboard.ashray.xyz"));
         assert!(!raw.contains("api_key"));
         assert!(!raw.contains("runtime_key"));
         assert!(config.is_provider_configured());
@@ -341,6 +409,20 @@ mod tests {
                 .is_err()
         );
         assert!(config.set("secret.api-key", "do-not-store").is_err());
+        assert!(config.set("liveboard.trusted-origins", "hello").is_err());
+        assert!(
+            config
+                .set("liveboard.trusted-origins", r#"["http://example.com"]"#)
+                .is_err()
+        );
+        assert!(
+            config
+                .set(
+                    "liveboard.trusted-origins",
+                    r#"["https://example.com/path"]"#
+                )
+                .is_err()
+        );
 
         let parsed = toml::from_str::<LocalConfig>(
             "[history]\nmax_age = \"60d\"\nmax_size = \"500mb\"\nsecret = \"nope\"\n",
@@ -355,6 +437,45 @@ mod tests {
         )
         .unwrap();
         assert!(config.context.repo_skills);
+        assert!(config.liveboard.trusted_origins.is_empty());
+    }
+
+    #[test]
+    fn trusted_liveboard_origins_accept_exact_https_only() {
+        for valid in [
+            "https://liveboard.ashray.xyz",
+            "https://example.com:8443",
+            "https://[2001:db8::1]:8443",
+        ] {
+            super::parse_trusted_liveboard_origin(valid).unwrap();
+        }
+        for invalid in [
+            "",
+            "http://liveboard.ashray.xyz",
+            "https://example.com/",
+            "https://example.com/path",
+            "https://example.com?query=1",
+            "https://example.com#fragment",
+            "https://user:password@example.com",
+            "https://*.example.com",
+            "https://example.com:443",
+            "HTTPS://example.com",
+            "https://example.com,https://other.com",
+            "https://example.com:0",
+            "https://example.com ",
+        ] {
+            assert!(
+                super::parse_trusted_liveboard_origin(invalid).is_err(),
+                "unexpectedly allowed {invalid:?}"
+            );
+        }
+        let raw = "[liveboard]\ntrusted_origins = [\"https://example.com\", \"http://insecure.example\"]\n";
+        let config: LocalConfig = toml::from_str(raw).unwrap();
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.toml");
+        std::fs::write(&path, raw).unwrap();
+        assert!(LocalConfig::load(&path).is_err());
+        assert!(config.save(&path).is_err());
     }
 
     #[test]
@@ -371,7 +492,12 @@ mod tests {
         ] {
             assert!(LocalConfig::can_set_while_running(key), "{key}");
         }
-        for key in ["history.max-age", "history.max-size", "tunnel.id"] {
+        for key in [
+            "history.max-age",
+            "history.max-size",
+            "tunnel.id",
+            "liveboard.trusted-origins",
+        ] {
             assert!(!LocalConfig::can_set_while_running(key), "{key}");
         }
     }
