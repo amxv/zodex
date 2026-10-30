@@ -37,7 +37,7 @@ docs/src/content/docs/**/*.md        documentation pages
 docs/src/styles/global.css           visual system
 docs/src/styles/landing.css          landing-page style entrypoint
 docs/src/styles/landing/*.css        semantic landing-page style sections
-docs/scripts/should-build.mjs        Vercel affected-path decision
+docs/scripts/deployment.test.mjs     deployment workflow guardrails
 ```
 
 Use `docs/src/content/docs` for most documentation changes. Use `docs/src/pages/index.astro` for the overview narrative and product positioning.
@@ -84,4 +84,6 @@ dist
 
 When the docs site is deployed behind a custom domain, keep the repository link pointed at `https://github.com/amxv/zodex`.
 
-The Vercel project root is `docs/`, but the published `/install.sh` and `/install.ps1` routes read the canonical repository-level `scripts/install.sh` and `scripts/install.ps1`. Vercel outside-root source access must remain enabled. Automatic production deploys should run when `docs/**` or either installer changes and skip unrelated repository-only changes.
+The Vercel project root is `docs/`, but the published `/install.sh` and `/install.ps1` routes read the canonical repository-level `scripts/install.sh` and `scripts/install.ps1`. Vercel outside-root source access must remain enabled.
+
+The [Docs GitHub Actions workflow](https://github.com/amxv/zodex/blob/main/.github/workflows/docs.yml) deploys production on `main` and publishes a Preview URL on same-repository pull requests, **only when site source, build inputs, or either installer changes**. Changes to Rust dependencies, application code, and unrelated CI workflows do not request a Vercel deployment. Automatic Vercel Git deployments are disabled; GitHub Actions owns the deployment decision.
