@@ -6,19 +6,34 @@ on:
       - main
     paths:
       - .github/workflows/docs.yml
-      - docs/**
+      - docs/src/**
+      - docs/public/**
+      - docs/package.json
+      - docs/bun.lock
+      - docs/astro.config.mjs
+      - docs/tsconfig.json
+      - docs/vercel.json
       - scripts/install.sh
+      - scripts/install.ps1
   pull_request:
     branches:
       - main
     paths:
       - .github/workflows/docs.yml
-      - docs/**
+      - docs/src/**
+      - docs/public/**
+      - docs/package.json
+      - docs/bun.lock
+      - docs/astro.config.mjs
+      - docs/tsconfig.json
+      - docs/vercel.json
       - scripts/install.sh
+      - scripts/install.ps1
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: docs-${{ github.workflow }}-${{ github.ref }}
@@ -53,3 +68,49 @@ jobs:
 
       - name: Verify published installer
         run: cmp scripts/install.sh docs/dist/install.sh
+
+  deploy:
+    name: Deploy docs only when docs or installers change
+    needs: validate
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Deploy docs to Vercel
+        id: deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+          flags=()
+          if [ "$EVENT_NAME" != 'pull_request' ]; then flags+=(--prod); fi
+          url="$(npx --yes vercel@65.1.0 deploy --yes --non-interactive "${flags[@]}" --token "$VERCEL_TOKEN")"
+          printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+          printf 'Docs deployment: %s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish preview URL on pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.deployment.outputs.url }}
+        with:
+          script: |
+            const marker = '<!-- zodex-docs-preview -->';
+            const body = `${marker}\nDocs preview: ${process.env.PREVIEW_URL}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
