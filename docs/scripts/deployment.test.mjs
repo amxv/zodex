@@ -17,6 +17,7 @@ test('docs and both published installers are the only deployment triggers', () =
       assert.ok(block.includes(`- ${entry}`), `${event} must include ${entry}`)
     }
     assert.doesNotMatch(block, /Cargo\.lock|crates\/|apps\//)
+    assert.doesNotMatch(block, /\.github\/workflows\//)
   }
   assert.match(workflow, /needs: validate/)
   assert.match(workflow, /vercel@65\.1\.0 deploy/)
