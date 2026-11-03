@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.5.29 - 2026-11-03
+
+- Expanded Liveboard's lazy-loaded diff syntax highlighter from 9 to 19 grammars: Markdown, YAML, HTML/XML, SQL, Java, C++, Kotlin, Swift, Dockerfile, and Diff. Includes common filename extensions and extensionless `Dockerfile`/`Containerfile` variants.
+- Preserved the existing off-main-thread worker, per-line highlighting, bounded cache, and plain-text fallback for unsupported files. The expanded production worker is approximately 93 KB minified (30.5 KB gzipped), loaded only when a file diff is expanded.
+
 ## 0.5.28 - 2026-10-31
 
 - Added opt-in `[liveboard].trusted_origins` to Zodex Local for displaying Liveboard behind an authenticated HTTPS reverse proxy without a separate Host/Origin-rewriting process. The CLI supports `zodex local config set liveboard.trusted-origins '["https://liveboard.example.com"]'` while Local is stopped.

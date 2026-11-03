@@ -20,7 +20,30 @@ describe('diff language mapping', () => {
     expect(resolveDiffSyntaxLanguage('tsconfig.jsonc')).toBe('json')
     expect(resolveDiffSyntaxLanguage('Cargo.toml')).toBe('ini')
     expect(resolveDiffSyntaxLanguage('.config/app.ini')).toBe('ini')
-    expect(resolveDiffSyntaxLanguage('README.md')).toBeNull()
+    expect(resolveDiffSyntaxLanguage('README.md')).toBe('markdown')
+    expect(resolveDiffSyntaxLanguage('docs/intro.mdx')).toBe('markdown')
+    expect(resolveDiffSyntaxLanguage('config/app.yaml')).toBe('yaml')
+    expect(resolveDiffSyntaxLanguage('.github/workflows/ci.yml')).toBe('yaml')
+    expect(resolveDiffSyntaxLanguage('index.html')).toBe('xml')
+    expect(resolveDiffSyntaxLanguage('icons/logo.svg')).toBe('xml')
+    expect(resolveDiffSyntaxLanguage('schema.xml')).toBe('xml')
+    expect(resolveDiffSyntaxLanguage('db/query.sql')).toBe('sql')
+    expect(resolveDiffSyntaxLanguage('db/query.psql')).toBe('sql')
+    expect(resolveDiffSyntaxLanguage('src/Main.java')).toBe('java')
+    expect(resolveDiffSyntaxLanguage('include/main.hpp')).toBe('cpp')
+    expect(resolveDiffSyntaxLanguage('src/main.cpp')).toBe('cpp')
+    expect(resolveDiffSyntaxLanguage('src/main.cc')).toBe('cpp')
+    expect(resolveDiffSyntaxLanguage('src/Main.kt')).toBe('kotlin')
+    expect(resolveDiffSyntaxLanguage('build.gradle.kts')).toBe('kotlin')
+    expect(resolveDiffSyntaxLanguage('src/App.swift')).toBe('swift')
+    expect(resolveDiffSyntaxLanguage('Dockerfile')).toBe('dockerfile')
+    expect(resolveDiffSyntaxLanguage('docker/Dockerfile.release')).toBe('dockerfile')
+    expect(resolveDiffSyntaxLanguage('Containerfile')).toBe('dockerfile')
+    expect(resolveDiffSyntaxLanguage('Containerfile.dev')).toBe('dockerfile')
+    expect(resolveDiffSyntaxLanguage('images/base.dockerfile')).toBe('dockerfile')
+    expect(resolveDiffSyntaxLanguage('fix.patch')).toBe('diff')
+    expect(resolveDiffSyntaxLanguage('src/changes.diff')).toBe('diff')
+    expect(resolveDiffSyntaxLanguage('Makefile')).toBeNull()
     expect(EAGER_DIFF_LANGUAGES).toEqual([
       'rust',
       'typescript',
@@ -31,6 +54,16 @@ describe('diff language mapping', () => {
       'css',
       'json',
       'ini',
+      'markdown',
+      'yaml',
+      'xml',
+      'sql',
+      'java',
+      'cpp',
+      'kotlin',
+      'swift',
+      'dockerfile',
+      'diff',
     ])
   })
 })

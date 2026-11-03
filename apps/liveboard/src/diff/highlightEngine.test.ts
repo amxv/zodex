@@ -16,6 +16,16 @@ describe('diff highlight engine', () => {
       ['css', '.button { display: grid; }'],
       ['json', '{"enabled": true}'],
       ['ini', 'edition = "2024"'],
+      ['markdown', '## Heading'],
+      ['yaml', 'name: zodex'],
+      ['xml', '<main class="app">'],
+      ['sql', 'SELECT * FROM users;'],
+      ['java', 'public class Main {}'],
+      ['cpp', '#include <iostream>'],
+      ['kotlin', 'fun main() {}'],
+      ['swift', 'let value: String = "hello"'],
+      ['dockerfile', 'FROM alpine:3.20'],
+      ['diff', '@@ -1,2 +1,3 @@'],
     ]
     expect(engine.languages()).toHaveLength(fixtures.length)
     for (const [language, text] of fixtures) {

@@ -16,8 +16,19 @@ describe('eager diff highlight worker', () => {
       ['go', 'package main'],
       ['bash', 'echo "$HOME"'],
       ['python', 'def value():'],
+      ['css', '.button { display: grid; }'],
       ['json', '{"value": 1}'],
       ['ini', 'edition = "2024"'],
+      ['markdown', '## Heading'],
+      ['yaml', 'name: zodex'],
+      ['xml', '<main class="app">'],
+      ['sql', 'SELECT * FROM users;'],
+      ['java', 'public class Main {}'],
+      ['cpp', '#include <iostream>'],
+      ['kotlin', 'fun main() {}'],
+      ['swift', 'let value: String = "hello"'],
+      ['dockerfile', 'FROM alpine:3.20'],
+      ['diff', '@@ -1,2 +1,3 @@'],
     ]
     for (const [language, text] of fixtures) {
       const result = await highlighter.highlight({

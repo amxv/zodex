@@ -277,7 +277,7 @@ describe('file change cards', () => {
     ])
     const container = mount(() => value, stream, highlighter)
 
-    await vi.waitFor(() => expect(highlighter.calls).toHaveLength(3))
+    await vi.waitFor(() => expect(highlighter.calls).toHaveLength(4))
     expect(container.textContent).toContain('Edited')
     expect(container.textContent).toContain('Added')
     expect(container.textContent).toContain('Deleted')
@@ -295,16 +295,17 @@ describe('file change cards', () => {
     expect(highlighter.calls[0]?.language).toBe('rust')
     expect(highlighter.calls[0]?.rows).toHaveLength(3)
     expect(highlighter.calls[1]?.language).toBe('typescript')
-    expect(highlighter.calls[2]?.language).toBe('ini')
+    expect(highlighter.calls[2]?.language).toBe('markdown')
+    expect(highlighter.calls[3]?.language).toBe('ini')
     expect(container.querySelector('.diff-source-highlight .hljs-keyword')).not.toBeNull()
     expect(
       container.querySelector(
         '[data-diff-key="inv-40:file-change:2"] .diff-source-highlight',
       ),
-    ).toBeNull()
+    ).not.toBeNull()
     expect(
       container.querySelector(
-        '[data-diff-key="inv-40:file-change:2"] .diff-source-plain',
+        '[data-diff-key="inv-40:file-change:2"] .diff-source-highlight',
       )?.textContent,
     ).toBe('source')
 
@@ -322,7 +323,7 @@ describe('file change cards', () => {
     expect(container.querySelectorAll('[data-diff-row-kind]')).toHaveLength(0)
     stream.setDiffExpansionDefault(true)
     await vi.waitFor(() => expect(container.querySelectorAll('[data-diff-row-kind]')).toHaveLength(6))
-    expect(highlighter.calls.length).toBeGreaterThanOrEqual(6)
+    expect(highlighter.calls.length).toBeGreaterThanOrEqual(8)
   })
 
   it('does no highlighting work while collapsed, then batches all bounded rows once on expansion', async () => {
