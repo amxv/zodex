@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 1.0.0 - 2026-11-05
+
+- First 1.0 release of the Zodex operator, with **Local** execution on macOS (Apple Silicon), Linux (x86-64/ARM64), and Windows (x86-64), and **Sprite** execution via the managed remote service and Cloudflare Worker front door.
+- The 1.0 release includes the existing MCP execution and patch tools, Local Liveboard, desktop menu/tray integration, checksum-verified installers and upgrades, and Sprite GitHub publishing controls.
+- This is a release-version milestone: no new runtime behavior or breaking CLI changes relative to v0.5.29.
+
 ## 0.5.29 - 2026-11-03
 
 - Expanded Liveboard's lazy-loaded diff syntax highlighter from 9 to 19 grammars: Markdown, YAML, HTML/XML, SQL, Java, C++, Kotlin, Swift, Dockerfile, and Diff. Includes common filename extensions and extensionless `Dockerfile`/`Containerfile` variants.
