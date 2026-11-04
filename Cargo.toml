@@ -1,6 +1,6 @@
 [package]
 name = "zodex"
-version = "0.5.29"
+version = "1.0.0"
 edition = "2024"
 
 [[bin]]
