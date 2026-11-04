@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -41,18 +41,42 @@ fn begin_poll(
     parent: &InvocationContext,
     handle: &str,
 ) -> InvocationContext {
-    history
-        .begin(
-            caller,
-            InvocationStart::new(
-                "write_stdin",
-                json!({"session_handle": handle, "chars": "", "kill_process": false}),
-            )
-            .with_target_created_by_agent_id(parent.agent_id.clone())
-            .with_target_created_by_invocation_id(parent.invocation_id)
-            .with_continuation_kind(InvocationContinuationKind::Poll),
-        )
-        .unwrap()
+    let start = InvocationStart::new(
+        "write_stdin",
+        json!({"session_handle": handle, "chars": "", "kill_process": false}),
+    )
+    .with_target_created_by_agent_id(parent.agent_id.clone())
+    .with_target_created_by_invocation_id(parent.invocation_id)
+    .with_continuation_kind(InvocationContinuationKind::Poll);
+
+    // This test creates 1,000 polls while the background writer materializes
+    // their timeline. On slower CI runners, an occasional foreground BEGIN
+    // IMMEDIATE can hit Zodex's deliberately short SQLite busy timeout.
+    // Retry only that pre-write lock failure; never retry errors after a
+    // transaction may have persisted an invocation (which could duplicate it).
+    for attempt in 0..=20 {
+        match history.begin(caller.clone(), start.clone()) {
+            Ok(context) => return context,
+            Err(error)
+                if attempt < 20
+                    && error.chain().any(|cause| {
+                        cause.to_string()
+                            == "failed to start mandatory Local invocation-envelope transaction"
+                    })
+                    && error.chain().any(|cause| {
+                        matches!(
+                            cause.downcast_ref::<rusqlite::Error>(),
+                            Some(rusqlite::Error::SqliteFailure(code, _))
+                                if matches!(code.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+                        )
+                    }) =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("poll invocation failed on attempt {attempt}: {error:#}"),
+        }
+    }
+    unreachable!("the retry loop either returns or panics")
 }
 
 fn history_query(limit: usize, cursor: Option<HistoryTimelineCursor>) -> HistoryTimelineQuery {
