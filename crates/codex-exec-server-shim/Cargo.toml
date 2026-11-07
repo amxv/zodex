@@ -7,5 +7,5 @@ description = "Zodex's minimal local filesystem adapter for upstream codex-apply
 publish = false
 
 [dependencies]
-codex-utils-path-uri = { git = "https://github.com/openai/codex.git", rev = "a3d93e1e692f1144cf8685175a5d1f6bf7294f57" }
+codex-utils-path-uri = { git = "https://github.com/openai/codex.git", rev = "efdacaf46ff54660a239189a6d62434c5db33d2c" }
 tokio = { version = "1.44", features = ["fs"] }
