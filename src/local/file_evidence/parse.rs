@@ -14,7 +14,9 @@ const MOVE_TO_PREFIX: &str = "*** Move to: ";
 pub(crate) fn parse_file_capture_plans(start: &InvocationStart) -> Option<Vec<FileCapturePlan>> {
     match start.tool_name.as_ref() {
         "apply_patch" => parse_apply_patch(&start.arguments),
-        "exec_command" => parse_shell_write(&start.arguments).map(|plan| vec![plan]),
+        "exec_command" => super::shell_creation::shell_creation_plan(&start.arguments)
+            .or_else(|| parse_shell_write(&start.arguments))
+            .map(|plan| vec![plan]),
         _ => None,
     }
 }

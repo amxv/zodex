@@ -1205,6 +1205,9 @@ async fn local_mcp_history_records_cross_agent_session_creator_and_unattributed_
 
     server.shutdown().await.unwrap();
     service.shutdown_sessions().await.unwrap();
+    // Tool replies do not wait for history persistence. Establish the durable
+    // boundary before reading the complete four-call history below.
+    history.flush_for_test().unwrap();
     shutdown_history_runtime(history).await;
 
     let records = LocalHistoryReader::query(

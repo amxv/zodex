@@ -10,8 +10,8 @@ use super::schema::HISTORY_SCHEMA_VERSION;
 /// Remove one Agent's durable identity, invocations, outputs, file evidence,
 /// presentations, and provider-specific context without touching other Agents.
 ///
-/// This uses a separate SQLite writer connection, so an otherwise healthy
-/// running Local service does not need to stop to forget an inactive Agent.
+/// Local must be stopped: its memory identity cache and queued admissions must
+/// not recreate an Agent or evidence after an explicit clear.
 pub fn clear_local_agent_history(path: &Path, agent_id: &str) -> Result<usize> {
     if agent_id.len() != 4
         || !agent_id
@@ -20,6 +20,11 @@ pub fn clear_local_agent_history(path: &Path, agent_id: &str) -> Result<usize> {
     {
         bail!("Agent ID must be exactly four lowercase ASCII letters or digits");
     }
+
+    if !path.is_file() {
+        bail!("Local history database does not exist: {}", path.display());
+    }
+    let _lease = super::lease::HistoryLease::acquire(path)?;
 
     let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| {

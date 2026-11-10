@@ -1,7 +1,9 @@
+mod admission;
 mod clear;
 mod event_identity;
 mod events;
 mod file_store;
+mod lease;
 mod lifecycle;
 mod live_display;
 mod materialized;
@@ -15,6 +17,8 @@ mod timeline_cursor;
 mod timeline_polls;
 mod worker;
 
+#[cfg(test)]
+mod async_admission_tests;
 #[cfg(test)]
 mod clear_tests;
 #[cfg(test)]
@@ -44,6 +48,7 @@ pub use query::{
 pub use schema::HISTORY_SCHEMA_VERSION;
 pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
+pub(crate) use admission::lexical_workdir;
 pub(crate) use events::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
 pub(crate) use materialized::HistoryDiffProjection;
 pub(crate) use query::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
@@ -57,6 +62,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub fn clear_local_history(path: &Path) -> Result<()> {
+    let _lease = lease::HistoryLease::acquire(path)?;
     for candidate in history_store_paths(path) {
         if candidate.exists() {
             fs::remove_file(&candidate).with_context(|| {

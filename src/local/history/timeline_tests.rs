@@ -152,8 +152,8 @@ fn kill_presentation_resolves_exact_parent_command_from_invocation_link() {
     }
 }
 
-#[test]
-fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() {
+#[tokio::test]
+async fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() {
     let dir = tempdir().unwrap();
     let database = dir.path().join("history.sqlite3");
     let workdir = dir.path().join("repo");
@@ -245,7 +245,15 @@ fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() 
         )
         .unwrap();
     let patch_id = patch.invocation_id.unwrap();
-    std::fs::write(&patch_path, "fn value() -> i32 { 2 }\n").unwrap();
+    let (result, evidence) = crate::apply_patch::apply_patch_with_delta(
+        "*** Begin Patch\n*** Update File: bulk-evidence.rs\n@@\n-fn value() -> i32 { 1 }\n+fn value() -> i32 { 2 }\n*** End Patch\n",
+        workdir.to_str().unwrap(),
+    )
+    .await;
+    result.unwrap();
+    history.record_patch_evidence(&patch, evidence);
+    // A later writer must not change the already committed patch evidence.
+    std::fs::write(&patch_path, "unrelated later content\n").unwrap();
     complete(&history, &patch, json!({"status": "exited"}));
     history.flush_for_test().unwrap();
 
@@ -380,6 +388,63 @@ fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() 
     assert_eq!(checkpoints[0], command_id);
     assert_eq!(&checkpoints[1..], poll_ids.as_slice());
 
+    history.shutdown_blocking().unwrap();
+}
+
+#[test]
+fn timeline_renders_exclusive_shell_creation_from_successful_literal_command() {
+    let dir = tempdir().unwrap();
+    let database = dir.path().join("history.sqlite3");
+    let history = open_history(&database, "runtime-exclusive-shell-creation");
+    let created = history
+        .begin(
+            provider_context("exclusive-creation-agent"),
+            InvocationStart::new(
+                "exec_command",
+                json!({
+                    "cmd": "python3 -I -S <<'PY'\nwith open(\"new.txt\", \"x\", encoding=\"utf-8\", newline=\"\") as f:\n    f.write(\"known content\\n\")\nPY",
+                    "workdir": dir.path(),
+                }),
+            ),
+        )
+        .unwrap();
+    // Simulate the exact successful tool result. No destination exists for the
+    // history worker to read: all preview bytes must come from the command.
+    complete(
+        &history,
+        &created,
+        json!({"status":"exited","exit_code":0,"termination_reason":"exit"}),
+    );
+    history.flush_for_test().unwrap();
+    assert!(!dir.path().join("new.txt").exists());
+    let records = LocalHistoryReader::query(
+        &database,
+        &HistoryQuery {
+            invocation_id: created.invocation_id,
+            last: 1,
+            include_raw: true,
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].file_evidence.len(), 1);
+    let evidence = &records[0].file_evidence[0];
+    assert_eq!(evidence.before_state, "missing");
+    assert_eq!(evidence.operation_hint, "create");
+    assert_eq!(evidence.after_text.as_deref(), Some("known content\n"));
+
+    let page = LocalHistoryReader::timeline(&database, &history_query(10, None)).unwrap();
+    assert_eq!(page.records.len(), 1);
+    match &page.records[0].kind {
+        PresentationKind::FileChanges { changes, .. } => {
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].operation, PresentationFileOperation::Created);
+            assert_eq!(changes[0].added, 1);
+            assert_eq!(changes[0].removed, 0);
+        }
+        other => panic!("expected known creation preview, got {other:?}"),
+    }
     history.shutdown_blocking().unwrap();
 }
 

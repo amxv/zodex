@@ -562,6 +562,9 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
             ),
         )
         .unwrap();
+    // Admission is asynchronous: finish this pre-subscription event before
+    // opening SSE so the starts-now assertion tests subscription semantics.
+    history.flush_for_test().unwrap();
     assert_eq!(
         history.live_event_sequence(),
         0,

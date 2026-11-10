@@ -82,6 +82,7 @@ fn first_seen_observer_fires_once_per_attributed_agent_after_durable_commit() {
         )
         .unwrap();
 
+    runtime.flush_for_test().unwrap();
     assert_eq!(first.agent_id, repeat.agent_id);
     assert_ne!(first.agent_id, second.agent_id);
     assert_eq!(
@@ -118,6 +119,7 @@ fn first_seen_observer_fires_again_for_existing_agent_in_a_new_runtime() {
             patch_start(dir.path(), "runtime-a"),
         )
         .unwrap();
+    first_runtime.flush_for_test().unwrap();
     assert_eq!(first_seen.load(Ordering::SeqCst), 1);
     first_runtime.shutdown_blocking().unwrap();
     drop(first_runtime);
@@ -143,6 +145,7 @@ fn first_seen_observer_fires_again_for_existing_agent_in_a_new_runtime() {
         )
         .unwrap();
 
+    second_runtime.flush_for_test().unwrap();
     assert_eq!(first.agent_id, second.agent_id);
     assert_eq!(second_seen.load(Ordering::SeqCst), 1);
     second_runtime.shutdown_blocking().unwrap();
@@ -188,6 +191,7 @@ fn concurrent_first_calls_emit_one_first_seen_observer_notification() {
         .filter_map(|join| join.join().unwrap())
         .collect::<HashSet<_>>();
 
+    runtime.flush_for_test().unwrap();
     assert!(!agent_ids.is_empty());
     assert_eq!(agent_ids.len(), 1);
     assert_eq!(notifications.load(Ordering::SeqCst), 1);

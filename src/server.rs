@@ -289,7 +289,7 @@ impl ZodexMcpService {
                 error!(
                     event = "local_invocation_input_evidence_serialization_failed",
                     tool_name,
-                    error = %error,
+                    error = %format!("{error:#}"),
                 );
                 return context;
             }
@@ -364,18 +364,30 @@ impl ZodexMcpService {
         workdir: Option<&str>,
         tool_succeeded: bool,
     ) -> Option<String> {
-        let provider = self.result_context_provider.as_ref()?;
-        match provider.appended_context(invocation, workdir, tool_succeeded) {
-            Ok(context) => context,
-            Err(error) => {
-                error!(
-                    event = "local_mcp_result_context_failed",
-                    invocation_id = ?invocation.invocation_id,
-                    error = %error,
-                );
-                None
+        let mut sections = Vec::new();
+        if let Some(warning) = self
+            .invocation_recorder
+            .as_ref()
+            .and_then(|recorder| recorder.warning())
+        {
+            sections.push(format!(
+                "History warning: {warning}. Tool execution is independent of history persistence."
+            ));
+        }
+        if let Some(provider) = self.result_context_provider.as_ref() {
+            match provider.appended_context(invocation, workdir, tool_succeeded) {
+                Ok(Some(context)) => sections.push(context),
+                Ok(None) => {}
+                Err(error) => {
+                    error!(
+                        event = "local_mcp_result_context_failed",
+                        invocation_id = ?invocation.invocation_id,
+                        error = %error,
+                    );
+                }
             }
         }
+        (!sections.is_empty()).then(|| sections.join("\n\n"))
     }
 
     async fn execute_tool_output(
@@ -395,12 +407,11 @@ impl ZodexMcpService {
         input: ApplyPatchInput,
         invocation: InvocationContext,
     ) -> Result<String, String> {
-        self.zodex_service
-            .execute_with_context(ServiceRequest::ApplyPatch { input }, invocation)
-            .await
-            .and_then(|response| response.into_apply_patch_output())
-            .map(|output| output.output)
-            .map_err(|e| e.to_string())
+        let (result, evidence) = self.zodex_service.apply_patch_with_delta(input).await;
+        if let Some(recorder) = self.invocation_recorder.as_ref() {
+            recorder.record_patch_evidence(&invocation, evidence);
+        }
+        result.map_err(|error| error.to_string())
     }
 }
 

@@ -173,6 +173,18 @@ impl ZodexService {
         apply_patch::apply_patch(&input.patch, &input.workdir).await
     }
 
+    /// Preserve execution evidence even when some patch operations fail.
+    /// Admission happens before any filesystem mutation, as for execute().
+    pub async fn apply_patch_with_delta(
+        &self,
+        input: ApplyPatchInput,
+    ) -> (Result<String>, apply_patch::PatchEvidence) {
+        if let Err(error) = self.admission.admit().await {
+            return (Err(error), apply_patch::PatchEvidence::default());
+        }
+        apply_patch::apply_patch_with_delta(&input.patch, &input.workdir).await
+    }
+
     pub fn accepting_new_sessions(&self) -> bool {
         self.admission.accepting() && self.sessions.accepting_new_sessions()
     }
@@ -340,6 +352,28 @@ mod tests {
                 .expect("dispatched file should be readable"),
             "hello-dispatch\n"
         );
+    }
+
+    #[tokio::test]
+    async fn patch_evidence_api_obeys_service_admission_before_mutation() {
+        let service = test_service();
+        let dir = tempdir().expect("tempdir");
+        service.close_admission().await;
+        let (result, evidence) = service
+            .apply_patch_with_delta(ApplyPatchInput {
+                patch: "*** Begin Patch\n*** Add File: blocked\n+no\n*** End Patch".into(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+            })
+            .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("new tool calls are not accepted")
+        );
+        assert!(evidence.delta.is_empty());
+        assert!(evidence.unavailable_paths.is_empty());
+        assert!(!dir.path().join("blocked").exists());
     }
 
     #[tokio::test]

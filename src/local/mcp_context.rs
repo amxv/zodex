@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::invocation::{InvocationContext, McpResultContextProvider};
 
-use super::history::normalize_declared_workdir;
+use super::history::lexical_workdir as normalize_declared_workdir;
 use super::{LocalConfig, LocalHistoryRuntime};
 
 const MAX_SKILL_DEPTH: usize = 6;

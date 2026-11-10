@@ -6,6 +6,28 @@ use crate::local::file_evidence::{CompletedFileEvidence, PendingFileEvidence};
 use super::store::HistoryStore;
 
 impl HistoryStore {
+    pub(super) fn persist_proven_shell_creation(
+        &self,
+        invocation_id: i64,
+        result: &serde_json::Value,
+    ) -> Result<()> {
+        let (tool, args): (String, String) = self.lock_connection().query_row(
+            "SELECT tool_name, args_json FROM invocations WHERE id = ?1",
+            [invocation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if tool != "exec_command" {
+            return Ok(());
+        }
+        let start = crate::invocation::InvocationStart::new(tool, serde_json::from_str(&args)?);
+        if let Some((before, after)) =
+            crate::local::file_evidence::completed_shell_creation(&start, result)
+        {
+            self.persist_file_evidence_start(invocation_id, &[before])?;
+            self.persist_file_evidence_completion(invocation_id, &[after])?;
+        }
+        Ok(())
+    }
     pub(super) fn persist_file_evidence_start(
         &self,
         invocation_id: i64,
@@ -61,25 +83,6 @@ impl HistoryStore {
             .context("failed to commit Local file-evidence completion transaction")
     }
 
-    pub(super) fn mark_file_evidence_unavailable(
-        &self,
-        invocation_id: i64,
-        reason: &str,
-    ) -> Result<()> {
-        self.lock_connection()
-            .execute(
-                "UPDATE invocation_file_evidence SET
-                    after_state = CASE WHEN after_state = 'pending' THEN 'unavailable' ELSE after_state END,
-                    after_reason = CASE WHEN after_state = 'pending' THEN ?2 ELSE after_reason END
-                 WHERE invocation_id = ?1",
-                params![invocation_id, reason],
-            )
-            .with_context(|| {
-                format!("failed to mark Local file evidence unavailable for invocation {invocation_id}")
-            })?;
-        Ok(())
-    }
-
     pub(super) fn recover_interrupted_file_evidence(&self) -> Result<()> {
         self.mark_pending_file_evidence_unavailable(
             "previous Local runtime ended before after-file evidence completed",
@@ -116,7 +119,8 @@ fn persist_start(
                     before_state, before_text, before_reason,
                     destination_before_state, destination_before_text, destination_before_reason,
                     after_state
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending')",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending')
+                 ON CONFLICT(invocation_id, ordinal) DO NOTHING",
                 params![
                     invocation_id,
                     i64::from(item.ordinal),

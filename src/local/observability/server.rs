@@ -148,12 +148,21 @@ async fn status(State(state): State<Arc<ApiState>>) -> Result<Json<ApiStatusDocu
     let path = state.history.database_path().to_path_buf();
     let runtime_id = state.history.runtime_id().to_string();
     let current_runtime = runtime_id.clone();
-    let (history, agent_count) = run_blocking(move || {
+    let (mut history, agent_count) = run_blocking(move || {
         let history = LocalHistoryReader::status(&path)?;
         let agent_count = LocalHistoryReader::agent_count(&path, Some(&current_runtime))?;
         Ok((history, agent_count))
     })
     .await?;
+    if let Some(warning) = state.history.health_warning() {
+        history.health_state = "degraded".to_string();
+        history.health_reason = Some(warning);
+    } else if state.history.has_pending_admissions() {
+        history.health_state = "degraded".to_string();
+        history.health_reason = Some(
+            "History admission is catching up; missing records do not imply inactivity".to_string(),
+        );
+    }
     Ok(Json(ApiStatusDocument {
         schema_version: schema_version(),
         api_version: LOCAL_OBSERVABILITY_API_VERSION,

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -15,13 +15,14 @@ use crate::invocation::{
     ProviderCallMetadata,
 };
 use crate::local::file_evidence::{
-    CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
+    CompletedFileEvidence, PendingFileEvidence, committed_patch_evidence,
 };
 use crate::local::presentation::PRESENTATION_SCHEMA_VERSION;
 use crate::session::{
     OwnedProcessEnd, SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver,
 };
 
+use super::admission::AdmissionState;
 use super::events::{HistoryEventHub, HistoryLiveEvent};
 use super::live_display::LiveDisplayStreams;
 use super::materialized::refresh_and_emit_presentation;
@@ -30,13 +31,15 @@ use super::store::{
     normalize_declared_workdir, now_ms,
 };
 
+mod admission_queue;
 mod output_queue;
+use admission_queue::AdmissionQueue;
 mod process_observer;
 
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
 const OUTPUT_BATCH_LIMIT: usize = 128;
 const LIVE_OUTPUT_EVENT_BATCH_MAX_CHUNKS: usize = 64;
-const COMPLETION_OVERFLOW_MAX_ITEMS: usize = 256;
+const COMPLETION_OVERFLOW_MAX_ITEMS: usize = 4096;
 const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
 const RETENTION_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const MATERIALIZATION_BACKFILL_INTERVAL: Duration = Duration::from_millis(250);
@@ -82,7 +85,10 @@ impl LocalHistoryRuntimeConfig {
 }
 
 struct HistoryHealth {
+    unflushed: AtomicBool,
+    storage_full: AtomicBool,
     degraded: AtomicBool,
+    degradation_logged: AtomicBool,
     reason: Mutex<Option<String>>,
     incomplete_evidence_invocations: Mutex<HashSet<i64>>,
     incomplete_capture_invocations: Mutex<HashMap<i64, String>>,
@@ -92,7 +98,10 @@ struct HistoryHealth {
 impl HistoryHealth {
     fn new() -> Self {
         Self {
+            unflushed: AtomicBool::new(false),
+            storage_full: AtomicBool::new(false),
             degraded: AtomicBool::new(false),
+            degradation_logged: AtomicBool::new(false),
             reason: Mutex::new(None),
             incomplete_evidence_invocations: Mutex::new(HashSet::new()),
             incomplete_capture_invocations: Mutex::new(HashMap::new()),
@@ -110,8 +119,8 @@ impl HistoryHealth {
         if guard.is_none() {
             *guard = Some(reason.clone());
         }
+        // A tracing sink can itself block on storage. Producers only update memory.
         drop(guard);
-        error!(event = "local_history_degraded", error = %reason);
     }
 
     fn degrade_persisting(&self, store: &HistoryStore, reason: impl Into<String>) {
@@ -129,6 +138,9 @@ impl HistoryHealth {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .unwrap_or_else(|| "unknown evidence-pipeline failure".to_string());
+        if !self.degradation_logged.swap(true, Ordering::AcqRel) {
+            error!(event = "local_history_degraded", error = %reason);
+        }
         if let Err(error) = store.set_health("degraded", Some(&reason)) {
             error!(
                 event = "local_history_health_persistence_failed",
@@ -148,6 +160,11 @@ impl HistoryHealth {
                     invocation_id,
                     error = %error,
                 );
+            } else {
+                self.incomplete_evidence_invocations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&invocation_id);
             }
         }
         self.persist_capture_failures(store);
@@ -175,6 +192,14 @@ impl HistoryHealth {
         }
     }
 
+    fn note_storage_error(&self, error: &anyhow::Error) {
+        if error.chain().any(|cause| matches!(cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::DiskFull))
+        {
+            self.storage_full.store(true, Ordering::Release);
+        }
+    }
+
     fn note_evidence_incomplete(&self, invocation_id: i64) {
         self.incomplete_evidence_invocations
             .lock()
@@ -191,12 +216,25 @@ impl HistoryHealth {
     }
 }
 
+#[derive(Clone)]
 enum WorkerMessage {
+    PatchEvidence {
+        invocation_id: i64,
+        before: Vec<PendingFileEvidence>,
+        after: Vec<CompletedFileEvidence>,
+        warning: Option<String>,
+    },
+    Identify(InvocationContext),
+    ContextClaim {
+        provider: ProviderCallMetadata,
+        workdir: Option<String>,
+        skills: bool,
+    },
     Output(OutputEvent),
     Complete {
         context: InvocationContext,
         outcome: InvocationOutcome,
-        file_evidence: Vec<CompletedFileEvidence>,
+        completed_at_ms: i64,
     },
     ProcessStarted {
         invocation_id: i64,
@@ -215,6 +253,32 @@ enum WorkerMessage {
     Shutdown,
 }
 
+#[derive(Default)]
+struct PriorityQueue {
+    messages: VecDeque<WorkerMessage>,
+    bytes: usize,
+}
+
+impl PriorityQueue {
+    fn push(&mut self, message: WorkerMessage) -> std::result::Result<(), WorkerMessage> {
+        let bytes = message_bytes(&message);
+        if self.messages.len() >= COMPLETION_OVERFLOW_MAX_ITEMS
+            || self.bytes.saturating_add(bytes) > 16 * 1024 * 1024
+        {
+            return Err(message);
+        }
+        self.bytes += bytes;
+        self.messages.push_back(message);
+        Ok(())
+    }
+
+    fn pop_front(&mut self) -> Option<WorkerMessage> {
+        let message = self.messages.pop_front()?;
+        self.bytes = self.bytes.saturating_sub(message_bytes(&message));
+        Some(message)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PendingPresentationRefresh {
     invocation_id: Option<i64>,
@@ -224,10 +288,14 @@ struct PendingPresentationRefresh {
 }
 
 struct HistoryWorkerShared {
+    admission_state: Arc<AdmissionState>,
+    admissions: Arc<Mutex<AdmissionQueue>>,
+    #[cfg(any(target_os = "macos", test))]
+    agent_first_seen_observer: Arc<Mutex<Option<AgentFirstSeenObserver>>>,
     store: Arc<HistoryStore>,
     health: Arc<HistoryHealth>,
     events: Arc<HistoryEventHub>,
-    completion_overflow: Arc<Mutex<VecDeque<WorkerMessage>>>,
+    completion_overflow: Arc<Mutex<PriorityQueue>>,
     pending_presentation_refreshes: Arc<Mutex<HashMap<i64, PendingPresentationRefresh>>>,
     active_process_invocation_ids: Arc<Mutex<HashMap<i64, bool>>>,
     active_process_counts: Arc<Mutex<HashMap<String, u64>>>,
@@ -236,23 +304,24 @@ struct HistoryWorkerShared {
 }
 
 pub struct LocalHistoryRuntime {
+    lease: Mutex<Option<super::lease::HistoryLease>>,
+    admission_state: Arc<AdmissionState>,
+    admissions: Arc<Mutex<AdmissionQueue>>,
     store: Arc<HistoryStore>,
     runtime_id: Arc<str>,
     events: Arc<HistoryEventHub>,
     sender: SyncSender<WorkerMessage>,
-    completion_overflow: Arc<Mutex<VecDeque<WorkerMessage>>>,
-    pending_presentation_refreshes: Arc<Mutex<HashMap<i64, PendingPresentationRefresh>>>,
+    completion_overflow: Arc<Mutex<PriorityQueue>>,
     worker_running: Arc<AtomicBool>,
     output_overflow: Mutex<output_queue::OutputOverflow>,
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
-    file_evidence: Mutex<HashMap<i64, Vec<PendingFileEvidence>>>,
     // false = running; true = process end observed but not durably committed.
     // Both remain retention-protected until the worker commits the end state.
     active_process_invocation_ids: Arc<Mutex<HashMap<i64, bool>>>,
     active_process_counts: Arc<Mutex<HashMap<String, u64>>>,
     active_process_count: Arc<AtomicU64>,
-    agent_first_seen_observer: Mutex<Option<AgentFirstSeenObserver>>,
+    agent_first_seen_observer: Arc<Mutex<Option<AgentFirstSeenObserver>>>,
 }
 
 type AgentFirstSeenObserver = Arc<dyn Fn(String) + Send + Sync>;
@@ -266,24 +335,15 @@ impl LocalHistoryRuntime {
     }
 
     pub(crate) fn identify_agent(&self, context: InvocationContext) -> Result<InvocationContext> {
-        let identity = self.store.identify_agent(context)?;
-        if identity.first_seen_in_runtime
-            && let Some(agent_id) = identity.context.agent_id.as_deref()
+        let context = self.admission_state.identify(context)?;
+        if let Err(error) = self
+            .sender
+            .try_send(WorkerMessage::Identify(context.clone()))
         {
-            let observer = self
-                .agent_first_seen_observer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            if let Some(observer) = observer {
-                observer(agent_id.to_string());
-            }
-            self.events
-                .emit_with("agent_first_seen", Some(agent_id), None, None, None, || {
-                    json!({})
-                });
+            self.health
+                .degrade_nonblocking(format!("Local Agent identity was not queued: {error}"));
         }
-        Ok(identity.context)
+        Ok(context)
     }
 
     pub fn open(config: LocalHistoryRuntimeConfig) -> Result<Arc<Self>> {
@@ -294,6 +354,7 @@ impl LocalHistoryRuntime {
         config: LocalHistoryRuntimeConfig,
         store_override: Option<Arc<HistoryStore>>,
     ) -> Result<Arc<Self>> {
+        let lease = super::lease::HistoryLease::acquire(&config.database_path)?;
         let runtime_id = config.runtime_id.clone();
         let events = HistoryEventHub::new(runtime_id.clone(), config.event_capacity);
         let store = match store_override {
@@ -311,7 +372,7 @@ impl LocalHistoryRuntime {
             mark_retention_error_best_effort(&store, &error.to_string());
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
-        let completion_overflow = Arc::new(Mutex::new(VecDeque::new()));
+        let completion_overflow = Arc::new(Mutex::new(PriorityQueue::default()));
         let pending_presentation_refreshes = Arc::new(Mutex::new(HashMap::new()));
         let active_process_invocation_ids = Arc::new(Mutex::new(HashMap::new()));
         let active_process_counts = Arc::new(Mutex::new(HashMap::new()));
@@ -324,7 +385,13 @@ impl LocalHistoryRuntime {
                 .is_ok_and(|size| size > max_size_bytes),
             Ordering::Release,
         );
+        let admission_state = Arc::new(AdmissionState::open(&store)?);
+        let admissions = Arc::new(Mutex::new(AdmissionQueue::default()));
+        let agent_first_seen_observer = Arc::new(Mutex::new(None));
         let worker_shared = HistoryWorkerShared {
+            admission_state: admission_state.clone(),
+            admissions: admissions.clone(),
+            agent_first_seen_observer: agent_first_seen_observer.clone(),
             store: store.clone(),
             health: health.clone(),
             events: events.clone(),
@@ -339,21 +406,23 @@ impl LocalHistoryRuntime {
             .name("zodex-local-history".to_string())
             .spawn(move || run_worker(receiver, worker_shared, max_age_seconds, max_size_bytes))?;
         Ok(Arc::new(Self {
+            lease: Mutex::new(Some(lease)),
+            admission_state,
+            admissions,
             store,
             runtime_id,
             events,
             sender,
             completion_overflow,
-            pending_presentation_refreshes,
             worker_running,
             output_overflow: Mutex::new(output_queue::OutputOverflow::default()),
             worker: Mutex::new(Some(worker)),
             health,
-            file_evidence: Mutex::new(HashMap::new()),
             active_process_invocation_ids,
             active_process_counts,
             active_process_count,
-            agent_first_seen_observer: Mutex::new(None),
+            #[cfg(any(target_os = "macos", test))]
+            agent_first_seen_observer,
         }))
     }
 
@@ -381,7 +450,11 @@ impl LocalHistoryRuntime {
         &self,
         provider: &ProviderCallMetadata,
     ) -> Result<bool> {
-        self.store.claim_global_context_injection(provider)
+        let claimed = self.admission_state.claim_global(provider);
+        if claimed {
+            self.enqueue_context_claim(provider, None, false);
+        }
+        Ok(claimed)
     }
 
     pub(crate) fn claim_repo_agents_check(
@@ -389,8 +462,13 @@ impl LocalHistoryRuntime {
         provider: &ProviderCallMetadata,
         normalized_workdir: &str,
     ) -> Result<bool> {
-        self.store
-            .claim_repo_agents_check(provider, normalized_workdir)
+        let claimed = self
+            .admission_state
+            .claim_agents(provider, normalized_workdir);
+        if claimed {
+            self.enqueue_context_claim(provider, Some(normalized_workdir), false);
+        }
+        Ok(claimed)
     }
 
     pub(crate) fn claim_repo_skills_check(
@@ -398,8 +476,30 @@ impl LocalHistoryRuntime {
         provider: &ProviderCallMetadata,
         normalized_workdir: &str,
     ) -> Result<bool> {
-        self.store
-            .claim_repo_skills_check(provider, normalized_workdir)
+        let claimed = self
+            .admission_state
+            .claim_skills(provider, normalized_workdir);
+        if claimed {
+            self.enqueue_context_claim(provider, Some(normalized_workdir), true);
+        }
+        Ok(claimed)
+    }
+
+    fn enqueue_context_claim(
+        &self,
+        provider: &ProviderCallMetadata,
+        workdir: Option<&str>,
+        skills: bool,
+    ) {
+        let message = WorkerMessage::ContextClaim {
+            provider: provider.clone(),
+            workdir: workdir.map(str::to_owned),
+            skills,
+        };
+        if let Err(error) = self.sender.try_send(message) {
+            self.health
+                .degrade_nonblocking(format!("Local context claim was not queued: {error}"));
+        }
     }
 
     pub fn active_process_counts(&self) -> HashMap<String, u64> {
@@ -458,45 +558,6 @@ impl LocalHistoryRuntime {
         self.events.presentation(root_invocation_id, projection)
     }
 
-    fn queue_presentation_refresh(
-        &self,
-        root_invocation_id: Option<i64>,
-        invocation_id: Option<i64>,
-        fallback_agent_id: Option<&str>,
-        source: &'static str,
-        emit_live: bool,
-    ) {
-        let Some(root_invocation_id) = root_invocation_id else {
-            return;
-        };
-        if !self.worker_running.load(Ordering::Acquire) {
-            self.health
-                .degrade_nonblocking("Local history presentation writer is unavailable");
-            return;
-        }
-        self.events.clear_presentation(root_invocation_id);
-        let mut pending = self
-            .pending_presentation_refreshes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        pending
-            .entry(root_invocation_id)
-            .and_modify(|refresh| {
-                refresh.invocation_id = invocation_id.or(refresh.invocation_id);
-                if fallback_agent_id.is_some() {
-                    refresh.fallback_agent_id = fallback_agent_id.map(str::to_owned);
-                }
-                refresh.source = source;
-                refresh.emit_live |= emit_live;
-            })
-            .or_insert_with(|| PendingPresentationRefresh {
-                invocation_id,
-                fallback_agent_id: fallback_agent_id.map(str::to_owned),
-                source,
-                emit_live,
-            });
-    }
-
     #[cfg(test)]
     pub(crate) fn live_event_subscriber_count(&self) -> usize {
         self.events.receiver_count()
@@ -509,6 +570,28 @@ impl LocalHistoryRuntime {
 
     pub fn database_path(&self) -> &std::path::Path {
         self.store.path()
+    }
+
+    pub(crate) fn health_warning(&self) -> Option<String> {
+        if self.health.degraded.load(Ordering::Acquire) {
+            return Some(
+                self.health
+                    .reason
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .unwrap_or_else(|| "Local history persistence is degraded".to_string()),
+            );
+        }
+        None
+    }
+
+    pub(crate) fn has_pending_admissions(&self) -> bool {
+        !self
+            .admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
     }
 
     #[cfg(test)]
@@ -572,6 +655,10 @@ impl LocalHistoryRuntime {
         let capture_deadline = Instant::now() + SHUTDOWN_CAPTURE_DRAIN_TIMEOUT;
         let mut finalize_error = None;
         loop {
+            if self.has_pending_admissions() && Instant::now() < capture_deadline {
+                std::thread::sleep(SHUTDOWN_CAPTURE_POLL_INTERVAL);
+                continue;
+            }
             let pending = match self.store.pending_capture_ids() {
                 Ok(pending) => pending,
                 Err(error) => {
@@ -629,6 +716,16 @@ impl LocalHistoryRuntime {
                 finalize_error = Some(error);
             }
         }
+        // Keep the exclusive writer lease until every final database write is over.
+        self.lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if self.health.unflushed.load(Ordering::Acquire) {
+            return Err(anyhow::anyhow!(
+                "Local history shutdown could not persist all queued evidence; history is incomplete"
+            ));
+        }
         if let Some(error) = finalize_error {
             Err(error)
         } else {
@@ -638,124 +735,71 @@ impl LocalHistoryRuntime {
 }
 
 impl InvocationEvidenceRecorder for LocalHistoryRuntime {
+    fn record_patch_evidence(
+        &self,
+        context: &InvocationContext,
+        evidence: crate::apply_patch::PatchEvidence,
+    ) {
+        let Some(invocation_id) = context.invocation_id else {
+            return;
+        };
+        let (before, after, warning) = committed_patch_evidence(evidence);
+        if !before.is_empty() || warning.is_some() {
+            self.enqueue_priority_message(
+                WorkerMessage::PatchEvidence {
+                    invocation_id,
+                    before,
+                    after,
+                    warning,
+                },
+                invocation_id,
+                "Local committed patch evidence queue is full or unavailable",
+            );
+        }
+    }
+    fn warning(&self) -> Option<String> {
+        self.health_warning()
+    }
     fn begin(
         &self,
         context: InvocationContext,
         start: InvocationStart,
     ) -> Result<InvocationContext> {
-        let pending_file_evidence = prepare_file_evidence(&start);
-        let tool_name = start.tool_name.clone();
-        let normalized_workdir = start
-            .arguments
-            .get("workdir")
-            .and_then(serde_json::Value::as_str)
-            .and_then(normalize_declared_workdir);
-        match self.store.begin_with_metadata(context, start) {
-            Ok(begin) => {
-                let context = begin.context;
-                let invocation_id = context.invocation_id;
-                let presentation_root_invocation_id = begin.presentation_root_invocation_id;
-                let agent_id = context.agent_id.as_deref();
-                if begin.agent_first_seen_in_runtime {
-                    if let Some(agent_id) = agent_id {
-                        let observer = self
-                            .agent_first_seen_observer
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .clone();
-                        if let Some(observer) = observer {
-                            observer(agent_id.to_string());
-                        }
-                    }
-                    self.events.emit_with(
-                        "agent_first_seen",
-                        agent_id,
-                        invocation_id,
-                        presentation_root_invocation_id,
-                        None,
-                        || json!({}),
-                    );
-                }
-                if let Some(new_workdir) = begin.new_workdir.as_deref() {
-                    self.events.emit_with(
-                        "agent_workdir_added",
-                        agent_id,
-                        invocation_id,
-                        presentation_root_invocation_id,
-                        Some(PRESENTATION_SCHEMA_VERSION),
-                        || json!({"normalized_workdir": new_workdir}),
-                    );
-                }
-                let emit_live = self.events.emit_with(
-                    "invocation_started",
-                    agent_id,
-                    invocation_id,
-                    presentation_root_invocation_id,
-                    Some(PRESENTATION_SCHEMA_VERSION),
-                    || {
-                        json!({
-                            "tool_name": tool_name.as_ref(),
-                            "normalized_workdir": normalized_workdir,
-                        })
-                    },
-                );
-                if let Some(invocation_id) = context.invocation_id
-                    && !pending_file_evidence.is_empty()
-                {
-                    match self
-                        .store
-                        .persist_file_evidence_start(invocation_id, &pending_file_evidence)
-                    {
-                        Ok(()) => {
-                            self.file_evidence
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .insert(invocation_id, pending_file_evidence);
-                        }
-                        Err(error) => warn!(
-                            event = "local_file_evidence_before_persistence_failed",
-                            invocation_id,
-                            error = %error,
-                        ),
-                    }
-                }
-                // Refresh canonical parent cards for attached polls too. The
-                // poll invocation is already durable here, so the visible poll
-                // count can advance immediately instead of waiting for the
-                // potentially long write_stdin call to complete.
-                self.queue_presentation_refresh(
-                    presentation_root_invocation_id,
-                    invocation_id,
-                    agent_id,
-                    "invocation_started",
-                    emit_live,
-                );
-                Ok(context)
-            }
-            Err(error) => {
+        // Admission is memory-only. The worker owns every history database write;
+        // no SQLite handle, filesystem write or storage-backed lock is touched here.
+        let context = self
+            .admission_state
+            .reserve(context, &start)
+            .inspect_err(|error| {
                 self.health.degrade_nonblocking(format!(
-                    "invocation envelope persistence failed: {error}"
+                    "Local history memory admission failed: {error:#}"
                 ));
-                Err(error)
-            }
+            })?;
+        if !self.worker_running.load(Ordering::Acquire) {
+            self.health
+                .degrade_nonblocking("Local history admission worker is unavailable");
+            anyhow::bail!("Local history admission worker is unavailable");
         }
+        let queued = self
+            .admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(context.clone(), start, now_ms()?);
+        if !queued {
+            self.health.degrade_nonblocking("Local history admission queue is full; invocation evidence was omitted without delaying execution");
+            anyhow::bail!("Local history admission queue is full");
+        }
+        Ok(context)
     }
 
     fn complete(&self, context: &InvocationContext, outcome: InvocationOutcome) -> Result<()> {
         let invocation_id = context.invocation_id.ok_or_else(|| {
             anyhow::anyhow!("Local invocation completion is missing durable invocation ID")
         })?;
-        let pending_file_evidence = self
-            .file_evidence
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&invocation_id)
-            .unwrap_or_default();
-        let file_evidence = complete_file_evidence(&pending_file_evidence);
         let queued = WorkerMessage::Complete {
             context: context.clone(),
             outcome: outcome.clone(),
-            file_evidence: file_evidence.clone(),
+            completed_at_ms: now_ms()?,
         };
         self.enqueue_priority_message(
             queued,
@@ -784,21 +828,18 @@ impl LocalHistoryRuntime {
                 .completion_overflow
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if priority.len() < COMPLETION_OVERFLOW_MAX_ITEMS {
-                priority.push_back(message);
-                return true;
+            match priority.push(message) {
+                Ok(()) => return true,
+                Err(message) => message,
             }
-            message
         };
 
-        match self.sender.try_send(message) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
-                self.health.note_evidence_incomplete(invocation_id);
-                self.health.degrade_nonblocking(failure_reason);
-                false
-            }
-        }
+        drop(message);
+        // All control evidence shares one FIFO. Spilling to the output lane
+        // would let a later process end overtake its start after a queue drain.
+        self.health.note_evidence_incomplete(invocation_id);
+        self.health.degrade_nonblocking(failure_reason);
+        false
     }
 }
 
@@ -857,6 +898,7 @@ fn run_worker(
     let health = shared.health.as_ref();
     let events = shared.events.as_ref();
     let mut shutdown = false;
+    let mut shutdown_deadline = None;
     // `open_with_store` completed the startup retention pass before spawning
     // this worker, so future maintenance can honor the normal coalescing
     // interval instead of racing the first evidence messages.
@@ -864,13 +906,24 @@ fn run_worker(
     let mut last_materialization_backfill = None;
     let mut materialization_backfill_complete = false;
     let mut live_display = LiveDisplayStreams::new();
-    while !shutdown {
+    let mut waiting_messages = Vec::new();
+    loop {
+        if let Err(error) = shared.admission_state.replenish(store) {
+            health.note_storage_error(&error);
+            health.degrade_nonblocking(format!(
+                "Local invocation ID reservation queued for retry: {error:#}"
+            ));
+        }
+        persist_pending_admissions(&shared);
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
         drain_priority_completions(&shared.completion_overflow, &mut messages);
         if messages.is_empty() {
             match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
                 Ok(
                     message @ (WorkerMessage::Output(_)
+                    | WorkerMessage::PatchEvidence { .. }
+                    | WorkerMessage::Identify(_)
+                    | WorkerMessage::ContextClaim { .. }
                     | WorkerMessage::Complete { .. }
                     | WorkerMessage::ProcessStarted { .. }
                     | WorkerMessage::ProcessEnded { .. }),
@@ -886,6 +939,9 @@ fn run_worker(
             match receiver.try_recv() {
                 Ok(
                     message @ (WorkerMessage::Output(_)
+                    | WorkerMessage::PatchEvidence { .. }
+                    | WorkerMessage::Identify(_)
+                    | WorkerMessage::ContextClaim { .. }
                     | WorkerMessage::Complete { .. }
                     | WorkerMessage::ProcessStarted { .. }
                     | WorkerMessage::ProcessEnded { .. }),
@@ -910,16 +966,25 @@ fn run_worker(
         let mut late_priority = Vec::new();
         drain_priority_completions(&shared.completion_overflow, &mut late_priority);
         if !late_priority.is_empty() {
-            late_priority.append(&mut messages);
-            messages = late_priority;
+            messages.append(&mut late_priority);
         }
 
         let pending_refreshes =
             take_pending_presentation_refreshes(&shared.pending_presentation_refreshes);
 
-        let idle = messages.is_empty() && pending_refreshes.is_empty();
+        let idle = messages.is_empty()
+            && pending_refreshes.is_empty()
+            && waiting_messages.is_empty()
+            && shared
+                .admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty();
+        waiting_messages.append(&mut messages);
+        messages = take_admitted_messages(&mut waiting_messages, &shared);
         process_pending_presentation_refreshes(pending_refreshes, store, events);
-        process_messages(messages, &shared, &mut live_display);
+        waiting_messages.extend(process_messages(messages, &shared, &mut live_display));
+        bound_waiting_messages(&mut waiting_messages, health);
 
         let backfill_due = !materialization_backfill_complete
             && idle
@@ -978,16 +1043,229 @@ fn run_worker(
                 Err(error) => mark_retention_error_best_effort(store, &error.to_string()),
             }
         }
+        if shutdown {
+            let deadline = *shutdown_deadline
+                .get_or_insert_with(|| Instant::now() + SHUTDOWN_CAPTURE_DRAIN_TIMEOUT);
+            if idle || Instant::now() >= deadline {
+                break;
+            }
+        }
     }
 
+    if !waiting_messages.is_empty()
+        || !shared
+            .admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    {
+        health.unflushed.store(true, Ordering::Release);
+        health.degrade_nonblocking(
+            "Local history shutdown ended with unpersisted admission evidence",
+        );
+    }
     health.persist_degraded_state(store);
+}
+
+fn persist_pending_admissions(shared: &HistoryWorkerShared) {
+    for _ in 0..OUTPUT_BATCH_LIMIT {
+        let admission = shared
+            .admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop();
+        let Some(admission) = admission else {
+            break;
+        };
+        // No producer-shared lock is held across any storage operation.
+        let result = shared.store.begin_at(
+            admission.context.clone(),
+            admission.start.clone(),
+            admission.started_at_ms,
+        );
+        match result {
+            Ok(begin) => {
+                shared
+                    .admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .finish(&admission);
+                let context = &begin.context;
+                let agent = context.agent_id.as_deref();
+                let root = begin.presentation_root_invocation_id;
+                if begin.agent_first_seen_in_runtime {
+                    let observer = shared
+                        .agent_first_seen_observer
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    if let (Some(observer), Some(agent)) = (observer, agent) {
+                        observer(agent.to_string());
+                    }
+                    shared.events.emit_with(
+                        "agent_first_seen",
+                        agent,
+                        context.invocation_id,
+                        root,
+                        None,
+                        || json!({}),
+                    );
+                }
+                if let Some(workdir) = begin.new_workdir.as_deref() {
+                    shared.events.emit_with(
+                        "agent_workdir_added",
+                        agent,
+                        context.invocation_id,
+                        root,
+                        Some(PRESENTATION_SCHEMA_VERSION),
+                        || json!({"normalized_workdir":workdir}),
+                    );
+                }
+                let live = shared.events.emit_with("invocation_started", agent, context.invocation_id, root,
+                    Some(PRESENTATION_SCHEMA_VERSION), || json!({
+                        "tool_name": admission.start.tool_name.as_ref(),
+                        "normalized_workdir": admission.start.arguments.get("workdir").and_then(serde_json::Value::as_str).and_then(normalize_declared_workdir),
+                    }));
+                if let Some(root) = root {
+                    refresh_and_emit_presentation(
+                        &shared.store,
+                        &shared.events,
+                        root,
+                        context.invocation_id,
+                        agent,
+                        "invocation_started",
+                        live,
+                    );
+                }
+            }
+            Err(error) => {
+                shared.health.note_storage_error(&error);
+                shared.health.degrade_nonblocking(format!(
+                    "invocation envelope persistence failed; queued for retry: {error:#}"
+                ));
+                shared
+                    .admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .retry(admission);
+                break;
+            }
+        }
+    }
+}
+
+fn message_invocation_id(message: &WorkerMessage) -> Option<i64> {
+    match message {
+        WorkerMessage::Output(
+            OutputEvent::Chunk { invocation_id, .. }
+            | OutputEvent::Complete { invocation_id, .. }
+            | OutputEvent::Incomplete { invocation_id, .. },
+        )
+        | WorkerMessage::ProcessStarted { invocation_id, .. }
+        | WorkerMessage::PatchEvidence { invocation_id, .. }
+        | WorkerMessage::ProcessEnded { invocation_id, .. } => Some(*invocation_id),
+        WorkerMessage::Complete { context, .. } => context.invocation_id,
+        _ => None,
+    }
+}
+
+fn message_bytes(message: &WorkerMessage) -> usize {
+    let payload = match message {
+        WorkerMessage::PatchEvidence { before, after, .. } => {
+            before
+                .iter()
+                .map(|item| {
+                    item.before.text().map_or(0, str::len)
+                        + item
+                            .destination_before
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.text())
+                            .map_or(0, str::len)
+                })
+                .sum::<usize>()
+                + after
+                    .iter()
+                    .map(|item| {
+                        item.after.text().map_or(0, str::len)
+                            + item
+                                .source_after
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.text())
+                                .map_or(0, str::len)
+                    })
+                    .sum::<usize>()
+        }
+        WorkerMessage::Output(OutputEvent::Chunk { text, .. }) => text.len(),
+        WorkerMessage::Complete {
+            outcome: InvocationOutcome::Success(value),
+            ..
+        } => value.to_string().len(),
+        WorkerMessage::Complete {
+            outcome: InvocationOutcome::Error(error),
+            ..
+        } => error.len(),
+        _ => 0,
+    };
+    payload.saturating_add(512)
+}
+
+fn bound_waiting_messages(waiting: &mut Vec<WorkerMessage>, health: &HistoryHealth) {
+    const MAX_WAITING_BYTES: usize = 16 * 1024 * 1024;
+    const MAX_WAITING_MESSAGES: usize = 4096;
+    let mut bytes = 0usize;
+    let mut count = 0usize;
+    waiting.retain(|message| {
+        let size = message_bytes(message);
+        if count < MAX_WAITING_MESSAGES && bytes.saturating_add(size) <= MAX_WAITING_BYTES {
+            count += 1;
+            bytes += size;
+            return true;
+        }
+        if let Some(id) = message_invocation_id(message) {
+            health.note_evidence_incomplete(id);
+            health.note_capture_incomplete(id, "Evidence backlog exceeded its bounded memory budget while storage was unavailable".to_string());
+        }
+        health.degrade_nonblocking("Local history dependent evidence queue is full; evidence omitted without delaying execution");
+        false
+    });
+}
+
+fn take_admitted_messages(
+    waiting: &mut Vec<WorkerMessage>,
+    shared: &HistoryWorkerShared,
+) -> Vec<WorkerMessage> {
+    bound_waiting_messages(waiting, &shared.health);
+    let mut ready = Vec::new();
+    let mut deferred = Vec::new();
+    for message in waiting.drain(..) {
+        let pending = {
+            let admissions = shared
+                .admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match message_invocation_id(&message) {
+                Some(id) => admissions.contains(id),
+                None => !admissions.is_empty(),
+            }
+        };
+        if pending {
+            deferred.push(message);
+        } else {
+            ready.push(message);
+        }
+    }
+    *waiting = deferred;
+    ready
 }
 
 fn process_messages(
     messages: Vec<WorkerMessage>,
     shared: &HistoryWorkerShared,
     live_display: &mut LiveDisplayStreams,
-) {
+) -> Vec<WorkerMessage> {
+    let mut retry = Vec::new();
+    let mut retry_ids = HashSet::new();
+    let mut retry_control = false;
     let store = shared.store.as_ref();
     let health = shared.health.as_ref();
     let events = shared.events.as_ref();
@@ -999,28 +1277,119 @@ fn process_messages(
     #[cfg(test)]
     let mut barriers = Vec::new();
     for message in messages {
+        let id = message_invocation_id(&message);
+        if id.is_some_and(|id| retry_ids.contains(&id)) || (id.is_none() && retry_control) {
+            retry.push(message);
+            continue;
+        }
+        let replay = message.clone();
         match message {
+            WorkerMessage::PatchEvidence {
+                invocation_id,
+                before,
+                after,
+                warning,
+            } => match store
+                .persist_file_evidence_start(invocation_id, &before)
+                .and_then(|()| store.persist_file_evidence_completion(invocation_id, &after))
+                .and_then(|()| match warning.as_deref() {
+                    Some(reason) => store.mark_evidence_incomplete(invocation_id, reason),
+                    None => Ok(()),
+                }) {
+                Ok(()) => {
+                    refresh_and_emit_presentation(
+                        store,
+                        events,
+                        invocation_id,
+                        Some(invocation_id),
+                        None,
+                        "patch_evidence",
+                        true,
+                    );
+                }
+                Err(error) => {
+                    health.degrade_nonblocking(format!(
+                        "Local committed patch evidence queued for retry: {error:#}"
+                    ));
+                    retry_ids.insert(invocation_id);
+                    retry.push(replay);
+                }
+            },
+            WorkerMessage::Identify(context) => match store.identify_agent(context) {
+                Ok(identity) if identity.first_seen_in_runtime => {
+                    if let Some(agent) = identity.context.agent_id.as_deref() {
+                        let observer = shared
+                            .agent_first_seen_observer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        if let Some(observer) = observer {
+                            observer(agent.to_owned());
+                        }
+                        events.emit_with("agent_first_seen", Some(agent), None, None, None, || {
+                            json!({})
+                        });
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    health.degrade_nonblocking(format!(
+                        "Local Agent identity queued for retry: {error:#}"
+                    ));
+                    retry_control = true;
+                    retry.push(replay);
+                }
+            },
+            WorkerMessage::ContextClaim {
+                provider,
+                workdir,
+                skills,
+            } => {
+                let result = match workdir.as_deref() {
+                    None => store.claim_global_context_injection(&provider),
+                    Some(workdir) if skills => store.claim_repo_skills_check(&provider, workdir),
+                    Some(workdir) => store.claim_repo_agents_check(&provider, workdir),
+                };
+                if let Err(error) = result {
+                    health.degrade_nonblocking(format!(
+                        "Local context claim queued for retry: {error:#}"
+                    ));
+                    retry_control = true;
+                    retry.push(replay);
+                }
+            }
             WorkerMessage::Output(event) => output_events.push(event),
             WorkerMessage::Complete {
                 context,
                 outcome,
-                file_evidence,
+                completed_at_ms,
             } => {
                 flush_output_events(&mut output_events, store, health, events, live_display);
                 let invocation_id = context.invocation_id;
-                match store.complete(&context, outcome.clone()) {
+                match store.complete_at(&context, outcome.clone(), completed_at_ms) {
                     Err(error) => {
+                        health.note_storage_error(&error);
                         if let Some(invocation_id) = invocation_id {
-                            health.note_evidence_incomplete(invocation_id);
+                            retry_ids.insert(invocation_id);
                         }
-                        health.degrade_persisting(
-                            store,
-                            format!("invocation completion persistence failed: {error}"),
-                        );
+                        health.degrade_nonblocking(format!(
+                            "invocation completion queued for retry: {error:#}"
+                        ));
+                        retry.push(replay);
                     }
                     Ok(completion) => {
                         if let Some(invocation_id) = invocation_id {
-                            persist_completed_file_evidence(store, invocation_id, &file_evidence);
+                            if let InvocationOutcome::Success(value) = &outcome
+                                && let Err(error) =
+                                    store.persist_proven_shell_creation(invocation_id, value)
+                            {
+                                health.degrade_nonblocking(format!(
+                                    "Proven shell creation evidence queued for retry: {error:#}"
+                                ));
+                                retry_ids.insert(invocation_id);
+                                retry.push(replay);
+                                continue;
+                            }
                         }
                         let emit_live = events.emit_invocation_completion(
                             &context,
@@ -1078,11 +1447,11 @@ fn process_messages(
                         );
                     }
                     Err(error) => {
-                        health.note_evidence_incomplete(invocation_id);
-                        health.degrade_persisting(
-                            store,
-                            format!("process lifecycle start persistence failed: {error}"),
-                        );
+                        health.degrade_nonblocking(format!(
+                            "process lifecycle start queued for retry: {error:#}"
+                        ));
+                        retry_ids.insert(invocation_id);
+                        retry.push(replay);
                     }
                 }
             }
@@ -1158,16 +1527,20 @@ fn process_messages(
                         );
                     }
                     Err(error) => {
-                        health.note_evidence_incomplete(invocation_id);
-                        health.degrade_persisting(
-                            store,
-                            format!("process lifecycle end persistence failed: {error}"),
-                        );
+                        health.degrade_nonblocking(format!(
+                            "process lifecycle end queued for retry: {error:#}"
+                        ));
+                        retry_ids.insert(invocation_id);
+                        retry.push(replay);
                     }
                 }
             }
             #[cfg(test)]
             WorkerMessage::Barrier(acknowledge) => {
+                if !retry.is_empty() {
+                    retry.push(WorkerMessage::Barrier(acknowledge));
+                    continue;
+                }
                 flush_output_events(&mut output_events, store, health, events, live_display);
                 barriers.push(acknowledge);
             }
@@ -1196,10 +1569,11 @@ fn process_messages(
     if health.degraded.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
     }
+    retry
 }
 
 fn drain_priority_completions(
-    completion_overflow: &Mutex<VecDeque<WorkerMessage>>,
+    completion_overflow: &Mutex<PriorityQueue>,
     messages: &mut Vec<WorkerMessage>,
 ) {
     while messages.len() < OUTPUT_BATCH_LIMIT {
@@ -1239,31 +1613,6 @@ fn process_pending_presentation_refreshes(
             refresh.source,
             refresh.emit_live,
         );
-    }
-}
-
-fn persist_completed_file_evidence(
-    store: &HistoryStore,
-    invocation_id: i64,
-    evidence: &[CompletedFileEvidence],
-) {
-    if evidence.is_empty() {
-        return;
-    }
-    if let Err(error) = store.persist_file_evidence_completion(invocation_id, evidence) {
-        warn!(
-            event = "local_file_evidence_after_persistence_failed",
-            invocation_id,
-            error = %error,
-        );
-        let reason = format!("after-file evidence persistence failed: {error}");
-        if let Err(mark_error) = store.mark_file_evidence_unavailable(invocation_id, &reason) {
-            warn!(
-                event = "local_file_evidence_unavailable_persistence_failed",
-                invocation_id,
-                error = %mark_error,
-            );
-        }
     }
 }
 

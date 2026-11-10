@@ -79,12 +79,16 @@ impl HistoryStore {
         self.with_foreground_connection(|connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let source: AgentIdSource = match context.agent_id.clone() {
+                Some(id) => Arc::new(move || id.to_string()),
+                None => self.agent_id_source.clone(),
+            };
             let (agent_id, first_seen_in_runtime) = resolve_agent(
                 &transaction,
                 Some(&provider),
                 now,
                 &self.runtime_id,
-                &self.agent_id_source,
+                &source,
             )?;
             ensure_context_session(&transaction, &provider)?;
             context.global_context_pending = agent_global_context_pending(&transaction, &provider)?;
@@ -136,6 +140,10 @@ impl HistoryStore {
 
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) fn agent_id_source(&self) -> AgentIdSource {
+        self.agent_id_source.clone()
     }
 
     pub(super) fn claim_global_context_injection(
@@ -205,29 +213,47 @@ impl HistoryStore {
             .map(|result| result.context)
     }
 
+    #[cfg(test)]
     pub(super) fn begin_with_metadata(
+        &self,
+        context: InvocationContext,
+        start: InvocationStart,
+    ) -> Result<HistoryBeginResult> {
+        self.begin_at(context, start, now_ms()?)
+    }
+
+    pub(super) fn begin_at(
         &self,
         mut context: InvocationContext,
         start: InvocationStart,
+        now: i64,
     ) -> Result<HistoryBeginResult> {
         let correlation_id = context
             .correlation_id
             .clone()
             .unwrap_or_else(|| Arc::from(format!("{:032x}", rand::random::<u128>())));
         context.correlation_id = Some(correlation_id.clone());
-        let now = now_ms()?;
         self.with_foreground_connection(|connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .context("failed to start mandatory Local invocation-envelope transaction")?;
 
+        let source: AgentIdSource = match context.agent_id.clone() {
+            Some(id) => Arc::new(move || id.to_string()),
+            None => self.agent_id_source.clone(),
+        };
         let (agent_id, agent_first_seen_in_runtime) = resolve_agent(
             &transaction,
             context.provider.as_ref(),
             now,
             &self.runtime_id,
-            &self.agent_id_source,
+            &source,
         )?;
+        if let Some(expected) = context.agent_id.as_deref()
+            && agent_id.as_deref() != Some(expected)
+        {
+            bail!("Local history Agent identity changed after memory admission");
+        }
         if let Some(agent_id) = agent_id.as_deref() {
             context.agent_id = Some(Arc::from(agent_id));
         }
@@ -292,12 +318,12 @@ impl HistoryStore {
         transaction
             .execute(
                 "INSERT INTO invocations(
-                    correlation_id, agent_id, provider_kind, provider_session_key, tool_name,
+                    id, correlation_id, agent_id, provider_kind, provider_session_key, tool_name,
                     args_json, declared_workdir_exact, declared_workdir_normalized,
                     started_at_ms, evidence_state, capture_state, target_session_handle,
                     target_created_by_agent_id, target_created_by_invocation_id,
                     continuation_kind, cross_agent
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13, ?14, ?15)",
+                 ) VALUES (?16, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     correlation_id.as_ref(),
                     agent_id,
@@ -314,6 +340,7 @@ impl HistoryStore {
                     target_creator_invocation_id,
                     continuation_kind,
                     cross_agent,
+                    context.invocation_id,
                 ],
             )
             .context("failed to persist mandatory Local invocation envelope")?;
@@ -356,15 +383,24 @@ impl HistoryStore {
         .context("Local history invocation envelope is busy or unavailable")
     }
 
+    #[cfg(test)]
     pub(super) fn complete(
         &self,
         context: &InvocationContext,
         outcome: InvocationOutcome,
     ) -> Result<HistoryCompletionResult> {
+        self.complete_at(context, outcome, now_ms()?)
+    }
+
+    pub(super) fn complete_at(
+        &self,
+        context: &InvocationContext,
+        outcome: InvocationOutcome,
+        completed_at_ms: i64,
+    ) -> Result<HistoryCompletionResult> {
         let invocation_id = context
             .invocation_id
             .context("Local invocation completion is missing durable invocation ID")?;
-        let completed_at_ms = now_ms()?;
         let connection = self.lock_connection();
         let (started_at_ms, continuation_kind, target_created_by_invocation_id): (
             i64,
@@ -393,7 +429,8 @@ impl HistoryStore {
                             result_json = ?4, error_text = NULL, result_status = ?5,
                             result_cwd = ?6, result_session_handle = ?7,
                             result_exit_code = ?8, result_termination_reason = ?9,
-                            evidence_state = 'complete', evidence_reason = NULL
+                            evidence_state = CASE WHEN evidence_state = 'incomplete' THEN 'incomplete' ELSE 'complete' END,
+                            evidence_reason = CASE WHEN evidence_state = 'incomplete' THEN evidence_reason ELSE NULL END
                          WHERE id = ?1",
                         params![
                             invocation_id,
@@ -415,7 +452,8 @@ impl HistoryStore {
                         "UPDATE invocations SET
                             completed_at_ms = ?2, duration_ms = ?3, outcome_kind = 'error',
                             result_json = NULL, error_text = ?4,
-                            evidence_state = 'complete', evidence_reason = NULL,
+                            evidence_state = CASE WHEN evidence_state = 'incomplete' THEN 'incomplete' ELSE 'complete' END,
+                            evidence_reason = CASE WHEN evidence_state = 'incomplete' THEN evidence_reason ELSE NULL END,
                             capture_state = CASE
                                 WHEN capture_state = 'pending' THEN 'complete'
                                 ELSE capture_state
@@ -511,7 +549,8 @@ impl HistoryStore {
     }
 
     pub(super) fn mark_capture_incomplete(&self, invocation_id: i64, reason: &str) -> Result<()> {
-        self.lock_connection()
+        let changed = self
+            .lock_connection()
             .execute(
                 "UPDATE invocations
                  SET capture_state = CASE
@@ -528,11 +567,17 @@ impl HistoryStore {
             .with_context(|| {
                 format!("failed to mark invocation {invocation_id} output capture incomplete")
             })?;
+        if changed != 1 {
+            bail!(
+                "Local invocation {invocation_id} is not yet durable while recording incomplete evidence"
+            );
+        }
         Ok(())
     }
 
     pub(super) fn mark_evidence_incomplete(&self, invocation_id: i64, reason: &str) -> Result<()> {
-        self.lock_connection()
+        let changed = self
+            .lock_connection()
             .execute(
                 "UPDATE invocations
                  SET evidence_state = 'incomplete', evidence_reason = ?2
@@ -542,6 +587,11 @@ impl HistoryStore {
             .with_context(|| {
                 format!("failed to mark invocation {invocation_id} evidence incomplete")
             })?;
+        if changed != 1 {
+            bail!(
+                "Local invocation {invocation_id} is not yet durable while recording incomplete evidence"
+            );
+        }
         Ok(())
     }
 

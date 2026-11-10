@@ -1,14 +1,20 @@
+#[cfg(test)]
 mod capture;
 mod parse;
+mod patch;
+mod shell_creation;
 
 #[cfg(test)]
 mod tests;
 
 use std::path::PathBuf;
 
+#[cfg(test)]
 use crate::invocation::InvocationStart;
 
 pub(crate) use parse::parse_file_capture_plans;
+pub(crate) use patch::committed_patch_evidence;
+pub(crate) use shell_creation::completed_shell_creation;
 
 pub(crate) const MAX_FILE_EVIDENCE_FILES: usize = 8;
 pub(crate) const MAX_FILE_EVIDENCE_BYTES: u64 = 256 * 1024;
@@ -105,6 +111,7 @@ pub(crate) struct CompletedFileEvidence {
     pub(crate) source_after: Option<FileSnapshot>,
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_file_evidence(start: &InvocationStart) -> Vec<PendingFileEvidence> {
     let Some(plans) = parse_file_capture_plans(start) else {
         return Vec::new();
@@ -122,6 +129,7 @@ pub(crate) fn prepare_file_evidence(start: &InvocationStart) -> Vec<PendingFileE
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn complete_file_evidence(
     pending: &[PendingFileEvidence],
 ) -> Vec<CompletedFileEvidence> {

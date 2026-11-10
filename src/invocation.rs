@@ -111,8 +111,8 @@ pub enum InvocationOutcome {
 }
 
 pub trait InvocationEvidenceRecorder: Send + Sync {
-    /// Persist the mandatory invocation envelope before tool side effects and
-    /// return the enriched context that must flow through service/session work.
+    /// Reserve an invocation context and enqueue evidence without waiting for
+    /// history storage. The context must flow through service/session work.
     fn begin(
         &self,
         context: InvocationContext,
@@ -122,6 +122,19 @@ pub trait InvocationEvidenceRecorder: Send + Sync {
     /// Persist the exact logical handler result/error after it has been
     /// produced. Failure here must not rewrite the result returned to MCP.
     fn complete(&self, context: &InvocationContext, outcome: InvocationOutcome) -> Result<()>;
+
+    /// Queue actual patch bytes already obtained by mutation, without extra IO.
+    fn record_patch_evidence(
+        &self,
+        _context: &InvocationContext,
+        _evidence: crate::apply_patch::PatchEvidence,
+    ) {
+    }
+
+    /// A truthful warning about incomplete history, independent of tool success.
+    fn warning(&self) -> Option<String> {
+        None
+    }
 }
 
 pub trait McpResultContextProvider: Send + Sync {

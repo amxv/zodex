@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod evidence_tests;
 mod recovery;
 mod replacement;
 #[cfg(test)]
@@ -8,7 +10,7 @@ use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
-use codex_apply_patch::{ApplyPatchFailure, Hunk, ParseError};
+use codex_apply_patch::{AppliedPatchDelta, ApplyPatchFailure, Hunk, ParseError};
 use codex_exec_server::LOCAL_FS;
 use codex_utils_path_uri::PathUri;
 
@@ -24,6 +26,29 @@ const MOVE_TO_PREFIX: &str = "*** Move to: ";
 /// Failures are returned as a single MCP error containing both the applied
 /// operations and the operations the agent needs to retry.
 pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
+    apply_patch_with_delta(patch, workdir).await.0
+}
+
+/// Evidence returned by the mutation itself, without observability filesystem IO.
+/// Replacement operations do not read their previous contents; these paths must
+/// remain unavailable rather than being presented as additions or invented diffs.
+#[derive(Debug, Default)]
+pub struct PatchEvidence {
+    pub delta: AppliedPatchDelta,
+    pub unavailable_paths: Vec<PathBuf>,
+}
+
+pub async fn apply_patch_with_delta(patch: &str, workdir: &str) -> (Result<String>, PatchEvidence) {
+    let mut evidence = PatchEvidence::default();
+    let result = apply_patch_recorded(patch, workdir, &mut evidence).await;
+    (result, evidence)
+}
+
+async fn apply_patch_recorded(
+    patch: &str,
+    workdir: &str,
+    evidence: &mut PatchEvidence,
+) -> Result<String> {
     validate_absolute_existing_workdir(workdir)?;
     let rewritten_patch = rewrite_patch_paths(patch, workdir)?;
     let parsed = codex_apply_patch::parse_patch(&rewritten_patch).map_err(format_parse_error)?;
@@ -62,15 +87,21 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
             })
             .await;
             match result {
-                Ok(Ok(())) => applied.push(format!("M {} (replaced)", path.display())),
+                Ok(Ok(())) => {
+                    evidence.unavailable_paths.push(path.clone());
+                    applied.push(format!("M {} (replaced)", path.display()));
+                }
                 Ok(Err(error)) => failed.push(format!(
                     "M {}: {error:#}\n  Original file was left intact.",
                     path.display()
                 )),
-                Err(error) => failed.push(format!(
-                    "M {}: replacement worker failed: {error}\n  Inspect the file before retrying.",
-                    path.display()
-                )),
+                Err(error) => {
+                    evidence.unavailable_paths.push(path.clone());
+                    failed.push(format!(
+                        "M {}: replacement worker failed: {error}\n  Inspect the file before retrying.",
+                        path.display()
+                    ));
+                }
             }
             continue;
         }
@@ -91,7 +122,10 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
         .await;
 
         match attempt {
-            Ok(_) => applied.push(label),
+            Ok(delta) => {
+                evidence.delta.append(delta);
+                applied.push(label);
+            }
             Err(failure) => {
                 // A failed *matching* operation has not written its file. Only
                 // then is it safe to try uniquely located, reordered hunks.
@@ -113,7 +147,8 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
                     )
                     .await
                     {
-                        Ok(_) => {
+                        Ok(delta) => {
+                            evidence.delta.append(delta);
                             applied.push(label.clone());
                             recovered.push(label);
                             continue;
@@ -128,12 +163,14 @@ pub async fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
                                 &retry_failure,
                                 &retry_stderr,
                             ));
+                            evidence.delta.append(retry_failure.into_parts().1);
                             continue;
                         }
                         Err(_) => {} // Keep the original actionable error.
                     }
                 }
                 failed.push(format_failure(&label, hunk, &failure, &stderr));
+                evidence.delta.append(failure.into_parts().1);
             }
         }
     }

@@ -5,6 +5,7 @@ use tempfile::tempdir;
 
 use crate::config::Config;
 use crate::local::{HistoryQuery, LocalHistoryReader};
+use crate::local::{PresentationKind, build_presentation};
 
 use super::local::{LocalMcpServerConfig, start_local_mcp_server_with_observer};
 use super::local_tests::{
@@ -13,7 +14,7 @@ use super::local_tests::{
 };
 
 #[tokio::test]
-async fn local_mcp_captures_bounded_actual_before_and_after_file_evidence() {
+async fn local_mcp_keeps_shell_terminal_and_captures_committed_patch_evidence() {
     let root = tempdir().unwrap();
     let database = root.path().join("history.sqlite3");
     let shell_path = root.path().join("shell file.txt");
@@ -51,6 +52,7 @@ async fn local_mcp_captures_bounded_actual_before_and_after_file_evidence() {
     )
     .await;
     assert_ne!(shell["result"]["isError"], json!(true));
+    assert_eq!(fs::read_to_string(&shell_path).unwrap(), "before\nafter\n");
 
     let patch = json_response(
         post_mcp(
@@ -72,6 +74,18 @@ async fn local_mcp_captures_bounded_actual_before_and_after_file_evidence() {
     )
     .await;
     assert_ne!(patch["result"]["isError"], json!(true));
+    assert_eq!(
+        fs::read_to_string(root.path().join("patch file.txt")).unwrap(),
+        "hello\n"
+    );
+    // Mutate after the tool has returned: persisted bytes must come from the
+    // patch mutation, never a later history-worker read.
+    fs::write(
+        root.path().join("patch file.txt"),
+        "later unrelated content\n",
+    )
+    .unwrap();
+    fs::write(&shell_path, "later shell contents\n").unwrap();
     history.flush_for_test().unwrap();
 
     server.shutdown().await.unwrap();
@@ -91,16 +105,15 @@ async fn local_mcp_captures_bounded_actual_before_and_after_file_evidence() {
         .iter()
         .find(|record| record.tool_name == "exec_command")
         .unwrap();
-    assert_eq!(shell.file_evidence.len(), 1);
-    assert_eq!(shell.file_evidence[0].operation_hint, "append");
-    assert_eq!(
-        shell.file_evidence[0].before_text.as_deref(),
-        Some("before\n")
+    assert!(
+        shell.file_evidence.is_empty(),
+        "shell append has no speculative snapshots"
     );
-    assert_eq!(
-        shell.file_evidence[0].after_text.as_deref(),
-        Some("before\nafter\n")
-    );
+    let presentation = build_presentation(&records, &[]);
+    assert!(presentation.records.iter().any(|record| {
+        record.primary_invocation_id == shell.id
+            && matches!(record.kind, PresentationKind::Command { .. })
+    }));
 
     let patch = records
         .iter()

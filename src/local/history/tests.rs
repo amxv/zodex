@@ -560,10 +560,15 @@ fn locked_database_degrades_history_without_poisoning_later_envelopes() {
         provider_context("provider", "blocked-envelope"),
         patch_start(dir.path(), "must not be admitted"),
     );
-    assert!(
-        result.is_err(),
-        "locked history envelope should fail to persist"
-    );
+    let deferred = result.expect("locked SQLite must durably defer the envelope");
+    assert!(deferred.invocation_id.is_some());
+    runtime
+        .complete(
+            &deferred,
+            InvocationOutcome::Success(json!({"deferred":true})),
+        )
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(80));
     assert!(runtime.history_degraded());
 
     locker.execute_batch("ROLLBACK").unwrap();
@@ -583,7 +588,7 @@ fn locked_database_degrades_history_without_poisoning_later_envelopes() {
         LocalHistoryReader::query(&path, &HistoryQuery::recent(20))
             .unwrap()
             .len(),
-        1
+        2
     );
     let status = LocalHistoryReader::status(&path).unwrap();
     assert_eq!(status.health_state, "degraded");
@@ -781,7 +786,7 @@ fn busy_sqlite_load_sheds_only_the_noisy_capture_and_keeps_future_history_open()
         .unwrap();
     let invocation_id = context.invocation_id.unwrap();
 
-    std::thread::sleep(Duration::from_millis(50));
+    runtime.flush_for_test().unwrap();
     let locker = Connection::open(&path).unwrap();
     locker.execute_batch("BEGIN IMMEDIATE").unwrap();
 
