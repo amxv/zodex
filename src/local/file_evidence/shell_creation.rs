@@ -131,11 +131,16 @@ mod tests {
         )
     }
 
+    fn workdir() -> &'static str {
+        if cfg!(windows) {
+            r"C:\missing\workdir"
+        } else {
+            "/missing/workdir"
+        }
+    }
+
     fn start(command: &str) -> InvocationStart {
-        InvocationStart::new(
-            "exec_command",
-            json!({"cmd":command,"workdir":"/missing/workdir"}),
-        )
+        InvocationStart::new("exec_command", json!({"cmd":command,"workdir":workdir()}))
     }
 
     fn success() -> Value {
@@ -150,7 +155,7 @@ mod tests {
         assert_eq!(pending.plan.operation, FileOperationHint::Create);
         assert_eq!(
             pending.plan.path_after,
-            Path::new("/missing/workdir/new.txt")
+            Path::new(workdir()).join("new.txt")
         );
         assert_eq!(
             completed.after,

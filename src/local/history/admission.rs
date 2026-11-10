@@ -579,8 +579,12 @@ mod tests {
     #[test]
     fn lexical_normalization_never_needs_existing_paths() {
         assert_eq!(
-            lexical_workdir("/nonexistent/../x/./y"),
-            Some("/x/y".to_owned())
+            lexical_workdir(if cfg!(windows) {
+                r"C:\nonexistent\..\x\.\y"
+            } else {
+                "/nonexistent/../x/./y"
+            }),
+            Some(if cfg!(windows) { r"C:\x\y" } else { "/x/y" }.to_owned())
         );
         assert_eq!(lexical_workdir("relative"), None);
     }

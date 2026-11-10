@@ -770,7 +770,13 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
         "{patch_started}"
     );
     assert!(summary_patch_started.contains(&format!("\"invocation_id\":{patch_id}")));
-    std::fs::write(&patch_path, "after\n").unwrap();
+    let (result, evidence) = crate::apply_patch::apply_patch_with_delta(
+        "*** Begin Patch\n*** Update File: patch-target.txt\n@@\n-before\n+after\n*** End Patch\n",
+        workdir.to_str().unwrap(),
+    )
+    .await;
+    result.unwrap();
+    history.record_patch_evidence(&patch, evidence);
     history
         .complete(
             &patch,

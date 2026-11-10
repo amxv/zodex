@@ -1,14 +1,15 @@
 use super::LocalHistoryRuntime;
 use crate::session::{OwnedProcess, OwnedProcessEnd, OwnedProcessObserver};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::atomic::Ordering;
 
 impl OwnedProcessObserver for LocalHistoryRuntime {
     fn process_started(&self, process: &OwnedProcess) -> Result<()> {
-        let invocation_id = process
-            .created_by
-            .invocation_id
-            .context("active Local process is missing creator invocation ID")?;
+        let Some(invocation_id) = process.created_by.invocation_id else {
+            // History admission already reported degradation. Do not add a
+            // potentially blocking logging/error path to process execution.
+            return Ok(());
+        };
         // Reserve terminal capacity before returning from start observation.
         let tracked = self
             .lifecycle

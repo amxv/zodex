@@ -308,6 +308,7 @@ struct HistoryWorkerShared {
 }
 
 pub struct LocalHistoryRuntime {
+    accepting: AtomicBool,
     lease: Mutex<Option<super::lease::HistoryLease>>,
     admission_state: Arc<AdmissionState>,
     admissions: Arc<Mutex<AdmissionQueue>>,
@@ -341,6 +342,9 @@ impl LocalHistoryRuntime {
     }
 
     pub(crate) fn identify_agent(&self, context: InvocationContext) -> Result<InvocationContext> {
+        if context.provider.is_none() {
+            anyhow::bail!("Agent identity requires ChatGPT conversation metadata");
+        }
         let context = self.admission_state.identify(context)?;
         if let Err(error) = self
             .sender
@@ -414,6 +418,7 @@ impl LocalHistoryRuntime {
             .name("zodex-local-history".to_string())
             .spawn(move || run_worker(receiver, worker_shared, max_age_seconds, max_size_bytes))?;
         Ok(Arc::new(Self {
+            accepting: AtomicBool::new(true),
             lease: Mutex::new(Some(lease)),
             admission_state,
             admissions,
@@ -641,12 +646,21 @@ impl LocalHistoryRuntime {
             .map_err(|_| {
                 anyhow::anyhow!("Local history writer is unavailable during test flush")
             })?;
-        acknowledged.recv().map_err(|_| {
-            anyhow::anyhow!("Local history writer stopped before test flush completed")
-        })
+        acknowledged
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| {
+                anyhow::anyhow!("Local history writer stopped before test flush completed")
+            })
     }
 
     pub fn shutdown_blocking(&self) -> Result<()> {
+        {
+            let _admissions = self
+                .admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.accepting.store(false, Ordering::Release);
+        }
         let handle = self
             .worker
             .lock()
@@ -789,11 +803,18 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                 .degrade_nonblocking("Local history admission worker is unavailable");
             anyhow::bail!("Local history admission worker is unavailable");
         }
-        let queued = self
-            .admissions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(context.clone(), start, now_ms()?);
+        let queued = {
+            let mut admissions = self
+                .admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.accepting.load(Ordering::Acquire) {
+                self.health
+                    .degrade_nonblocking("Local history admission is closed during shutdown");
+                anyhow::bail!("Local history admission is closed during shutdown");
+            }
+            admissions.push(context.clone(), start, now_ms()?)
+        };
         if !queued {
             self.health.degrade_nonblocking("Local history admission queue is full; invocation evidence was omitted without delaying execution");
             anyhow::bail!("Local history admission queue is full");

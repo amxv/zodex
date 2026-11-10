@@ -252,6 +252,7 @@ async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_tim
         preferences.load().unwrap().agents[id].alias.as_deref(),
         Some("Rindle implementation")
     );
+    history.flush_for_test().unwrap();
     assert_eq!(
         LocalHistoryReader::agent_count(&paths.history_database(), None).unwrap(),
         1
@@ -280,6 +281,7 @@ async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_tim
     )
     .await;
     assert_eq!(execution["result"]["isError"], false);
+    history.flush_for_test().unwrap();
     let recorded =
         LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(20)).unwrap();
     assert_eq!(recorded.len(), 1);
@@ -304,6 +306,7 @@ async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_tim
     )
     .await;
     assert_eq!(plain["result"]["isError"], false);
+    history.flush_for_test().unwrap();
     let recorded =
         LocalHistoryReader::query(&paths.history_database(), &HistoryQuery::recent(20)).unwrap();
     let plain_id = recorded
@@ -380,6 +383,7 @@ async fn local_alias_tool_is_optional_identifies_first_call_and_never_enters_tim
         }}),
     ).await).await;
     assert_eq!(unauthenticated["result"]["isError"], true);
+    history.flush_for_test().unwrap();
     assert_eq!(
         LocalHistoryReader::agent_count(&paths.history_database(), None).unwrap(),
         2

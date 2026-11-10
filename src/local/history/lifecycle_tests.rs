@@ -103,6 +103,8 @@ async fn background_reaper_persists_final_process_truth_without_rewriting_runnin
         "background reaper never published process end"
     );
 
+    // Live activity changes at observation time; persistence is deliberately async.
+    history.flush_for_test().unwrap();
     let record = LocalHistoryReader::query(
         &database,
         &HistoryQuery {

@@ -263,6 +263,7 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
         )
         .unwrap();
     let invocation_id = invocation.invocation_id.unwrap();
+    observer.history.flush_for_test().unwrap();
     let output_metadata = client
         .get(capability_url(
             host.private_url(),

@@ -126,7 +126,7 @@ pub(super) fn drain(shared: &HistoryWorkerShared) {
             shared
                 .health
                 .degrade_nonblocking(format!("Process lifecycle queued for retry: {error:#}"));
-            continue;
+            break;
         }
         let acknowledged = shared
             .lifecycle
