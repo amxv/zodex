@@ -1,4 +1,5 @@
 mod admission;
+mod agent_timing;
 mod clear;
 mod event_identity;
 mod events;
@@ -40,6 +41,7 @@ mod tests;
 #[cfg(test)]
 mod timeline_tests;
 
+pub use agent_timing::{HistoryAgentTiming, HistoryAgentTimingDocument};
 pub use clear::clear_local_agent_history;
 pub use query::{
     HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence, HistoryFormat,

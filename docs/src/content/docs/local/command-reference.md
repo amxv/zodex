@@ -214,6 +214,22 @@ zodex local history --id <invocation-id> --raw
 zodex local history --format json
 ```
 
+### Agent tool-call timing
+
+```bash
+zodex local history agents
+zodex local history agents --agent k7m2
+zodex local history agents --agent k7m2 --format json
+```
+
+`agents` summarizes every retained raw tool call for each Agent ID, including `write_stdin` polls. It reports the first and latest call start, completion of that latest call, most recent completion of any call, elapsed time since the latest start, and counts of retained, unfinished, incomplete, and recorded-running work. Results are ordered by latest call, then Agent ID. `--agent` and `--format` work before or after `agents`.
+
+This is a read-only history snapshot and works while Local is stopped or running. Times cover **retained history**, not an Agent's lifetime or model session: retention, clearing, or recording failures may remove earlier or later calls. Agent identity observation times are not substituted for missing tool-call evidence. Running/unfinished counts describe persisted evidence, not a live process check; zero does not prove that a model is idle or finished. History health and detected evidence gaps are reported explicitly. Older schemas without process lifecycle evidence report those counts as unknown. An unreadable database is an error, not an empty history result.
+
+JSON has `schema_version: 1`, `scope: "retained_tool_calls"`, an `as_of_ms` clock sample, history store health, and an `agents` array. Timestamps and elapsed values are milliseconds; unknown values are `null`. `latest_tool_call_at_ms` is the latest **start**, `latest_tool_call_completed_at_ms` is that same call's completion, and `last_completed_tool_call_at_ms` is the most recent completion across all calls (which can belong to an older, longer-running call). Future timestamps flag clock skew rather than reporting a negative elapsed duration. Unattributed-call counts are store-wide, including when an Agent filter is used. The absence of a detected gap is not proof that the history is complete.
+
+`agents` accepts only `--agent` and `--format`; invocation filters such as `--last`, `--since`, `--workdir`, `--id`, and `--raw` are rejected so they cannot silently narrow the first/latest bounds.
+
 ### Clear history
 
 ```bash

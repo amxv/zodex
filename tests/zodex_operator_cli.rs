@@ -382,6 +382,119 @@ fn zodex_local_runtime_actions_fail_cleanly_on_unsupported_host() {
     assert!(stderr.contains("zodex local status"), "{stderr}");
 }
 
+#[test]
+fn zodex_local_history_agents_json_and_human_support_flags_on_either_side() {
+    let fixture = LocalCliFixture::new();
+    let database = fixture
+        .state_root
+        .join("zodex/local/history/history.sqlite3");
+    let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        database.clone(),
+        "agent-timing-cli-test",
+        365 * 86_400,
+        1024 * 1024 * 1024,
+    ))
+    .unwrap();
+    history.shutdown_blocking().unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO agents VALUES ('aaaa', 'test', 'test-agent', 1, 999999, 'old-runtime');
+         INSERT INTO invocations(correlation_id, agent_id, tool_name, args_json, started_at_ms,
+                                 completed_at_ms, evidence_state, capture_state)
+         VALUES ('first', 'aaaa', 'exec_command', '{}', 1000, 2000, 'complete', 'complete'),
+                ('latest', 'aaaa', 'write_stdin', '{}', 3000, NULL, 'pending', 'not_applicable');",
+        )
+        .unwrap();
+    drop(connection);
+    let before = fs::read(&database).unwrap();
+    for args in [
+        [
+            "local", "history", "agents", "--agent", "aaaa", "--format", "json",
+        ],
+        [
+            "local", "history", "--agent", "aaaa", "--format", "json", "agents",
+        ],
+    ] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(doc["schema_version"], 1);
+        assert_eq!(doc["scope"], "retained_tool_calls");
+        assert_eq!(doc["agents"].as_array().unwrap().len(), 1);
+        let agent = &doc["agents"][0];
+        assert_eq!(agent["agent_id"], "aaaa");
+        assert_eq!(agent["first_tool_call_at_ms"], 1000);
+        assert_eq!(agent["latest_tool_call_at_ms"], 3000);
+        assert!(agent["latest_tool_call_completed_at_ms"].is_null());
+        assert_eq!(agent["last_completed_tool_call_at_ms"], 2000);
+        assert_eq!(agent["unfinished_tool_call_count"], 1);
+        assert_eq!(
+            agent["elapsed_since_latest_tool_call_ms"].as_u64().unwrap(),
+            doc["as_of_ms"].as_u64().unwrap() - 3000
+        );
+    }
+    let output = fixture
+        .command()
+        .args(["local", "history", "agents", "--agent", "aaaa"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("Agent aaaa\n  First tool call: 1970-01-01T00:00:01Z"),
+        "{text}"
+    );
+    assert!(text.contains("Latest call completed: unknown"));
+    assert!(text.contains("not live process or model-session status"));
+    assert_eq!(
+        fs::read(database).unwrap(),
+        before,
+        "history inspection must be read-only"
+    );
+}
+
+#[test]
+fn zodex_local_history_agents_missing_store_and_rejected_filters_are_explicit() {
+    let fixture = LocalCliFixture::new();
+    let output = fixture
+        .command()
+        .args(["local", "history", "agents", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(doc["store"]["database_exists"], false);
+    assert_eq!(doc["history_gaps"][0], "history_database_missing");
+    assert!(doc["agents"].as_array().unwrap().is_empty());
+    for filter in [
+        vec!["--last", "20"],
+        vec!["--since", "1h"],
+        vec!["--id", "1"],
+        vec!["--raw"],
+    ] {
+        let output = fixture
+            .command()
+            .args(["local", "history"])
+            .args(filter)
+            .arg("agents")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("history agents only accepts"));
+    }
+    let output = fixture
+        .command()
+        .args(["local", "history", "agents", "--agent", "invalid"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
 struct LocalCliFixture {
     _root: TempDir,
     home: std::path::PathBuf,

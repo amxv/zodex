@@ -30,7 +30,7 @@ use zodex::local::{
 };
 
 #[derive(Debug, Subcommand)]
-#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --tui --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
+#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history agents --agent k7m2\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --tui --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
 enum LocalCommand {
     /// Provision Local configuration, credentials, and the managed tunnel client.
     #[command(after_help = "Examples:\n  zodex local setup\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin or an environment variable name; Unix hosts may also use an already-open file descriptor. Never put the secret itself on argv.\n\nLinux stores the runtime key in a mode-0600 user-only credential file. macOS stores it in Keychain; setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Windows stores the runtime key in Windows Credential Manager.")]
@@ -115,7 +115,7 @@ enum LocalCommand {
     #[command(name = "__automatic-update", hide = true)]
     AutomaticUpdate,
     /// Inspect durable Local invocation history without opening the TUI.
-    #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --agent k7m2 --yes\n  zodex local history clear --yes  # all agents; requires Local stopped")]
+    #[command(after_help = "Examples:\n  zodex local history agents --agent k7m2\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --agent k7m2 --yes\n  zodex local history clear --yes  # all agents; requires Local stopped")]
     History {
         /// Show only the most recent N normalized records.
         #[arg(long)]
@@ -133,7 +133,7 @@ enum LocalCommand {
         #[arg(long)]
         id: Option<String>,
         /// Output format: markdown (default) or json.
-        #[arg(long, default_value = "markdown")]
+        #[arg(long, global = true, default_value = "markdown")]
         format: String,
         /// Include exact raw logical tool evidence where applicable.
         #[arg(long)]
@@ -216,6 +216,8 @@ enum LocalConfigCommand {
 
 #[derive(Debug, Subcommand)]
 enum LocalHistoryCommand {
+    /// Summarize first/latest retained tool calls and elapsed time by Agent ID.
+    Agents,
     /// Clear one Agent's history with --agent, or all history while Local is stopped.
     Clear {
         /// Skip the interactive confirmation.
@@ -368,6 +370,15 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                     clear_local_history(&paths.history_database())?;
                     println!("cleared all Local history at {}", paths.history_database().display());
                 }
+                return Ok(());
+            }
+
+            if matches!(command, Some(LocalHistoryCommand::Agents)) {
+                if last.is_some() || since.is_some() || workdir.is_some() || id.is_some() || raw {
+                    bail!("history agents only accepts --agent and --format; timing covers all retained calls");
+                }
+                let timing = LocalHistoryReader::agent_timings(&paths.history_database(), agent.as_deref(), None)?;
+                println!("{}", timing.render(format)?);
                 return Ok(());
             }
 
