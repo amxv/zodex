@@ -558,9 +558,9 @@ fn locked_database_degrades_history_without_poisoning_later_envelopes() {
 
     let result = runtime.begin(
         provider_context("provider", "blocked-envelope"),
-        patch_start(dir.path(), "must not be admitted"),
+        patch_start(dir.path(), "must be queued without storage wait"),
     );
-    let deferred = result.expect("locked SQLite must durably defer the envelope");
+    let deferred = result.expect("locked SQLite must queue the envelope without waiting");
     assert!(deferred.invocation_id.is_some());
     runtime
         .complete(
@@ -568,10 +568,19 @@ fn locked_database_degrades_history_without_poisoning_later_envelopes() {
             InvocationOutcome::Success(json!({"deferred":true})),
         )
         .unwrap();
-    std::thread::sleep(Duration::from_millis(80));
-    assert!(runtime.history_degraded());
-
+    // Worker scheduling is independent of producer latency. Keep the writer
+    // locked until a real failed persistence attempt is observed, rather than
+    // assuming a background thread will run within an 80 ms wall-clock sleep.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime.history_degraded() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let degraded_while_locked = runtime.history_degraded();
     locker.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        degraded_while_locked,
+        "background writer never reported locked storage"
+    );
     let recovered = runtime
         .begin(
             provider_context("provider", "recovered-envelope"),
