@@ -416,3 +416,187 @@ fn schema_v6_migrates_to_repo_skill_delivery_state() {
         .unwrap();
     assert_eq!(repo_skills_table_count, 1);
 }
+
+#[test]
+fn schema_v9_preserves_output_boundaries_uniqueness_and_cascade() {
+    use super::schema::{SCHEMA_V7, SCHEMA_V8};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL;")
+        .unwrap();
+    for schema in [
+        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+    ] {
+        connection.execute_batch(schema).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection.execute("INSERT INTO invocations(id, correlation_id, tool_name, args_json, started_at_ms, evidence_state, capture_state) VALUES(1, 'migration', 'exec_command', '{}', 123, 'complete', 'complete')", []).unwrap();
+    let payloads: Vec<String> = [980, 1000, 1024, 4096]
+        .into_iter()
+        .map(|n| format!("{}\0終", "x".repeat(n)))
+        .collect();
+    for (sequence, text) in payloads.iter().enumerate() {
+        connection
+            .execute(
+                "INSERT INTO invocation_output_chunks VALUES(1, ?1, ?2, ?3)",
+                rusqlite::params![sequence as i64, 456 + sequence as i64, text],
+            )
+            .unwrap();
+    }
+    drop(connection);
+    drop(HistoryStore::open(path.clone(), Arc::from("migration")).unwrap());
+    let connection = Connection::open(path).unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .unwrap();
+    let actual: Vec<(i64, i64, String)> = connection.prepare("SELECT sequence, observed_at_ms, text FROM invocation_output_chunks WHERE invocation_id=1 ORDER BY sequence").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    for (n, (sequence, time, text)) in actual.iter().enumerate() {
+        assert_eq!(*sequence, n as i64);
+        assert_eq!(*time, 456 + n as i64);
+        assert_eq!(text, &payloads[n]);
+    }
+    assert_eq!(actual.len(), payloads.len());
+    connection
+        .query_row(
+            "SELECT rowid FROM invocation_output_chunks LIMIT 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap();
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT text FROM invocation_output_chunks WHERE invocation_id=1 ORDER BY sequence", [], |r| r.get(3)).unwrap();
+    assert!(plan.contains("USING INDEX"), "{plan}");
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO invocation_output_chunks VALUES(1, 0, 999, 'duplicate')",
+                []
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO invocation_output_chunks VALUES(99, 0, 999, 'missing parent')",
+                []
+            )
+            .is_err()
+    );
+    connection
+        .execute("DELETE FROM invocations WHERE id=1", [])
+        .unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM invocation_output_chunks", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn schema_v9_failed_copy_rolls_back_original_rows_and_version() {
+    use super::schema::{SCHEMA_V7, SCHEMA_V8, initialize_or_migrate};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let mut connection = Connection::open(path).unwrap();
+    connection
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=WAL;")
+        .unwrap();
+    for schema in [
+        SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+    ] {
+        connection.execute_batch(schema).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .unwrap();
+    // Deliberately corrupt foreign-key ancestry with enforcement off: the new
+    // table's insert fails after CREATE and must roll back the whole migration.
+    connection
+        .execute(
+            "INSERT INTO invocation_output_chunks VALUES(99, 1, 123, 'preserve me')",
+            [],
+        )
+        .unwrap();
+    assert!(initialize_or_migrate(&mut connection).is_err());
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+    let text: String = connection
+        .query_row("SELECT text FROM invocation_output_chunks", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(text, "preserve me");
+    let temporary: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='invocation_output_chunks_v9'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(temporary, 0);
+}
+
+#[test]
+fn schema_v9_reduces_inline_output_page_usage() {
+    use super::schema::{SCHEMA_V7, SCHEMA_V8, initialize_or_migrate};
+    for payload_bytes in [980, 1000, 1024] {
+        let dir = tempdir().unwrap();
+        let mut connection = Connection::open(dir.path().join("history.sqlite3")).unwrap();
+        connection
+            .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+            .unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL;")
+            .unwrap();
+        for schema in [
+            SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+        ] {
+            connection.execute_batch(schema).unwrap();
+        }
+        connection.pragma_update(None, "user_version", 8).unwrap();
+        connection.execute("INSERT INTO invocations(id, correlation_id, tool_name, args_json, started_at_ms, evidence_state, capture_state) VALUES(1,'layout','exec_command','{}',123,'complete','complete')", []).unwrap();
+        let payload = "x".repeat(payload_bytes);
+        for sequence in 0..256 {
+            connection
+                .execute(
+                    "INSERT INTO invocation_output_chunks VALUES(1,?1,1234567890123,?2)",
+                    rusqlite::params![sequence, payload],
+                )
+                .unwrap();
+        }
+        let used_pages = |c: &Connection| -> i64 {
+            let count: i64 = c
+                .pragma_query_value(None, "page_count", |r| r.get(0))
+                .unwrap();
+            let free: i64 = c
+                .pragma_query_value(None, "freelist_count", |r| r.get(0))
+                .unwrap();
+            count - free
+        };
+        let before = used_pages(&connection);
+        initialize_or_migrate(&mut connection).unwrap();
+        let after = used_pages(&connection);
+        if payload_bytes >= 1000 {
+            assert!(
+                after * 2 < before,
+                "{payload_bytes}-byte output should avoid overflow: {before} -> {after}"
+            );
+        } else {
+            assert!(
+                after <= before + 4,
+                "980-byte inline rows should not meaningfully regress: {before} -> {after}"
+            );
+        }
+    }
+}

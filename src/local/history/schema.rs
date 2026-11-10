@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
-pub const HISTORY_SCHEMA_VERSION: u32 = 8;
+pub const HISTORY_SCHEMA_VERSION: u32 = 9;
 
 pub(super) const SCHEMA_V1: &str = r#"
 CREATE TABLE agents (
@@ -274,6 +274,24 @@ WHERE tool_name = 'write_stdin'
   AND target_session_handle IS NOT NULL;
 "#;
 
+// Rowid tables keep ~1 KiB output payloads inline instead of spilling each
+// composite-key index record to an overflow page. Preserve the unique lookup
+// index and exact output bytes; no compression/decompression is on the hot path.
+pub(super) const SCHEMA_V9: &str = r#"
+CREATE TABLE invocation_output_chunks_v9 (
+    invocation_id INTEGER NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    observed_at_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY(invocation_id, sequence)
+);
+INSERT INTO invocation_output_chunks_v9
+SELECT invocation_id, sequence, observed_at_ms, text FROM invocation_output_chunks
+ORDER BY invocation_id, sequence;
+DROP TABLE invocation_output_chunks;
+ALTER TABLE invocation_output_chunks_v9 RENAME TO invocation_output_chunks;
+"#;
+
 pub(super) const WRITER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
@@ -465,6 +483,20 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         transaction
             .commit()
             .context("failed to commit Local history schema v8")?;
+        version = 8;
+    }
+
+    if version == 8 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v9 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V9)
+            .context("failed to migrate Local history output storage")?;
+        transaction.pragma_update(None, "user_version", 9)?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v9")?;
     }
 
     let version = user_version(connection)?;
