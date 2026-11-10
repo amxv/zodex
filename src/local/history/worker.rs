@@ -292,6 +292,7 @@ struct PendingPresentationRefresh {
 }
 
 struct HistoryWorkerShared {
+    _lease: Arc<Mutex<Option<super::lease::HistoryLease>>>,
     admission_state: Arc<AdmissionState>,
     admissions: Arc<Mutex<AdmissionQueue>>,
     lifecycle: Arc<Mutex<LifecycleQueue>>,
@@ -309,7 +310,7 @@ struct HistoryWorkerShared {
 
 pub struct LocalHistoryRuntime {
     accepting: AtomicBool,
-    lease: Mutex<Option<super::lease::HistoryLease>>,
+    lease: Arc<Mutex<Option<super::lease::HistoryLease>>>,
     admission_state: Arc<AdmissionState>,
     admissions: Arc<Mutex<AdmissionQueue>>,
     lifecycle: Arc<Mutex<LifecycleQueue>>,
@@ -364,7 +365,9 @@ impl LocalHistoryRuntime {
         config: LocalHistoryRuntimeConfig,
         store_override: Option<Arc<HistoryStore>>,
     ) -> Result<Arc<Self>> {
-        let lease = super::lease::HistoryLease::acquire(&config.database_path)?;
+        let lease = Arc::new(Mutex::new(Some(super::lease::HistoryLease::acquire(
+            &config.database_path,
+        )?)));
         let runtime_id = config.runtime_id.clone();
         let events = HistoryEventHub::new(runtime_id.clone(), config.event_capacity);
         let store = match store_override {
@@ -400,6 +403,7 @@ impl LocalHistoryRuntime {
         let lifecycle = Arc::new(Mutex::new(LifecycleQueue::default()));
         let agent_first_seen_observer = Arc::new(Mutex::new(None));
         let worker_shared = HistoryWorkerShared {
+            _lease: lease.clone(),
             admission_state: admission_state.clone(),
             admissions: admissions.clone(),
             lifecycle: lifecycle.clone(),
@@ -419,7 +423,7 @@ impl LocalHistoryRuntime {
             .spawn(move || run_worker(receiver, worker_shared, max_age_seconds, max_size_bytes))?;
         Ok(Arc::new(Self {
             accepting: AtomicBool::new(true),
-            lease: Mutex::new(Some(lease)),
+            lease,
             admission_state,
             admissions,
             lifecycle,
