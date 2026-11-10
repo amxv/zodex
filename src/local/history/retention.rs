@@ -51,23 +51,7 @@ impl HistoryStore {
             let transaction = connection
                 .transaction()
                 .context("failed to start age-retention transaction")?;
-            transaction
-                .execute("DELETE FROM active_process_invocations", [])
-                .context("failed to reset Local active-process retention guards")?;
-            {
-                let mut insert = transaction
-                    .prepare("INSERT INTO active_process_invocations(invocation_id) VALUES (?1)")
-                    .context("failed to prepare Local active-process retention guards")?;
-                for invocation_id in active_process_invocation_ids {
-                    insert
-                        .execute([invocation_id])
-                        .with_context(|| {
-                            format!(
-                                "failed to protect active Local process invocation {invocation_id} from retention"
-                            )
-                        })?;
-                }
-            }
+            Self::refresh_active_retention_guards(&transaction, active_process_invocation_ids)?;
             let deleted = transaction
                 .execute(
                     &format!(
@@ -108,6 +92,54 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Make one conservative recovery step after a fresh SQLITE_FULL error.
+    /// Retry the failed write after true: cache removal may already suffice.
+    /// This runs only on the history worker, never on the tool request path.
+    pub(super) fn recover_storage_full(
+        &self,
+        active_process_invocation_ids: &[i64],
+    ) -> Result<bool> {
+        let mut connection = self.lock_connection();
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history storage-full recovery")?;
+        Self::refresh_active_retention_guards(&transaction, active_process_invocation_ids)?;
+        let cached = transaction
+            .execute("DELETE FROM presentation_materializations", [])
+            .context("failed to discard Local presentation cache during storage-full recovery")?;
+        let deleted = if cached == 0 {
+            Self::delete_oldest_complete_invocation(&transaction)?
+        } else {
+            0
+        };
+        if deleted > 0 {
+            recompute_summaries(&transaction)?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit Local history storage-full recovery")?;
+        Ok(cached > 0 || deleted > 0)
+    }
+
+    fn refresh_active_retention_guards(
+        connection: &Connection,
+        active_process_invocation_ids: &[i64],
+    ) -> Result<()> {
+        connection
+            .execute("DELETE FROM active_process_invocations", [])
+            .context("failed to reset Local active-process retention guards")?;
+        let mut insert = connection
+            .prepare("INSERT OR IGNORE INTO active_process_invocations(invocation_id) VALUES (?1)")
+            .context("failed to prepare Local active-process retention guards")?;
+        for invocation_id in active_process_invocation_ids {
+            insert.execute([invocation_id]).with_context(|| {
+                format!("failed to protect active Local process invocation {invocation_id} from retention")
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(super) fn delete_oldest_complete_invocation_batch(&self) -> Result<usize> {
         let mut connection = self.lock_connection();
         let transaction = connection

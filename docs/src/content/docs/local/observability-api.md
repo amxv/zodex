@@ -164,6 +164,8 @@ GET /v1/status
 
 Returns observer versions, `runtime_id`, durable history health, current-runtime Agent count, and runtime-wide active-process count:
 
+History persistence is asynchronous. Status also overlays current in-memory degradation and pending-admission warnings. A healthy persisted snapshot alone is not proof that every newly dispatched call is already visible; absence of an invocation never proves that an Agent is idle.
+
 ```json
 {
   "schema_version": 1,

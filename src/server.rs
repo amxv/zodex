@@ -305,17 +305,9 @@ impl ZodexMcpService {
         }
         match recorder.begin(context.clone(), start) {
             Ok(recorded) => recorded,
-            Err(error) => {
-                // Invocation evidence is an observability surface, never an
-                // execution dependency. A broken or saturated history store
-                // must not reject a model tool call or poison the MCP bridge.
-                error!(
-                    event = "local_invocation_evidence_begin_failed_open",
-                    tool_name,
-                    error = %error,
-                );
-                context
-            }
+            // Recorder health is reported through result context and the background
+            // writer. Never make a potentially blocking log sink part of admission.
+            Err(_) => context,
         }
     }
 
@@ -349,13 +341,7 @@ impl ZodexMcpService {
             },
             Err(error) => InvocationOutcome::Error(error.clone()),
         };
-        if let Err(error) = recorder.complete(context, outcome) {
-            error!(
-                event = "local_invocation_completion_persistence_failed",
-                invocation_id = ?context.invocation_id,
-                error = %error,
-            );
-        }
+        let _ = recorder.complete(context, outcome);
     }
 
     fn appended_context(

@@ -1013,6 +1013,17 @@ fn active_process_creator_invocation_survives_retention_even_when_capture_is_inc
         },
         created_by: context.clone(),
     };
+    // Give retention a genuinely newer root; the newest unit is always protected.
+    let newer = runtime
+        .begin(
+            provider_context("provider", "newer-root"),
+            patch_start(dir.path(), "newer"),
+        )
+        .unwrap();
+    runtime
+        .complete(&newer, InvocationOutcome::Success(json!({"ok":true})))
+        .unwrap();
+    runtime.flush_for_test().unwrap();
     runtime.process_started(&process).unwrap();
     runtime.run_retention_now(1, u64::MAX).unwrap();
     assert_eq!(

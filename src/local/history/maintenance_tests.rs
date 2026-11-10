@@ -350,3 +350,117 @@ fn size_budget_stops_after_smallest_oldest_prefix() {
         .unwrap();
     assert_eq!(ids, vec![2, 3, 4]);
 }
+
+#[test]
+fn storage_full_recovery_retries_after_cache_before_pruning_evidence() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let store = HistoryStore::open(path, Arc::from("storage-full")).unwrap();
+    {
+        let connection = store.lock_connection();
+        for id in 1..=3 {
+            insert_retention_fixture(&connection, id, id, id + 1);
+        }
+        connection
+            .execute(
+                "INSERT INTO presentation_materializations VALUES(3,1,0,'{}',?1)",
+                ["x".repeat(64 * 1024)],
+            )
+            .unwrap();
+        let pages: i64 = connection
+            .pragma_query_value(None, "page_count", |r| r.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let error = connection
+            .execute(
+                "UPDATE invocations SET args_json=?1 WHERE id=3",
+                ["x".repeat(32 * 1024)],
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DiskFull)
+        );
+    }
+    assert!(store.recover_storage_full(&[]).unwrap());
+    let connection = store.lock_connection();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM invocations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 3,
+        "cache reclamation must be retried before deleting evidence"
+    );
+    connection
+        .execute(
+            "UPDATE invocations SET args_json=?1 WHERE id=3",
+            ["x".repeat(32 * 1024)],
+        )
+        .unwrap();
+}
+
+#[test]
+fn storage_full_recovery_refreshes_guards_and_prunes_only_one_oldest_safe_unit() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let store = HistoryStore::open(path, Arc::from("storage-full")).unwrap();
+    {
+        let connection = store.lock_connection();
+        for id in 1..=4 {
+            insert_retention_fixture(&connection, id, id, id + 1);
+            connection
+                .execute(
+                    "INSERT INTO invocation_output_chunks VALUES(?1,0,123,?2)",
+                    rusqlite::params![id, "x".repeat(32 * 1024)],
+                )
+                .unwrap();
+        }
+        // Parent 1 is active but capture has already been marked incomplete.
+        // Fresh active guards, rather than pending flags, must preserve it.
+        connection
+            .execute(
+                "UPDATE invocations SET capture_state='incomplete' WHERE id=1",
+                [],
+            )
+            .unwrap();
+        let pages: i64 = connection
+            .pragma_query_value(None, "page_count", |r| r.get(0))
+            .unwrap();
+        connection
+            .pragma_update(None, "max_page_count", pages)
+            .unwrap();
+        let error = connection
+            .execute(
+                "UPDATE invocations SET args_json=?1 WHERE id=4",
+                ["x".repeat(16 * 1024)],
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DiskFull)
+        );
+    }
+    assert!(store.recover_storage_full(&[1]).unwrap());
+    let connection = store.lock_connection();
+    let ids: Vec<i64> = connection
+        .prepare("SELECT id FROM invocations ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(ids, vec![1, 3, 4]);
+    connection
+        .execute(
+            "UPDATE invocations SET args_json=?1 WHERE id=4",
+            ["x".repeat(16 * 1024)],
+        )
+        .unwrap();
+    drop(connection);
+    assert!(
+        !store.recover_storage_full(&[1, 3]).unwrap(),
+        "all remaining units are active or newest"
+    );
+}

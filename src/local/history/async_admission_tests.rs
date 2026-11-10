@@ -397,3 +397,188 @@ fn async_admission_saturation_is_bounded_and_accepts_future_calls_after_recovery
     );
     runtime.shutdown_blocking().unwrap();
 }
+
+#[test]
+fn admitted_output_retries_transient_storage_failure_without_loss_or_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let (_store, runtime) = fixture(&path);
+    let invocation = runtime
+        .begin(
+            context("retry-output", "already-admitted-output"),
+            InvocationStart::new(
+                "exec_command",
+                json!({"cmd":"printf output","workdir":"/tmp"}),
+            ),
+        )
+        .unwrap();
+    runtime.flush_for_test().unwrap();
+    assert!(!runtime.history_degraded());
+    assert_eq!(records(&path, 1).len(), 1);
+
+    let locker = Connection::open(&path).unwrap();
+    locker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let observed_before = now_ms().unwrap();
+    let (sent, received) = mpsc::channel();
+    let history = runtime.clone();
+    let producer_context = invocation.clone();
+    let expected_result =
+        json!({"status":"exited","exit_code":0,"output":"exact response","marker":{"retry":true}});
+    let producer = std::thread::spawn(move || {
+        for (sequence, text) in ["first\n", "second 世界\n", "third\n"]
+            .into_iter()
+            .enumerate()
+        {
+            history.observe_output(SessionOutputChunk {
+                internal_session_id: 901,
+                session_handle: Arc::from("retry-output-handle"),
+                invocation: producer_context.clone(),
+                sequence: sequence as u64,
+                text: text.to_owned(),
+            });
+        }
+        history.observe_output_complete(SessionOutputCompletion {
+            internal_session_id: 901,
+            session_handle: Arc::from("retry-output-handle"),
+            invocation: producer_context.clone(),
+        });
+        sent.send(now_ms().unwrap()).unwrap();
+    });
+    let producer_finished = received.recv_timeout(Duration::from_millis(250));
+    // A successful enqueue alone does not exercise retry: keep the independent
+    // writer lock beyond the actual background busy timeout and observe failure.
+    std::thread::sleep(super::schema::WRITER_BUSY_TIMEOUT + Duration::from_millis(100));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime.history_degraded() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let retried = runtime.history_degraded();
+    // Only output was enqueued so far, proving that failure exercised output
+    // persistence itself rather than merely the result writer.
+    let (completion_sent, completion_received) = mpsc::channel();
+    let history = runtime.clone();
+    let producer_context = invocation.clone();
+    let producer_result = expected_result.clone();
+    let completion = std::thread::spawn(move || {
+        history
+            .complete(
+                &producer_context,
+                InvocationOutcome::Success(producer_result),
+            )
+            .unwrap();
+        completion_sent.send(now_ms().unwrap()).unwrap();
+    });
+    let completion_finished = completion_received.recv_timeout(Duration::from_millis(250));
+    let released_at = now_ms().unwrap();
+    locker.execute_batch("ROLLBACK").unwrap();
+    producer.join().unwrap();
+    completion.join().unwrap();
+    let completion_finished = completion_finished.expect("result callback waited for storage");
+    let producer_finished =
+        producer_finished.expect("admitted output callbacks waited for storage");
+    assert!(
+        retried,
+        "external lock must cause a real writer failure before release"
+    );
+    assert!(producer_finished < released_at);
+    assert!(completion_finished <= released_at);
+
+    let rows = wait_for_records(&runtime, &path, 1);
+    runtime.flush_for_test().unwrap();
+    let row = &rows[0];
+    assert_eq!(Some(row.id), invocation.invocation_id);
+    assert_eq!(row.result, Some(expected_result));
+    assert_eq!(
+        row.full_output.as_deref(),
+        Some("first\nsecond 世界\nthird\n")
+    );
+    assert_eq!(row.capture_state, "complete");
+    assert!(row.capture_reason.is_none());
+    assert_eq!(row.evidence_state, "complete");
+    assert!((observed_before..=completion_finished).contains(&row.completed_at_ms.unwrap()));
+    let connection = Connection::open(&path).unwrap();
+    let mut statement = connection.prepare("SELECT sequence, observed_at_ms, text FROM invocation_output_chunks WHERE invocation_id = ?1 ORDER BY sequence").unwrap();
+    let chunks = statement
+        .query_map([row.id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(chunks.len(), 3);
+    for (index, ((sequence, timestamp, text), expected)) in chunks
+        .iter()
+        .zip(["first\n", "second 世界\n", "third\n"])
+        .enumerate()
+    {
+        assert_eq!(*sequence, index as i64);
+        assert_eq!(text, expected);
+        assert!((observed_before..=producer_finished).contains(timestamp));
+    }
+    drop(statement);
+    drop(connection);
+    runtime.shutdown_blocking().unwrap();
+}
+
+#[test]
+fn admitted_completion_retry_preserves_exact_result_and_original_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let (_store, runtime) = fixture(&path);
+    let invocation = runtime
+        .begin(
+            context("retry-completion", "already-admitted-completion"),
+            InvocationStart::new("test_tool", json!({"marker":"completion-retry"})),
+        )
+        .unwrap();
+    runtime.flush_for_test().unwrap();
+    assert!(!runtime.history_degraded());
+    let locker = Connection::open(&path).unwrap();
+    locker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let before = now_ms().unwrap();
+    let expected = json!({"output":"keep this exact result","nested":[1,"two",{"three":true}]});
+    let (sent, received) = mpsc::channel();
+    let history = runtime.clone();
+    let producer_context = invocation.clone();
+    let producer_result = expected.clone();
+    let producer = std::thread::spawn(move || {
+        history
+            .complete(
+                &producer_context,
+                InvocationOutcome::Success(producer_result),
+            )
+            .unwrap();
+        sent.send(now_ms().unwrap()).unwrap();
+    });
+    let finished = received.recv_timeout(Duration::from_millis(250));
+    std::thread::sleep(super::schema::WRITER_BUSY_TIMEOUT + Duration::from_millis(100));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !runtime.history_degraded() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let retried = runtime.history_degraded();
+    let released_at = now_ms().unwrap();
+    locker.execute_batch("ROLLBACK").unwrap();
+    producer.join().unwrap();
+    let finished = finished.expect("completion callback waited for storage");
+    assert!(
+        retried,
+        "completion must actually fail and enter retry before lock release"
+    );
+    assert!(finished < released_at);
+    let rows = wait_for_records(&runtime, &path, 1);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(Some(row.id), invocation.invocation_id);
+    assert_eq!(row.result, Some(expected));
+    assert_eq!(row.evidence_state, "complete");
+    assert!(
+        (before..=finished).contains(&row.completed_at_ms.unwrap()),
+        "retry must retain enqueue-time completion, not use storage recovery time"
+    );
+    runtime.shutdown_blocking().unwrap();
+}

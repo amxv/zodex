@@ -185,6 +185,15 @@ zodex local history --format json
 
 History works while Local is running or stopped.
 
+For first/latest retained call timestamps and time since the last call:
+
+```bash
+zodex local history agents --agent k7m2
+zodex local history agents --format json
+```
+
+These are retained history bounds, not live model-status checks. Inspect the reported health and evidence gaps before drawing conclusions about activity.
+
 ## Clear history
 
 Local must be stopped first:

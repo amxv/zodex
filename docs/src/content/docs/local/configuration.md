@@ -225,7 +225,7 @@ zodex local config set context.enabled false
 
 This master switch suppresses global instructions, the global skill catalog, workdir `AGENTS` hints, and workdir repo-local skills without changing the individual settings underneath it.
 
-The global instructions/skills block is delivered at most once per ChatGPT conversation. Zodex keeps only small hashed delivery markers for this purpose, so restarting Local or pruning old Local history does not make the context repeat and does not require retaining the raw OpenAI session key or old workdir path in the delivery-state tables.
+The global instructions/skills block is normally delivered once per ChatGPT conversation. Zodex keeps only small hashed delivery markers for this purpose, so restarting Local or pruning old Local history does not make the context repeat and does not require retaining the raw OpenAI session key or old workdir path in the delivery-state tables.
 
 ## History retention
 
@@ -246,7 +246,13 @@ zodex local config set history.max-size 2gb
 Retention removes old complete invocation history. It does not intentionally keep half an invocation just to hit a byte limit.
 Zodex prunes old complete history before a new Local runtime accepts commands, then reclaims physical database pages in bounded increments while it runs. Shutdown flushes queued evidence but does not wait for physical database compaction.
 
-History is observability, not an execution dependency. A locked, unavailable, or saturated history writer never rejects an MCP tool call and never blocks delivery of the tool result. Zodex continues the command/patch and marks evidence incomplete when it cannot be retained safely.
+History is observability, not an execution dependency. Tool-path history callbacks use bounded memory queues, not database/file writes or storage-backed locks. A background worker persists admission, identity/context delivery, exact results, output, and lifecycle evidence, retrying transient storage failures. The tool itself may still perform its requested filesystem work and required process-safety bookkeeping.
+
+A blocked, unavailable, or saturated history writer never rejects an MCP tool call or holds its result for persistence. If bounded buffers fill, history may be omitted or incomplete and a degraded warning is reported; missing records never prove inactivity. These queues are not a durable journal: abrupt process termination before a background commit can lose buffered evidence. Orderly shutdown drains accepted evidence within a bounded window and reports failure if it cannot finish. Context-delivery caches are bounded too, so sufficiently old context can repeat after eviction.
+
+Output chunks use a compact SQLite row layout rather than per-chunk compression. Existing databases migrate transactionally at startup and require temporary disk headroom; a failed migration rolls back. Reusable free pages are reclaimed gradually, without a forced full compaction. Retention prunes oldest eligible starts first, protects newest and active/pending continuation chains, and excludes duplicate/pinned WAL pages from the evidence-size budget. If the disk is full, recovery discards presentation caches first, then removes one oldest eligible call before retrying. Protected latest work may keep the store above its target budget.
+
+Shell commands no longer trigger history-only filesystem snapshots. Ordinary shell edits appear as terminal commands. A narrowly recognized successful exclusive literal creation can show its known contents without reading the filesystem; ambiguous writes do not. Explicit `apply_patch` previews use the bytes obtained by the patch executor, with unavailable or bounded evidence labeled explicitly.
 
 Raw PTY history is also bounded per invocation. Local currently keeps at most 2 MiB of raw command output for one invocation; output beyond that point is explicitly marked incomplete in history rather than backpressuring the command or monopolizing the history database. This limit is independent of the model-facing command result, which uses the large-output spill behavior described in [Tools](/docs/reference/tools#exec_command).
 

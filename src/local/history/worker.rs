@@ -18,23 +18,22 @@ use crate::local::file_evidence::{
     CompletedFileEvidence, PendingFileEvidence, committed_patch_evidence,
 };
 use crate::local::presentation::PRESENTATION_SCHEMA_VERSION;
-use crate::session::{
-    OwnedProcessEnd, SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver,
-};
+use crate::session::{SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver};
 
 use super::admission::AdmissionState;
 use super::events::{HistoryEventHub, HistoryLiveEvent};
 use super::live_display::LiveDisplayStreams;
 use super::materialized::refresh_and_emit_presentation;
 use super::store::{
-    HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort,
-    normalize_declared_workdir, now_ms,
+    HistoryStore, OutputEvent, mark_retention_error_best_effort, normalize_declared_workdir, now_ms,
 };
 
 mod admission_queue;
 mod output_queue;
 use admission_queue::AdmissionQueue;
+mod lifecycle_queue;
 mod process_observer;
+use lifecycle_queue::LifecycleQueue;
 
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
 const OUTPUT_BATCH_LIMIT: usize = 128;
@@ -123,11 +122,6 @@ impl HistoryHealth {
         drop(guard);
     }
 
-    fn degrade_persisting(&self, store: &HistoryStore, reason: impl Into<String>) {
-        self.degrade_nonblocking(reason);
-        self.persist_degraded_state(store);
-    }
-
     fn persist_degraded_state(&self, store: &HistoryStore) {
         if !self.degraded.load(Ordering::Acquire) {
             return;
@@ -147,12 +141,18 @@ impl HistoryHealth {
                 original_error = %reason,
                 error = %error,
             );
+            if storage_retryable(&error) {
+                return;
+            }
         }
         let incomplete_evidence = self
             .incomplete_evidence_invocations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+            .iter()
+            .take(128)
+            .copied()
+            .collect::<Vec<_>>();
         for invocation_id in incomplete_evidence {
             if let Err(error) = store.mark_evidence_incomplete(invocation_id, &reason) {
                 error!(
@@ -160,6 +160,9 @@ impl HistoryHealth {
                     invocation_id,
                     error = %error,
                 );
+                if storage_retryable(&error) {
+                    break;
+                }
             } else {
                 self.incomplete_evidence_invocations
                     .lock()
@@ -175,7 +178,10 @@ impl HistoryHealth {
             .incomplete_capture_invocations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+            .iter()
+            .take(128)
+            .map(|(id, reason)| (*id, reason.clone()))
+            .collect::<Vec<_>>();
         for (invocation_id, reason) in incomplete_capture {
             if let Err(error) = store.mark_capture_incomplete(invocation_id, &reason) {
                 error!(
@@ -183,6 +189,9 @@ impl HistoryHealth {
                     invocation_id,
                     error = %error,
                 );
+                if storage_retryable(&error) {
+                    break;
+                }
             } else {
                 self.incomplete_capture_invocations
                     .lock()
@@ -201,18 +210,25 @@ impl HistoryHealth {
     }
 
     fn note_evidence_incomplete(&self, invocation_id: i64) {
-        self.incomplete_evidence_invocations
+        let mut pending = self
+            .incomplete_evidence_invocations
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(invocation_id);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.len() < 8192 {
+            pending.insert(invocation_id);
+        }
+        // If even diagnostics overflow, the sticky degraded store warning remains.
     }
 
     fn note_capture_incomplete(&self, invocation_id: i64, reason: String) {
-        self.incomplete_capture_invocations
+        let reason = reason.chars().take(2048).collect::<String>();
+        let mut pending = self
+            .incomplete_capture_invocations
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(invocation_id)
-            .or_insert(reason);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.len() < 8192 {
+            pending.entry(invocation_id).or_insert(reason);
+        }
     }
 }
 
@@ -236,18 +252,6 @@ enum WorkerMessage {
         outcome: InvocationOutcome,
         completed_at_ms: i64,
     },
-    ProcessStarted {
-        invocation_id: i64,
-        agent_id: Option<String>,
-        active_process_count: u64,
-        agent_active_process_count: Option<u64>,
-    },
-    ProcessEnded {
-        invocation_id: i64,
-        agent_id: Option<String>,
-        end: OwnedProcessEnd,
-        was_active: bool,
-    },
     #[cfg(test)]
     Barrier(std::sync::mpsc::Sender<()>),
     Shutdown,
@@ -260,16 +264,16 @@ struct PriorityQueue {
 }
 
 impl PriorityQueue {
-    fn push(&mut self, message: WorkerMessage) -> std::result::Result<(), WorkerMessage> {
+    fn push(&mut self, message: WorkerMessage) -> bool {
         let bytes = message_bytes(&message);
         if self.messages.len() >= COMPLETION_OVERFLOW_MAX_ITEMS
             || self.bytes.saturating_add(bytes) > 16 * 1024 * 1024
         {
-            return Err(message);
+            return false;
         }
         self.bytes += bytes;
         self.messages.push_back(message);
-        Ok(())
+        true
     }
 
     fn pop_front(&mut self) -> Option<WorkerMessage> {
@@ -290,7 +294,7 @@ struct PendingPresentationRefresh {
 struct HistoryWorkerShared {
     admission_state: Arc<AdmissionState>,
     admissions: Arc<Mutex<AdmissionQueue>>,
-    #[cfg(any(target_os = "macos", test))]
+    lifecycle: Arc<Mutex<LifecycleQueue>>,
     agent_first_seen_observer: Arc<Mutex<Option<AgentFirstSeenObserver>>>,
     store: Arc<HistoryStore>,
     health: Arc<HistoryHealth>,
@@ -307,6 +311,7 @@ pub struct LocalHistoryRuntime {
     lease: Mutex<Option<super::lease::HistoryLease>>,
     admission_state: Arc<AdmissionState>,
     admissions: Arc<Mutex<AdmissionQueue>>,
+    lifecycle: Arc<Mutex<LifecycleQueue>>,
     store: Arc<HistoryStore>,
     runtime_id: Arc<str>,
     events: Arc<HistoryEventHub>,
@@ -321,6 +326,7 @@ pub struct LocalHistoryRuntime {
     active_process_invocation_ids: Arc<Mutex<HashMap<i64, bool>>>,
     active_process_counts: Arc<Mutex<HashMap<String, u64>>>,
     active_process_count: Arc<AtomicU64>,
+    #[cfg(any(target_os = "macos", test))]
     agent_first_seen_observer: Arc<Mutex<Option<AgentFirstSeenObserver>>>,
 }
 
@@ -387,10 +393,12 @@ impl LocalHistoryRuntime {
         );
         let admission_state = Arc::new(AdmissionState::open(&store)?);
         let admissions = Arc::new(Mutex::new(AdmissionQueue::default()));
+        let lifecycle = Arc::new(Mutex::new(LifecycleQueue::default()));
         let agent_first_seen_observer = Arc::new(Mutex::new(None));
         let worker_shared = HistoryWorkerShared {
             admission_state: admission_state.clone(),
             admissions: admissions.clone(),
+            lifecycle: lifecycle.clone(),
             agent_first_seen_observer: agent_first_seen_observer.clone(),
             store: store.clone(),
             health: health.clone(),
@@ -409,6 +417,7 @@ impl LocalHistoryRuntime {
             lease: Mutex::new(Some(lease)),
             admission_state,
             admissions,
+            lifecycle,
             store,
             runtime_id,
             events,
@@ -823,18 +832,15 @@ impl LocalHistoryRuntime {
             return false;
         }
 
-        let message = {
-            let mut priority = self
-                .completion_overflow
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match priority.push(message) {
-                Ok(()) => return true,
-                Err(message) => message,
-            }
-        };
+        if self
+            .completion_overflow
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message)
+        {
+            return true;
+        }
 
-        drop(message);
         // All control evidence shares one FIFO. Spilling to the output lane
         // would let a later process end overtake its start after a queue drain.
         self.health.note_evidence_incomplete(invocation_id);
@@ -914,7 +920,22 @@ fn run_worker(
                 "Local invocation ID reservation queued for retry: {error:#}"
             ));
         }
+        if health.storage_full.swap(false, Ordering::AcqRel) {
+            let active = shared
+                .active_process_invocation_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            if let Err(error) = store.recover_storage_full(&active) {
+                health.degrade_nonblocking(format!(
+                    "Local history storage-full recovery failed: {error:#}"
+                ));
+            }
+        }
         persist_pending_admissions(&shared);
+        lifecycle_queue::drain(&shared);
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
         drain_priority_completions(&shared.completion_overflow, &mut messages);
         if messages.is_empty() {
@@ -924,9 +945,7 @@ fn run_worker(
                     | WorkerMessage::PatchEvidence { .. }
                     | WorkerMessage::Identify(_)
                     | WorkerMessage::ContextClaim { .. }
-                    | WorkerMessage::Complete { .. }
-                    | WorkerMessage::ProcessStarted { .. }
-                    | WorkerMessage::ProcessEnded { .. }),
+                    | WorkerMessage::Complete { .. }),
                 ) => messages.push(message),
                 #[cfg(test)]
                 Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
@@ -942,9 +961,7 @@ fn run_worker(
                     | WorkerMessage::PatchEvidence { .. }
                     | WorkerMessage::Identify(_)
                     | WorkerMessage::ContextClaim { .. }
-                    | WorkerMessage::Complete { .. }
-                    | WorkerMessage::ProcessStarted { .. }
-                    | WorkerMessage::ProcessEnded { .. }),
+                    | WorkerMessage::Complete { .. }),
                 ) => messages.push(message),
                 #[cfg(test)]
                 Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
@@ -975,6 +992,11 @@ fn run_worker(
         let idle = messages.is_empty()
             && pending_refreshes.is_empty()
             && waiting_messages.is_empty()
+            && !shared
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .has_pending()
             && shared
                 .admissions
                 .lock()
@@ -1053,6 +1075,18 @@ fn run_worker(
     }
 
     if !waiting_messages.is_empty()
+        || shared
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .has_pending()
+        || !shared
+            .completion_overflow
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .messages
+            .is_empty()
+        || receiver.try_recv().is_ok()
         || !shared
             .admissions
             .lock()
@@ -1161,9 +1195,7 @@ fn message_invocation_id(message: &WorkerMessage) -> Option<i64> {
             | OutputEvent::Complete { invocation_id, .. }
             | OutputEvent::Incomplete { invocation_id, .. },
         )
-        | WorkerMessage::ProcessStarted { invocation_id, .. }
-        | WorkerMessage::PatchEvidence { invocation_id, .. }
-        | WorkerMessage::ProcessEnded { invocation_id, .. } => Some(*invocation_id),
+        | WorkerMessage::PatchEvidence { invocation_id, .. } => Some(*invocation_id),
         WorkerMessage::Complete { context, .. } => context.invocation_id,
         _ => None,
     }
@@ -1258,6 +1290,16 @@ fn take_admitted_messages(
     ready
 }
 
+fn storage_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(cause.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(code, _)) if matches!(code.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked |
+            rusqlite::ErrorCode::DiskFull | rusqlite::ErrorCode::SystemIoFailure |
+            rusqlite::ErrorCode::CannotOpen))
+    })
+}
+
 fn process_messages(
     messages: Vec<WorkerMessage>,
     shared: &HistoryWorkerShared,
@@ -1266,19 +1308,20 @@ fn process_messages(
     let mut retry = Vec::new();
     let mut retry_ids = HashSet::new();
     let mut retry_control = false;
+    let mut storage_blocked = false;
     let store = shared.store.as_ref();
     let health = shared.health.as_ref();
     let events = shared.events.as_ref();
-    let active_process_invocation_ids = shared.active_process_invocation_ids.as_ref();
-    let active_process_counts = shared.active_process_counts.as_ref();
-    let active_process_count = shared.active_process_count.as_ref();
     let mut output_events = Vec::new();
     let mut dirty_presentations = HashMap::<i64, (Option<i64>, Option<String>, bool)>::new();
     #[cfg(test)]
     let mut barriers = Vec::new();
     for message in messages {
         let id = message_invocation_id(&message);
-        if id.is_some_and(|id| retry_ids.contains(&id)) || (id.is_none() && retry_control) {
+        if storage_blocked
+            || id.is_some_and(|id| retry_ids.contains(&id))
+            || (id.is_none() && retry_control)
+        {
             retry.push(message);
             continue;
         }
@@ -1308,6 +1351,7 @@ fn process_messages(
                     );
                 }
                 Err(error) => {
+                    storage_blocked |= storage_retryable(&error);
                     health.degrade_nonblocking(format!(
                         "Local committed patch evidence queued for retry: {error:#}"
                     ));
@@ -1333,6 +1377,7 @@ fn process_messages(
                 }
                 Ok(_) => {}
                 Err(error) => {
+                    storage_blocked |= storage_retryable(&error);
                     health.degrade_nonblocking(format!(
                         "Local Agent identity queued for retry: {error:#}"
                     ));
@@ -1364,10 +1409,10 @@ fn process_messages(
                 outcome,
                 completed_at_ms,
             } => {
-                flush_output_events(&mut output_events, store, health, events, live_display);
                 let invocation_id = context.invocation_id;
                 match store.complete_at(&context, outcome.clone(), completed_at_ms) {
                     Err(error) => {
+                        storage_blocked |= storage_retryable(&error);
                         health.note_storage_error(&error);
                         if let Some(invocation_id) = invocation_id {
                             retry_ids.insert(invocation_id);
@@ -1378,18 +1423,17 @@ fn process_messages(
                         retry.push(replay);
                     }
                     Ok(completion) => {
-                        if let Some(invocation_id) = invocation_id {
-                            if let InvocationOutcome::Success(value) = &outcome
-                                && let Err(error) =
-                                    store.persist_proven_shell_creation(invocation_id, value)
-                            {
-                                health.degrade_nonblocking(format!(
-                                    "Proven shell creation evidence queued for retry: {error:#}"
-                                ));
-                                retry_ids.insert(invocation_id);
-                                retry.push(replay);
-                                continue;
-                            }
+                        if let Some(invocation_id) = invocation_id
+                            && let InvocationOutcome::Success(value) = &outcome
+                            && let Err(error) =
+                                store.persist_proven_shell_creation(invocation_id, value)
+                        {
+                            health.degrade_nonblocking(format!(
+                                "Proven shell creation evidence queued for retry: {error:#}"
+                            ));
+                            retry_ids.insert(invocation_id);
+                            retry.push(replay);
+                            continue;
                         }
                         let emit_live = events.emit_invocation_completion(
                             &context,
@@ -1412,136 +1456,18 @@ fn process_messages(
                     }
                 }
             }
-            WorkerMessage::ProcessStarted {
-                invocation_id,
-                agent_id,
-                active_process_count,
-                agent_active_process_count,
-            } => {
-                flush_output_events(&mut output_events, store, health, events, live_display);
-                match store.process_started(invocation_id) {
-                    Ok(()) => {
-                        events.clear_presentation(invocation_id);
-                        let emit_live = events.emit_with(
-                            "process_started",
-                            agent_id.as_deref(),
-                            Some(invocation_id),
-                            Some(invocation_id),
-                            Some(PRESENTATION_SCHEMA_VERSION),
-                            || {
-                                json!({
-                                    "active_process_count": active_process_count,
-                                    "agent_active_process_count": agent_active_process_count,
-                                    "process_state": "running",
-                                })
-                            },
-                        );
-                        refresh_and_emit_presentation(
-                            store,
-                            events,
-                            invocation_id,
-                            Some(invocation_id),
-                            agent_id.as_deref(),
-                            "process_started",
-                            emit_live,
-                        );
-                    }
-                    Err(error) => {
-                        health.degrade_nonblocking(format!(
-                            "process lifecycle start queued for retry: {error:#}"
-                        ));
-                        retry_ids.insert(invocation_id);
-                        retry.push(replay);
-                    }
-                }
-            }
-            WorkerMessage::ProcessEnded {
-                invocation_id,
-                agent_id,
-                end,
-                was_active,
-            } => {
-                flush_output_events(&mut output_events, store, health, events, live_display);
-                match store.process_ended(invocation_id, &end) {
-                    Ok(()) => {
-                        let removed = active_process_invocation_ids
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .remove(&invocation_id)
-                            .is_some();
-                        let active_process_count = if was_active && removed {
-                            active_process_count
-                                .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                                    Some(count.saturating_sub(1))
-                                })
-                                .unwrap_or(0)
-                                .saturating_sub(1)
-                        } else {
-                            active_process_count.load(Ordering::Acquire)
-                        };
-                        let agent_active_process_count = agent_id.as_deref().map(|agent_id| {
-                            let mut counts = active_process_counts
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            let count = counts.entry(agent_id.to_string()).or_default();
-                            if was_active && removed {
-                                *count = count.saturating_sub(1);
-                            }
-                            let active = *count;
-                            if active == 0 {
-                                counts.remove(agent_id);
-                            }
-                            active
-                        });
-                        events.clear_presentation(invocation_id);
-                        let process_state = if end.is_complete() {
-                            "exited"
-                        } else {
-                            "incomplete"
-                        };
-                        let emit_live = events.emit_with(
-                            "process_ended",
-                            agent_id.as_deref(),
-                            Some(invocation_id),
-                            Some(invocation_id),
-                            Some(PRESENTATION_SCHEMA_VERSION),
-                            || {
-                                json!({
-                                    "active_process_count": active_process_count,
-                                    "agent_active_process_count": agent_active_process_count,
-                                    "process_state": process_state,
-                                    "exit_code": end.exit_code,
-                                    "termination_reason": end.termination_reason,
-                                    "incomplete_reason": end.incomplete_reason,
-                                })
-                            },
-                        );
-                        refresh_and_emit_presentation(
-                            store,
-                            events,
-                            invocation_id,
-                            Some(invocation_id),
-                            agent_id.as_deref(),
-                            "process_ended",
-                            emit_live,
-                        );
-                    }
-                    Err(error) => {
-                        health.degrade_nonblocking(format!(
-                            "process lifecycle end queued for retry: {error:#}"
-                        ));
-                        retry_ids.insert(invocation_id);
-                        retry.push(replay);
-                    }
-                }
-            }
             #[cfg(test)]
             WorkerMessage::Barrier(acknowledge) => {
-                if !retry.is_empty() {
+                if !retry.is_empty()
+                    || shared
+                        .lifecycle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .has_pending()
+                {
                     retry.push(WorkerMessage::Barrier(acknowledge));
                     continue;
                 }
-                flush_output_events(&mut output_events, store, health, events, live_display);
                 barriers.push(acknowledge);
             }
             WorkerMessage::Shutdown => {
@@ -1549,7 +1475,11 @@ fn process_messages(
             }
         }
     }
-    flush_output_events(&mut output_events, store, health, events, live_display);
+    retry.extend(
+        flush_output_events(&mut output_events, store, health, events, live_display)
+            .into_iter()
+            .map(WorkerMessage::Output),
+    );
     for (root_invocation_id, (invocation_id, fallback_agent_id, emit_live)) in dirty_presentations {
         refresh_and_emit_presentation(
             store,
@@ -1563,7 +1493,11 @@ fn process_messages(
     }
     #[cfg(test)]
     for acknowledge in barriers {
-        let _ = acknowledge.send(());
+        if retry.is_empty() {
+            let _ = acknowledge.send(());
+        } else {
+            retry.push(WorkerMessage::Barrier(acknowledge));
+        }
     }
     health.persist_capture_failures(store);
     if health.degraded.load(Ordering::Acquire) {
@@ -1622,16 +1556,14 @@ fn flush_output_events(
     health: &HistoryHealth,
     live_events: &HistoryEventHub,
     live_display: &mut LiveDisplayStreams,
-) {
+) -> Vec<OutputEvent> {
     if events.is_empty() {
-        return;
+        return Vec::new();
     }
     if let Err(error) = store.persist_output_batch(events) {
-        let reason = format!("output evidence batch persistence failed: {error}");
-        for invocation_id in distinct_invocation_ids(events) {
-            health.note_capture_incomplete(invocation_id, reason.clone());
-        }
-        health.degrade_persisting(store, reason);
+        health.note_storage_error(&error);
+        health.degrade_nonblocking(format!("output evidence batch queued for retry: {error:#}"));
+        return std::mem::take(events);
     } else {
         let mut live_output_batch = None;
         for event in events.iter() {
@@ -1707,6 +1639,7 @@ fn flush_output_events(
         flush_live_output_batch(&mut live_output_batch, live_events);
     }
     events.clear();
+    Vec::new()
 }
 
 struct LiveOutputEventBatch {

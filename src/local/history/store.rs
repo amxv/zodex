@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -1152,15 +1151,4 @@ pub(super) fn mark_retention_error_best_effort(store: &HistoryStore, error_messa
         event = "local_history_retention_failed",
         error = error_message
     );
-}
-
-pub(super) fn distinct_invocation_ids(events: &[OutputEvent]) -> HashSet<i64> {
-    events
-        .iter()
-        .map(|event| match event {
-            OutputEvent::Chunk { invocation_id, .. }
-            | OutputEvent::Complete { invocation_id, .. }
-            | OutputEvent::Incomplete { invocation_id, .. } => *invocation_id,
-        })
-        .collect()
 }

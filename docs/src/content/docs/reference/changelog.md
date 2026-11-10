@@ -8,6 +8,14 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 1.1.0 - 2026-11-10
+
+- Moved Local history admission, identity/context persistence, and exact completion recording off the tool execution path into bounded memory queues. Storage contention retries in the background; tool execution and result delivery remain independent. Degraded capture and queue limits are explicit, and orderly shutdown drains accepted evidence. A process crash before persistence can still lose buffered history.
+- Reorganized SQLite output chunks to avoid small-chunk overflow-page waste, with a transactional migration that preserves existing evidence. No compression/decompression work is added to tool execution. Retention removes oldest eligible calls first, protects newest and active/pending continuation chains, and does not confuse pinned WAL copies with retained evidence.
+- Added `zodex local history agents` for first/latest retained call timestamps, completion times, elapsed time since the latest call, and explicit history-health/gap information. Supports Agent filters and JSON output.
+- Removed speculative before/after filesystem snapshots from shell execution. Shell edits remain terminal commands; narrowly provable exclusive literal file creation can retain a preview. `apply_patch` uses committed mutation bytes without rereading files after execution, and unavailable or bounded evidence is labeled honestly.
+- Enforced a single Local history writer and stopped-runtime history clearing, including per-Agent clears, so queued work cannot recreate explicitly cleared records.
+
 ## 1.0.0 - 2026-11-05
 
 - First 1.0 release of the Zodex operator, with **Local** execution on macOS (Apple Silicon), Linux (x86-64/ARM64), and Windows (x86-64), and **Sprite** execution via the managed remote service and Cloudflare Worker front door.

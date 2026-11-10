@@ -233,7 +233,7 @@ JSON has `schema_version: 1`, `scope: "retained_tool_calls"`, an `as_of_ms` cloc
 ### Clear history
 
 ```bash
-# Delete just one Agent's durable records (safe with Local running if inactive).
+# Delete just one Agent's durable records (Local must be stopped).
 zodex local history clear --agent k7m2
 zodex local history clear --agent k7m2 --yes
 
@@ -242,7 +242,7 @@ zodex local history clear
 zodex local history clear --yes
 ```
 
-Use `--agent` to remove only that Agent's invocations, output chunks, file evidence, presentations, identity, and provider-specific context. Other Agents' records are preserved. The Agent must have no unfinished invocations or running processes recorded in history. A successful deletion compacts SQLite and truncates its write-ahead log. `--yes` skips the interactive confirmation.
+Use `--agent` to remove only that Agent's invocations, output chunks, file evidence, presentations, identity, and provider-specific context. Other Agents' records are preserved. Local must be stopped, and the Agent must have no unfinished invocations or running processes recorded in history. An exclusive history-writer lease prevents queued work from recreating cleared records. A successful deletion compacts SQLite and truncates its write-ahead log. `--yes` skips the interactive confirmation.
 
 **Without `--agent`, `clear` deletes the entire history database** and requires Local to be stopped. Do not use `--last`, `--since`, `--workdir`, `--id`, or `--raw` with `clear`; these query filters never limit deletion.
 
