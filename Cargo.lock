@@ -537,8 +537,8 @@ source = "git+https://github.com/openai/codex.git?rev=a3d93e1e692f1144cf8685175a
 dependencies = [
  "anyhow",
  "codex-exec-server",
- "codex-utils-absolute-path",
- "codex-utils-path-uri",
+ "codex-utils-absolute-path 0.0.0 (git+https://github.com/openai/codex.git?rev=a3d93e1e692f1144cf8685175a5d1f6bf7294f57)",
+ "codex-utils-path-uri 0.0.0 (git+https://github.com/openai/codex.git?rev=a3d93e1e692f1144cf8685175a5d1f6bf7294f57)",
  "similar",
  "thiserror",
  "tokio",
@@ -550,7 +550,7 @@ dependencies = [
 name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
- "codex-utils-path-uri",
+ "codex-utils-path-uri 0.0.0 (git+https://github.com/openai/codex.git?rev=b1573f102413e96a6481087922bf425231222dee)",
  "tokio",
 ]
 
@@ -567,12 +567,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-absolute-path"
+version = "0.0.0"
+source = "git+https://github.com/openai/codex.git?rev=b1573f102413e96a6481087922bf425231222dee#b1573f102413e96a6481087922bf425231222dee"
+dependencies = [
+ "dirs",
+ "dunce",
+ "schemars 0.8.22",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
 name = "codex-utils-path-uri"
 version = "0.0.0"
 source = "git+https://github.com/openai/codex.git?rev=a3d93e1e692f1144cf8685175a5d1f6bf7294f57#a3d93e1e692f1144cf8685175a5d1f6bf7294f57"
 dependencies = [
  "base64 0.22.1",
- "codex-utils-absolute-path",
+ "codex-utils-absolute-path 0.0.0 (git+https://github.com/openai/codex.git?rev=a3d93e1e692f1144cf8685175a5d1f6bf7294f57)",
+ "schemars 0.8.22",
+ "serde",
+ "thiserror",
+ "ts-rs",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
+name = "codex-utils-path-uri"
+version = "0.0.0"
+source = "git+https://github.com/openai/codex.git?rev=b1573f102413e96a6481087922bf425231222dee#b1573f102413e96a6481087922bf425231222dee"
+dependencies = [
+ "base64 0.22.1",
+ "codex-utils-absolute-path 0.0.0 (git+https://github.com/openai/codex.git?rev=b1573f102413e96a6481087922bf425231222dee)",
  "schemars 0.8.22",
  "serde",
  "thiserror",
@@ -4219,7 +4246,7 @@ dependencies = [
  "clap",
  "codex-apply-patch",
  "codex-exec-server",
- "codex-utils-path-uri",
+ "codex-utils-path-uri 0.0.0 (git+https://github.com/openai/codex.git?rev=b1573f102413e96a6481087922bf425231222dee)",
  "crossterm",
  "fs2",
  "futures-util",
