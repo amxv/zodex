@@ -114,6 +114,10 @@ enum LocalCommand {
     /// Internal daily / next-boot update coordinator used by desktop controls.
     #[command(name = "__automatic-update", hide = true)]
     AutomaticUpdate,
+    /// Internal read-only probe: is an automatic update attempt due, and does
+    /// it need the login-shell environment to restart a running Local?
+    #[command(name = "__automatic-update-due", hide = true)]
+    AutomaticUpdateDue,
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history agents --agent k7m2\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --agent k7m2 --yes\n  zodex local history clear --yes  # all agents; requires Local stopped")]
     History {
@@ -312,6 +316,10 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
         }
         LocalCommand::Preferences { command } => handle_local_preferences(&paths, command),
         LocalCommand::AutomaticUpdate => run_local_automatic_update(&paths).await,
+        LocalCommand::AutomaticUpdateDue => {
+            println!("{}", local_automatic_update_probe(&paths)?);
+            Ok(())
+        }
         LocalCommand::History {
             last,
             since,
@@ -671,6 +679,40 @@ mod desktop_preferences_tests {
             parsed.command,
             Commands::Local { command: LocalCommand::AutomaticUpdate }
         ));
+        let parsed = Cli::try_parse_from(["zodex", "local", "__automatic-update-due"])
+            .expect("desktop auto-update probe must be available on every platform");
+        assert!(matches!(
+            parsed.command,
+            Commands::Local { command: LocalCommand::AutomaticUpdateDue }
+        ));
+    }
+
+    #[test]
+    fn automatic_update_probe_is_read_only_and_skips_login_shell_when_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = LocalPaths::from_roots(
+            dir.path().join("config"),
+            dir.path().join("data"),
+            dir.path().join("state"),
+        ).unwrap();
+        // Fresh install: an attempt is due, but Local is not running, so the
+        // menu bar must not spawn the user's login shell to perform it.
+        let probe = super::local_automatic_update_probe(&paths).unwrap();
+        assert_eq!(probe, serde_json::json!({ "due": true, "login_environment": false }));
+        // Probing must not consume the daily claim.
+        let probe = super::local_automatic_update_probe(&paths).unwrap();
+        assert_eq!(probe["due"], true);
+
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        LocalLoginPreferences::update(&paths, |prefs| {
+            Ok(prefs.claim_automatic_update_attempt(now, sysinfo::System::boot_time()))
+        }).unwrap();
+        let probe = super::local_automatic_update_probe(&paths).unwrap();
+        assert_eq!(probe, serde_json::json!({ "due": false, "login_environment": false }));
+
+        handle_local_preferences(&paths, LocalPreferencesCommand::AutomaticUpdates { enabled: false }).unwrap();
+        let probe = super::local_automatic_update_probe(&paths).unwrap();
+        assert_eq!(probe, serde_json::json!({ "due": false, "login_environment": false }));
     }
 
     #[test]

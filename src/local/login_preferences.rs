@@ -141,25 +141,35 @@ impl LocalLoginPreferences {
         true
     }
 
-    /// Distinguish a daily scheduled check from a reboot retry. A reboot
-    /// retry leaves the 24-hour cadence unchanged. Called while holding the
-    /// desktop preferences file lock, so two menu processes cannot race.
-    pub fn claim_automatic_update_attempt(&mut self, now: i64, boot_time: u64) -> bool {
+    /// Read-only form of [`Self::claim_automatic_update_attempt`]. Desktop
+    /// controls poll this cheaply so they only do expensive or user-visible
+    /// work (such as running the login shell) when an attempt is due.
+    pub fn automatic_update_attempt_due(&self, now: i64, boot_time: u64) -> bool {
         if !self.automatic_updates {
             return false;
         }
-        let due = self.last_automatic_update_check.is_none_or(|last| {
-            now < last || now.saturating_sub(last) >= AUTOMATIC_UPDATE_INTERVAL_SECONDS
-        });
         // sysinfo computes boot time on some platforms; tolerate a few
         // seconds of rounding drift without mistaking it for a reboot.
         let new_boot = self
             .automatic_update_attempt_boot
             .is_some_and(|last| last.abs_diff(boot_time) > 5);
-        if !due && !(self.automatic_update_retry_next_boot && new_boot) {
+        self.daily_automatic_update_due(now) || (self.automatic_update_retry_next_boot && new_boot)
+    }
+
+    fn daily_automatic_update_due(&self, now: i64) -> bool {
+        self.last_automatic_update_check.is_none_or(|last| {
+            now < last || now.saturating_sub(last) >= AUTOMATIC_UPDATE_INTERVAL_SECONDS
+        })
+    }
+
+    /// Distinguish a daily scheduled check from a reboot retry. A reboot
+    /// retry leaves the 24-hour cadence unchanged. Called while holding the
+    /// desktop preferences file lock, so two menu processes cannot race.
+    pub fn claim_automatic_update_attempt(&mut self, now: i64, boot_time: u64) -> bool {
+        if !self.automatic_update_attempt_due(now, boot_time) {
             return false;
         }
-        if due {
+        if self.daily_automatic_update_due(now) {
             self.last_automatic_update_check = Some(now);
         }
         self.automatic_update_attempt_boot = Some(boot_time);
@@ -284,6 +294,35 @@ mod tests {
         prefs.defer_automatic_update_until_reboot();
         prefs.automatic_updates = false;
         assert!(!prefs.claim_automatic_update_attempt(300_000, 90_000));
+    }
+
+    #[test]
+    fn read_only_attempt_probe_matches_claim_without_mutating_state() {
+        let cases: [(i64, u64); 6] = [
+            (100_000, 80_000),
+            (100_100, 80_001),
+            (100_100, 80_100),
+            (100_101, 80_100),
+            (100_000 + AUTOMATIC_UPDATE_INTERVAL_SECONDS, 80_100),
+            (300_000, 90_000),
+        ];
+        let mut prefs = LocalLoginPreferences::default();
+        for (index, (now, boot)) in cases.into_iter().enumerate() {
+            if index == 1 || index == 5 {
+                prefs.defer_automatic_update_until_reboot();
+            }
+            if index == 5 {
+                prefs.automatic_updates = false;
+            }
+            let before = prefs.clone();
+            let probed = prefs.automatic_update_attempt_due(now, boot);
+            assert_eq!(prefs, before, "probe must not claim an attempt");
+            assert_eq!(
+                prefs.claim_automatic_update_attempt(now, boot),
+                probed,
+                "probe disagreed with claim at case {index}"
+            );
+        }
     }
 
     #[test]

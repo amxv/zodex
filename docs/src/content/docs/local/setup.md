@@ -266,6 +266,8 @@ Tunnel setup does not grant filesystem privacy permissions. Local commands run a
 
 If a command receives a macOS permission error, use normal **System Settings → Privacy & Security** controls. Do not disable or bypass TCC.
 
+While idle, the menu app and a stopped Local do not read, scan, or watch your folders, and the background update check does not run your login shell. Privacy prompts should appear only for work you start, such as **Start Zodex** (which captures your login shell) or an agent command that targets a protected location.
+
 ## Next
 
 - [Local daily use](/docs/local/daily-use)

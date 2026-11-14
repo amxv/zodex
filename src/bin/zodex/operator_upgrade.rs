@@ -150,6 +150,24 @@ async fn run_local_automatic_update(paths: &zodex::local::LocalPaths) -> Result<
     Ok(())
 }
 
+/// Cheap, read-only automatic-update probe for desktop controls.
+///
+/// The macOS menu bar polls this every 15 minutes in the background. It must
+/// not spawn the user's interactive login shell: shell startup files run as a
+/// child of the Zodex app, so anything they touch (Photos, Documents, iCloud
+/// Drive, removable volumes, ...) raises macOS privacy prompts attributed to
+/// Zodex. The login environment is only needed to restart a Local runtime the
+/// user already started, so report that separately.
+fn local_automatic_update_probe(paths: &zodex::local::LocalPaths) -> Result<serde_json::Value> {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let prefs = zodex::local::LocalLoginPreferences::load(paths)?;
+    let due = prefs.automatic_update_attempt_due(now, sysinfo::System::boot_time());
+    let login_environment = due
+        && zodex::local::LocalStatusDocument::inspect(paths)
+            .is_ok_and(|status| status.state == zodex::local::LocalStatusState::Running);
+    Ok(serde_json::json!({ "due": due, "login_environment": login_environment }))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn restart_automatic_local(
     executable: &Path,

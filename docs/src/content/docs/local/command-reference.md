@@ -183,7 +183,7 @@ zodex upgrade --check --format json
 
 An already-current upgrade exits before downloading the release archive. Human mode streams progress; JSON mode emits the stable upgrade event stream used by the menu app. `--stop-local` is explicit authorization to stop blocking Local state before installation. Release downloads are pinned to the version resolved by the CLI and checksum-verified before the embedded low-level installer replaces the operator and menu app.
 
-**Start Zodex**, whether clicked manually or launched at login when enabled, captures the configured interactive login shell on macOS/Linux before invoking `zodex local start`, so the menu/tray sees language toolchains, user-installed CLIs, credentials, and PATH customizations. Windows inherits the logged-in user's environment.
+**Start Zodex**, whether clicked manually or launched at login when enabled, captures the configured interactive login shell on macOS/Linux before invoking `zodex local start`, so the menu/tray sees language toolchains, user-installed CLIs, credentials, and PATH customizations. Windows inherits the logged-in user's environment. The macOS menu app's background update check does not run your login shell: it first asks the CLI whether an update is due, and only captures the login shell when it must restart a Local runtime you already started.
 
 ## `zodex local history`
 

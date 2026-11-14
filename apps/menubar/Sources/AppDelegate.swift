@@ -23,6 +23,11 @@ private struct LocalLoginPreferences: Decodable {
     let liveboard_port: UInt16
 }
 
+private struct AutomaticUpdateProbe: Decodable {
+    let due: Bool
+    let login_environment: Bool
+}
+
 private struct UpgradeEvent: Decodable {
     let schema_version: Int
     let event: String
@@ -172,7 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         refreshLoginPreferences(migrateLegacyFolder: true)
-        updateStartFolderItems()
+        // Start Folder titles are refreshed in menuWillOpen. Checking the
+        // folder here would touch it at every login even when it is in a
+        // privacy-protected location and the tunnel does not autostart.
         updateLaunchAtLoginItem()
         disableRuntimeActions()
         if !CommandLine.arguments.contains("--after-upgrade"),
@@ -612,13 +619,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard automaticUpdatesEnabled, !automaticUpdateInFlight,
               !commandInFlight, !upgradeCheckInFlight, !upgradeInFlight else { return }
         automaticUpdateInFlight = true
-        // Run in the captured login-shell environment so the post-upgrade
-        // restart has the same developer tools and PATH as a manual Start.
-        runZodexWithLoginEnvironment(["local", "__automatic-update"]) { [weak self] result in
+        // This timer runs in the background, often right after login. Never
+        // start the user's interactive login shell just to learn that nothing
+        // is due: shell startup files run as children of this app, so any
+        // protected location they touch (Photos, Documents, iCloud Drive,
+        // removable volumes, ...) raises a macOS privacy prompt blamed on
+        // Zodex. Ask the CLI first with a plain, read-only probe.
+        runZodex(["local", "__automatic-update-due"]) { [weak self] probeResult in
             guard let self else { return }
-            self.automaticUpdateInFlight = false
-            if result.exitCode != 0 {
-                NSLog("Zodex automatic update: %@", result.output)
+            guard probeResult.exitCode == 0,
+                  let data = probeResult.output.data(using: .utf8),
+                  let probe = try? JSONDecoder().decode(AutomaticUpdateProbe.self, from: data),
+                  probe.due, self.automaticUpdatesEnabled else {
+                self.automaticUpdateInFlight = false
+                return
+            }
+            let completion: (CommandResult) -> Void = { [weak self] result in
+                guard let self else { return }
+                self.automaticUpdateInFlight = false
+                if result.exitCode != 0 {
+                    NSLog("Zodex automatic update: %@", result.output)
+                }
+            }
+            if probe.login_environment {
+                // Only an already running, user-started Local is restarted
+                // after the update; give it the same developer tools and PATH
+                // as a manual Start.
+                self.runZodexWithLoginEnvironment(["local", "__automatic-update"], completion: completion)
+            } else {
+                self.runZodex(["local", "__automatic-update"], completion: completion)
             }
         }
     }

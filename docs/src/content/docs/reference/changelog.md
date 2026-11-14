@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## Unreleased
+
+- Fixed repeated macOS privacy prompts such as "Zodex wants to access your Photos" while Zodex Local was stopped or idle. Since v0.5.13, the menu bar app ran the user's interactive login shell 30 seconds after launch and every 15 minutes to check for automatic updates, even when no update was due; macOS attributed anything the shell startup files touched to Zodex. The menu app now asks a new read-only `zodex local __automatic-update-due` probe first, runs no shell when nothing is due, and captures the login shell only when an automatic update must restart a Local runtime the user already started.
+- The menu app also no longer checks the saved Start Folder at launch unless **Launch Tunnel at Login** is enabled; the folder's availability is shown when the menu opens.
+
 ## 1.1.0 - 2026-11-10
 
 - Moved Local history admission, identity/context persistence, and exact completion recording off the tool execution path into bounded memory queues. Storage contention retries in the background; tool execution and result delivery remain independent. Degraded capture and queue limits are explicit, and orderly shutdown drains accepted evidence. A process crash before persistence can still lose buffered history.

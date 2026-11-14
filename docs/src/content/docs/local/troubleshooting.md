@@ -126,6 +126,12 @@ Local runs with your user permissions but does not bypass macOS privacy controls
 
 Do not modify the TCC database manually.
 
+## macOS asks whether "Zodex" can access Photos, Documents, or other folders while idle
+
+Zodex v1.0.0 and earlier menu apps ran your interactive login shell (for example `~/.zshrc`) every 15 minutes for the automatic update check, even when no update was due. macOS attributes anything those startup files touch to Zodex, which could produce repeated Photos, Documents, Desktop, Downloads, iCloud Drive, or removable-volume prompts while Local was stopped. Upgrade Zodex: the menu app now runs only a read-only check in the background and uses your login shell only for **Start Zodex**, **Launch Tunnel at Login**, or restarting an already running Local after an automatic update.
+
+You can deny prompts that do not correspond to a command you asked an agent to run. If the prompts continue after upgrading, check your shell startup files for commands that read protected folders.
+
 ## A CLI works in my terminal but ChatGPT cannot find it
 
 Local captures the environment when you run `zodex local start`.
