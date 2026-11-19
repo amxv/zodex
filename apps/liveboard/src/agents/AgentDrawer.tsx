@@ -31,6 +31,7 @@ interface AgentDrawerProps {
   onRetry?: () => void
   onClose: () => void
   onAdd: (agentId: string) => void
+  onFocus?: (agentId: string) => void
   onPatch: (patch: LiveboardPreferencesPatch) => void
 }
 
@@ -42,6 +43,7 @@ function AgentDrawerRow(props: {
   focused: boolean
   nowMs: number
   onAdd: () => void
+  onFocus?: () => void
 }) {
   const [workdirsOverflow, setWorkdirsOverflow] = createSignal(false)
   const [workdirsExpanded, setWorkdirsExpanded] = createSignal(false)
@@ -85,7 +87,7 @@ function AgentDrawerRow(props: {
   onCleanup(() => resizeObserver?.disconnect())
 
   return (
-    <div class="drawer-agent-entry">
+    <div class="drawer-agent-entry" classList={{ 'drawer-agent-with-focus': Boolean(props.onFocus) }}>
       <button
         type="button"
         class="drawer-agent"
@@ -141,6 +143,16 @@ function AgentDrawerRow(props: {
           </Show>
         </div>
       </button>
+      <Show when={props.onFocus}>
+        <button
+          type="button"
+          class="drawer-agent-focus"
+          aria-label={`Focus Agent ${props.agent.id}`}
+          onClick={() => props.onFocus?.()}
+        >
+          Focus
+        </button>
+      </Show>
       <Show when={workdirsOverflow()}>
         <button
           type="button"
@@ -250,6 +262,7 @@ export function AgentDrawer(props: AgentDrawerProps) {
                     focused={Boolean(props.focusedAgentId)}
                     nowMs={props.nowMs}
                     onAdd={() => props.onAdd(agent.id)}
+                    onFocus={props.onFocus ? () => props.onFocus?.(agent.id) : undefined}
                   />
                 )
               }}

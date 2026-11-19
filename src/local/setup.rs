@@ -61,6 +61,11 @@ impl<'a> LocalSetupService<'a> {
         let release = self.releases.resolve_latest(request.architecture).await?;
         let prepared = self.prepare_tunnel_client(&old_config, &release).await?;
 
+        let _lock = super::lifecycle_lock::LocalLifecycleLock::acquire(self.paths)?;
+        ensure_offline_mutation(self.paths, "run Local setup")?;
+        if LocalConfig::load(&self.paths.config_file())? != old_config {
+            bail!("Local configuration changed during download; rerun setup while stopped");
+        }
         let old_secret = self.secrets.get().context(
             "failed to snapshot the current secure runtime key before Local setup mutation",
         )?;
@@ -96,6 +101,99 @@ impl<'a> LocalSetupService<'a> {
             binary_updated,
             observability_bearer_rotated,
         })
+    }
+
+    /// Refresh only the verified managed bundle and its metadata. No credential
+    /// store or observability bearer is read or mutated by this operation.
+    pub async fn refresh_tunnel_client(
+        &self,
+        architecture: TunnelArchitecture,
+    ) -> Result<LocalSetupResult> {
+        let operation = "refresh the managed tunnel-client";
+        ensure_offline_mutation(self.paths, operation)?;
+        let mut config = LocalConfig::load(&self.paths.config_file())?;
+        let tunnel_id = config.tunnel.id.clone().context("run Local setup first")?;
+        validate_tunnel_id(&tunnel_id)?;
+        if config.tunnel.client_path.as_deref()
+            != Some(self.paths.managed_tunnel_client().as_path())
+            || config.tunnel.release.is_none()
+        {
+            bail!("Local is not using a provisioned managed tunnel-client; run Local setup first");
+        }
+        let release = self.releases.resolve_latest(architecture).await?;
+        let prepared = self.prepare_tunnel_client(&config, &release).await?;
+        let _lock = super::lifecycle_lock::LocalLifecycleLock::acquire(self.paths)?;
+        ensure_offline_mutation(self.paths, operation)?;
+        let binary_updated = prepared.is_staged();
+        if binary_updated {
+            let config_path = self.paths.config_file();
+            if LocalConfig::load(&config_path)? != config {
+                bail!(
+                    "Local configuration changed during download; rerun the refresh while stopped"
+                );
+            }
+            let config_snapshot = capture_file(&config_path)?;
+            let binary_snapshot = capture_file(&self.paths.managed_tunnel_client())?;
+            let cloudflared_snapshot = capture_file(&self.paths.managed_cloudflared())?;
+            let manifest_snapshot = capture_file(&self.paths.managed_cloudflared_manifest())?;
+            config.tunnel.release = Some(prepared.metadata().clone());
+            if let Err(error) = self
+                .replace_bundle(&prepared)
+                .and_then(|()| config.save(&config_path))
+            {
+                let mut rollback_errors = Vec::new();
+                for (path, snapshot) in [
+                    (config_path, config_snapshot),
+                    (self.paths.managed_tunnel_client(), binary_snapshot),
+                    (self.paths.managed_cloudflared(), cloudflared_snapshot),
+                    (self.paths.managed_cloudflared_manifest(), manifest_snapshot),
+                ] {
+                    if let Err(restore_error) = restore_file(&path, snapshot.as_ref()) {
+                        rollback_errors.push(restore_error.to_string());
+                    }
+                }
+                if !rollback_errors.is_empty() {
+                    bail!(
+                        "managed tunnel-client refresh failed: {error:#}; rollback incomplete: {}",
+                        rollback_errors.join("; ")
+                    );
+                }
+                return Err(error
+                    .context("managed tunnel-client refresh failed; prior bundle was restored"));
+            }
+        }
+        Ok(LocalSetupResult {
+            tunnel_id,
+            release_version: release.version,
+            managed_binary: self.paths.managed_tunnel_client(),
+            binary_updated,
+            observability_bearer_rotated: false,
+        })
+    }
+
+    fn replace_bundle(&self, prepared: &PreparedTunnelClient) -> Result<()> {
+        if let PreparedTunnelClient::Staged {
+            path,
+            cloudflared_path,
+            cloudflared_manifest_path,
+            ..
+        } = prepared
+        {
+            // Replace the executable last. Interrupted mixed bundles fail the
+            // same verification used by setup and refresh.
+            replace_staged_file(
+                cloudflared_manifest_path,
+                &self.paths.managed_cloudflared_manifest(),
+                "cloudflared manifest",
+            )?;
+            replace_staged_file(
+                cloudflared_path,
+                &self.paths.managed_cloudflared(),
+                "cloudflared",
+            )?;
+            replace_staged_file(path, &self.paths.managed_tunnel_client(), "tunnel-client")?;
+        }
+        Ok(())
     }
 
     async fn prepare_tunnel_client(
@@ -183,27 +281,7 @@ impl<'a> LocalSetupService<'a> {
         }
 
         let operation = (|| {
-            if let PreparedTunnelClient::Staged {
-                path,
-                cloudflared_path,
-                cloudflared_manifest_path,
-                ..
-            } = &prepared
-            {
-                // Keep the executable named in config as the last bundle member replaced.
-                // If setup is interrupted, the next run's hash checks reject the mixed bundle.
-                replace_staged_file(
-                    cloudflared_manifest_path,
-                    &self.paths.managed_cloudflared_manifest(),
-                    "cloudflared manifest",
-                )?;
-                replace_staged_file(
-                    cloudflared_path,
-                    &self.paths.managed_cloudflared(),
-                    "cloudflared",
-                )?;
-                replace_staged_file(path, &self.paths.managed_tunnel_client(), "tunnel-client")?;
-            }
+            self.replace_bundle(&prepared)?;
             config.save(&self.paths.config_file())?;
             ensure_observability_bearer(self.paths, request.rotate_observability_bearer)
         })();

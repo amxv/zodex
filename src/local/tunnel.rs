@@ -104,9 +104,19 @@ pub struct ManagedTunnelChild {
     pub identity: ProcessIdentity,
     stdout_task: Option<JoinHandle<()>>,
     stderr_task: Option<JoinHandle<()>>,
+    diagnostic_log_lock: Arc<Mutex<()>>,
 }
 
 impl ManagedTunnelChild {
+    pub(super) async fn log_health_sample(&self, paths: &LocalPaths, sample: &str) {
+        let _guard = self.diagnostic_log_lock.lock().await;
+        let _ = append_bounded_log(
+            &paths.diagnostic_log_file(),
+            "tunnel health snapshot",
+            sample.as_bytes(),
+        );
+    }
+
     pub fn pid(&self) -> u32 {
         self.child.id().unwrap_or(self.identity.pid as u32)
     }
@@ -300,16 +310,16 @@ pub async fn spawn_tunnel_client(
             "tunnel stdout",
         )
     });
-    let stderr_task = child
-        .stderr
-        .take()
-        .map(|stderr| spawn_log_reader(stderr, log_path, lock, redactions, "tunnel stderr"));
+    let stderr_task = child.stderr.take().map(|stderr| {
+        spawn_log_reader(stderr, log_path, lock.clone(), redactions, "tunnel stderr")
+    });
 
     Ok(ManagedTunnelChild {
         child,
         identity,
         stdout_task,
         stderr_task,
+        diagnostic_log_lock: lock,
     })
 }
 
@@ -333,9 +343,9 @@ pub async fn probe_tunnel_health(
     for (key, value) in provider_environment(inherited_infrastructure_environment, runtime_key) {
         command.env(key, value);
     }
-    let output = command
-        .output()
+    let output = tokio::time::timeout(Duration::from_secs(3), command.output())
         .await
+        .context("structured tunnel-client health probe timed out")?
         .context("failed to run structured tunnel-client health probe")?;
     let mut diagnostic =
         String::from_utf8_lossy(if output.status.success() || output.stderr.is_empty() {
@@ -347,7 +357,11 @@ pub async fn probe_tunnel_health(
         .to_string();
     diagnostic = sanitize_diagnostic(&diagnostic, &[runtime_key.expose().to_string()]);
     if diagnostic.len() > 4096 {
-        diagnostic.truncate(4096);
+        let mut boundary = 4096;
+        while !diagnostic.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        diagnostic.truncate(boundary);
         diagnostic.push('…');
     }
     Ok(TunnelHealthEvidence {

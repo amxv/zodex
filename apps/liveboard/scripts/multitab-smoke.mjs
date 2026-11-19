@@ -146,7 +146,7 @@ try {
   const pages = await Promise.all(agentIds.map(async (id) => {
     const page = await context.newPage()
     page.on('pageerror', (error) => errors.push(error.message))
-    await page.goto(`${base}/?agent=${id}`, {waitUntil: 'domcontentloaded'})
+    await page.goto(`${base}/capability/?agent=${id}`, {waitUntil: 'domcontentloaded'})
     await page.locator('.focused-agent-badge').getByText(`Focused · ${id}`).waitFor()
     return page
   }))
@@ -183,11 +183,31 @@ try {
   const unified = await context.newPage()
   unified.on('pageerror', (error) => errors.push(error.message))
   await unified.goto(base, {waitUntil: 'domcontentloaded'})
-  await unified.getByRole('button', {name: 'Focus Agent 0000'}).click()
+  await unified.getByRole('button', {name: 'Focus Agent 0000', exact: true}).click()
   await unified.locator('.focused-agent-badge').getByText('Focused · 0000').waitFor()
   assert.equal(new URL(unified.url()).searchParams.get('agent'), '0000')
   await unified.close()
   await until(() => peers.size === 1, 'one SSE after clicking Focus')
+
+  // Explicit sidebar Focus remains available for an already-visible agent
+  // and for an off-board agent when every board slot is occupied.
+  for (const [id, onBoard] of [['0000', true], [agentIds.at(-1), false]]) {
+    const side = await context.newPage()
+    side.on('pageerror', (error) => errors.push(error.message))
+    await side.goto(`${base}/capability/`, {waitUntil: 'domcontentloaded'})
+    await side.locator('[data-agent-column]').first().waitFor()
+    assert.equal(await side.locator('[data-agent-column]').count(), 4)
+    assert.equal(await side.locator(`[data-agent-id="${id}"]`).count() > 0, onBoard)
+    await side.getByRole('button', {name: 'All Agents', exact: true}).click()
+    const row = side.getByRole('dialog', {name: 'All Agents'})
+      .getByRole('button', {name: `Focus Agent ${id}`, exact: true})
+    await row.click()
+    await side.locator('.focused-agent-badge').getByText(`Focused · ${id}`).waitFor()
+    assert.equal(new URL(side.url()).pathname, '/capability/')
+    assert.equal(new URL(side.url()).searchParams.get('agent'), id)
+    await side.close()
+    await until(() => peers.size === 1, 'one SSE after sidebar focus')
+  }
 
   // Opening All Agents inside focus mode must be a local drawer, not a
   // navigation to the unified board or another timeline subscription.
@@ -202,9 +222,16 @@ try {
   await pages[0].getByRole('button', {name: 'Close All Agents'}).click()
   assert.equal(pages[0].url(), focusBeforeDrawer)
 
-  // Navigate an already-open focused tab with 17 others still listening.
-  await pages[0].goto(`${base}/?agent=${agentIds[5]}`, {waitUntil: 'domcontentloaded'})
+  // Focus from All Agents with 17 other tabs still listening.
+  await pages[0].getByRole('button', {name: 'All Agents', exact: true}).click()
+  const drawer = pages[0].getByRole('dialog', {name: 'All Agents'})
+  const focusRow = drawer.getByRole('button', {name: `Focus Agent ${agentIds[5]}`, exact: true})
+  await focusRow.waitFor()
+  assert.equal(await drawer.locator('.drawer-agent-focus').count(), agentIds.length)
+  await focusRow.click()
   await pages[0].locator('.focused-agent-badge').getByText(`Focused · ${agentIds[5]}`).waitFor()
+  assert.equal(new URL(pages[0].url()).pathname, '/capability/')
+  assert.equal(new URL(pages[0].url()).searchParams.get('agent'), agentIds[5])
   await until(() => peers.size === 1, 'one SSE after focused navigation')
   assert.deepEqual(errors, [], `Unexpected frontend errors: ${errors.join('; ')}`)
 

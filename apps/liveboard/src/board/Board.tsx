@@ -536,6 +536,7 @@ export function Board(props: BoardProps) {
         onRetry={() => void retryFocusedDrawerAgents()}
         onPatch={props.onPatch}
         onClose={() => setDrawerOpen(false)}
+        onFocus={props.onFocusAgent}
         onAdd={props.focusedAgentId
           ? (agentId) => props.onFocusAgent?.(agentId)
           : addAgent}

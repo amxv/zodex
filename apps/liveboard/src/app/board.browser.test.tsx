@@ -319,6 +319,10 @@ describe('Liveboard board shell', () => {
     ).find((button) => button.textContent?.includes('e555'))
     expect(fifthRow).toBeDefined()
     expect(fifthRow?.disabled).toBe(true)
+    expect(element<HTMLButtonElement>(
+      '.agent-drawer button[aria-label="Focus Agent e555"]',
+    ).disabled).toBe(false)
+    expect(document.querySelectorAll('.agent-drawer .drawer-agent-focus')).toHaveLength(5)
     expect(document.querySelectorAll('.drawer-agent-selected')).toHaveLength(4)
     expect(document.body.textContent).not.toContain('On board')
     element<HTMLButtonElement>('button[aria-label="Close All Agents"]').click()

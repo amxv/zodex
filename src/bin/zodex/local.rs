@@ -65,6 +65,9 @@ enum LocalCommand {
         #[arg(long, alias = "no-tray")]
         no_menu_bar: bool,
     },
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    /// Refresh the official managed tunnel-client while Local is stopped. Keeps existing credentials.
+    UpgradeTunnel,
     /// Start the one machine-wide Local runtime from a repository or workspace.
     #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir. ChatGPT caches MCP server instructions, so refresh the Zodex Local app in ChatGPT app settings after changing PATH.")]
     Start {
@@ -261,6 +264,11 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 !no_menu_bar,
             )
             .await
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        LocalCommand::UpgradeTunnel => {
+            ensure_local_runtime_host()?;
+            refresh_native_managed_tunnel(&paths).await
         }
         LocalCommand::Start { path, ttl } => {
             let start_dir = resolve_local_start_directory(path.as_deref())?;
@@ -1076,6 +1084,30 @@ fn trim_one_line_ending(mut value: String) -> String {
         }
     }
     value
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+async fn refresh_native_managed_tunnel(paths: &LocalPaths) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let (architecture, extractor, secrets) = (
+        TunnelArchitecture::current_macos()?, MacDittoArchiveExtractor, MacKeychainRuntimeKeyStore,
+    );
+    #[cfg(target_os = "linux")]
+    let (architecture, extractor, secrets) = (
+        TunnelArchitecture::current_linux()?, LinuxZipArchiveExtractor, LinuxFileRuntimeKeyStore::new(paths),
+    );
+    #[cfg(target_os = "windows")]
+    let (architecture, extractor, secrets) = (
+        TunnelArchitecture::current_windows()?, WindowsTarArchiveExtractor, WindowsCredentialRuntimeKeyStore,
+    );
+    let releases = OfficialTunnelReleaseClient::new()?;
+    let result = LocalSetupService::new(paths, &releases, &extractor, &secrets)
+        .refresh_tunnel_client(architecture)
+        .await?;
+    println!("Official tunnel-client {} ({})", result.release_version,
+        if result.binary_updated { "updated" } else { "verified/reused" });
+    println!("Existing credentials and observability bearer were not changed. Start Local when ready.");
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

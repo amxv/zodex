@@ -684,6 +684,7 @@ async fn supervise_runtime(
     let stop_signal = shutdown_signal();
     tokio::pin!(stop_signal);
     let mut liveboard_published = _host.liveboard_url().is_some();
+    let mut diagnostics = super::tunnel_diagnostics::TunnelDiagnostics::default();
 
     loop {
         tokio::select! {
@@ -759,6 +760,12 @@ async fn supervise_runtime(
                     }
                 }
                 write_runtime_state(context.paths, state)?;
+                if let Some(sample) = diagnostics.sample(
+                    &context.paths.tunnel_health_url_file(),
+                    state.health.tunnel_ready,
+                ).await {
+                    tunnel.log_health_sample(context.paths, &sample).await;
+                }
             }
             signal = &mut stop_signal => {
                 signal?;

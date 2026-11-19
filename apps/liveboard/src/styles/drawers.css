@@ -271,6 +271,39 @@
   position: relative;
 }
 
+.drawer-agent-with-focus .drawer-agent {
+  padding-right: 65px;
+}
+
+.drawer-agent-with-focus .drawer-agent-toggleable {
+  padding-right: 96px;
+}
+
+.drawer-agent-with-focus .drawer-workdirs-toggle {
+  right: 61px;
+}
+
+.drawer-agent-focus {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: 24px;
+  width: 47px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drawer-agent-focus:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .drawer-agent-entry + .drawer-agent-entry {
   margin-top: 3px;
 }

@@ -29,6 +29,7 @@ mod secret;
 mod setup;
 mod status;
 mod tunnel;
+mod tunnel_diagnostics;
 mod tunnel_provider;
 mod tunnel_release;
 mod watch;

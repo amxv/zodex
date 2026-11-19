@@ -162,6 +162,69 @@ async fn setup_good_upgrade_atomically_replaces_managed_binary_and_metadata() {
 }
 
 #[tokio::test]
+async fn tunnel_refresh_updates_bundle_but_preserves_credentials_bearer_and_settings() {
+    let fixture = SetupFixture::new().await;
+    fixture.seed_healthy().await;
+    let mut config = LocalConfig::load(&fixture.paths.config_file()).unwrap();
+    config.liveboard.trusted_origins = vec!["https://fixture.invalid".to_string()];
+    config.save(&fixture.paths.config_file()).unwrap();
+    let before = fixture.snapshot();
+    let server = FakeReleaseServer::start("v9.9.10", b"refreshed-release".to_vec(), None).await;
+    fixture.secrets.fail_next_set_after_write();
+
+    let result = fixture.refresh(&server).await.unwrap();
+    assert!(result.binary_updated);
+    assert!(!result.observability_bearer_rotated);
+    assert_eq!(result.release_version, "v9.9.10");
+    let after = fixture.snapshot();
+    assert_eq!(after.secret, before.secret);
+    assert_eq!(after.bearer, before.bearer);
+    assert_eq!(
+        after.binary,
+        FixtureExtractor::binary_for(b"refreshed-release")
+    );
+    assert_eq!(
+        after.cloudflared,
+        FixtureExtractor::cloudflared_for(b"refreshed-release")
+    );
+    assert_eq!(
+        after.cloudflared_manifest,
+        FixtureExtractor::manifest_for(b"refreshed-release")
+    );
+    let updated = LocalConfig::load(&fixture.paths.config_file()).unwrap();
+    config.tunnel.release = updated.tunnel.release.clone();
+    assert_eq!(updated, config);
+    assert!(!fixture.refresh(&server).await.unwrap().binary_updated);
+    assert_eq!(server.asset_hits(), 1);
+}
+
+#[tokio::test]
+async fn tunnel_refresh_refuses_active_runtime_and_preserves_installation_on_bad_checksum() {
+    let fixture = SetupFixture::new().await;
+    fixture.seed_healthy().await;
+    let before = fixture.snapshot();
+    let corrupt =
+        FakeReleaseServer::start("v9.9.10", b"corrupt-upgrade".to_vec(), Some("0".repeat(64)))
+            .await;
+    fs::create_dir_all(fixture.paths.runtime_dir()).unwrap();
+    fs::write(fixture.paths.runtime_state_file(), b"runtime marker").unwrap();
+    assert!(
+        fixture
+            .refresh(&corrupt)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("zodex local stop")
+    );
+    assert_eq!(corrupt.latest_hits(), 0);
+    fs::remove_file(fixture.paths.runtime_state_file()).unwrap();
+    assert!(
+        format!("{:#}", fixture.refresh(&corrupt).await.unwrap_err()).contains("checksum mismatch")
+    );
+    fixture.assert_snapshot(&before);
+}
+
+#[tokio::test]
 async fn checksum_failure_preserves_prior_binary_config_secret_and_bearer() {
     let fixture = SetupFixture::new().await;
     fixture.seed_healthy().await;
@@ -258,6 +321,13 @@ impl SetupFixture {
                 architecture: TunnelArchitecture::DarwinArm64,
                 rotate_observability_bearer: false,
             })
+            .await
+    }
+
+    async fn refresh(&self, server: &FakeReleaseServer) -> Result<super::LocalSetupResult> {
+        let releases = OfficialTunnelReleaseClient::with_latest_release_url(server.latest_url())?;
+        LocalSetupService::new(&self.paths, &releases, &self.extractor, &self.secrets)
+            .refresh_tunnel_client(TunnelArchitecture::DarwinArm64)
             .await
     }
 

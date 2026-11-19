@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 1.1.2 - 2026-11-19
+
+- Local tunnel diagnostics now record readiness separately from observed control-plane polling freshness and response-upload acceptance/completion counters. A gateway-accepted upload does not prove the caller received it. Snapshots are timestamped, rate-limited and written to the existing private Local diagnostic log. A bounded health probe can no longer wait indefinitely.
+- Use `zodex local upgrade-tunnel` while Local is stopped to verify and install the latest official managed tunnel bundle (v0.0.21 at release), including its managed cloudflared companion and manifest, while leaving the runtime key, observability bearer, and other settings unchanged. `zodex upgrade` continues to update only the Zodex operator.
+- Added a Focus button beside each row in Liveboard's All Agents sidebar. It opens that agent's focused view without changing the board's visible agents.
+
 ## 1.1.1 - 2026-11-15
 
 - Fixed repeated macOS privacy prompts such as "Zodex wants to access your Photos" while Zodex Local was stopped or idle. Since v0.5.13, the menu bar app ran the user's interactive login shell 30 seconds after launch and every 15 minutes to check for automatic updates, even when no update was due; macOS attributed anything the shell startup files touched to Zodex. The menu app now asks a new read-only `zodex local __automatic-update-due` probe first, runs no shell when nothing is due, and captures the login shell only when an automatic update must restart a Local runtime the user already started.
