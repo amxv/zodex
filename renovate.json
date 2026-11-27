@@ -1,13 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "packageRules": [
-    {
-      "matchPackageNames": ["zuedocs"],
-      "groupName": "zuedocs shared docs template",
-      "allowedVersions": "<0.2.0",
-      "rangeStrategy": "bump",
-      "automerge": true
-    }
-  ]
+  "extends": ["github>amxv/renovate-config"]
 }
